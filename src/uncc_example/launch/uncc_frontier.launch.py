@@ -41,52 +41,36 @@ def generate_launch_description():
     # Package paths
     # -----------------------------------------
 
-    uncc_share = get_package_share_directory(
-        'uncc_example'
-    )
+    uncc_share = get_package_share_directory("uncc_example")
 
-    frontier_share = get_package_share_directory(
-        'frontier_exploration_ros2'
-    )
+    frontier_share = get_package_share_directory("frontier_exploration_ros2")
 
     launch_dir = os.path.join(
         uncc_share,
-        'launch',
+        "launch",
     )
 
     frontier_params = os.path.join(
         frontier_share,
-        'config',
-        'params.yaml',
+        "config",
+        "params.yaml",
     )
 
     # -----------------------------------------
     # Arguments
     # -----------------------------------------
 
-    start_hardware = LaunchConfiguration(
-        'start_hardware'
-    )
+    start_hardware = LaunchConfiguration("start_hardware")
 
-    start_lidar_app = LaunchConfiguration(
-        'start_lidar_app'
-    )
+    start_lidar_app = LaunchConfiguration("start_lidar_app")
 
-    start_slam = LaunchConfiguration(
-        'start_slam'
-    )
+    start_slam = LaunchConfiguration("start_slam")
 
-    start_nav2 = LaunchConfiguration(
-        'start_nav2'
-    )
+    start_nav2 = LaunchConfiguration("start_nav2")
 
-    start_frontier = LaunchConfiguration(
-        'start_frontier'
-    )
+    start_frontier = LaunchConfiguration("start_frontier")
 
-    start_avoidance = LaunchConfiguration(
-        'start_avoidance'
-    )
+    start_avoidance = LaunchConfiguration("start_avoidance")
 
     # =========================================
     # 1. Hardware
@@ -95,7 +79,7 @@ def generate_launch_description():
     hardware = include_launch(
         os.path.join(
             launch_dir,
-            'hardware.launch.py',
+            "hardware.launch.py",
         ),
         IfCondition(start_hardware),
     )
@@ -108,12 +92,10 @@ def generate_launch_description():
         period=2.0,
         actions=[
             Node(
-                package='app',
-                executable='lidar_controller',
-                output='screen',
-                condition=IfCondition(
-                    start_lidar_app
-                ),
+                package="app",
+                executable="lidar_controller",
+                output="screen",
+                condition=IfCondition(start_lidar_app),
             )
         ],
     )
@@ -128,7 +110,7 @@ def generate_launch_description():
             include_launch(
                 os.path.join(
                     launch_dir,
-                    'slam_mapping.launch.py',
+                    "slam_mapping.launch.py",
                 ),
                 IfCondition(start_slam),
             )
@@ -145,7 +127,7 @@ def generate_launch_description():
             include_launch(
                 os.path.join(
                     launch_dir,
-                    'nav2_online.launch.py',
+                    "nav2_online.launch.py",
                 ),
                 IfCondition(start_nav2),
             )
@@ -160,37 +142,25 @@ def generate_launch_description():
         period=11.0,
         actions=[
             Node(
-                package='frontier_exploration_ros2',
-                executable='frontier_explorer',
-
-                name='frontier_explorer',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_frontier
-                ),
-
+                package="frontier_exploration_ros2",
+                executable="frontier_explorer",
+                name="frontier_explorer",
+                output="screen",
+                condition=IfCondition(start_frontier),
                 parameters=[
                     frontier_params,
-
                     {
                         # avoidance_manager에서
                         # STOP / START를 호출하기 위해 필수
-                        'control_service_enabled': True,
-
-                        'autostart': True,
-
+                        "control_service_enabled": True,
+                        "autostart": True,
                         # Raspberry Pi 5에서는
                         # 먼저 가볍게 시작
-                        'mrtsp_solver': 'greedy',
-
-                        'map_processing_rate_hz': 0.5,
-
+                        "mrtsp_solver": "greedy",
+                        "map_processing_rate_hz": 0.5,
                         # 처음에는 기능을 단순하게
-                        'goal_preemption_enabled': False,
-
-                        'return_to_start_on_complete': False,
+                        "goal_preemption_enabled": False,
+                        "return_to_start_on_complete": False,
                     },
                 ],
             )
@@ -205,29 +175,18 @@ def generate_launch_description():
         period=12.0,
         actions=[
             Node(
-                package='uncc_example',
-
-                executable='avoidance_manager',
-
-                name='avoidance_manager',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_avoidance
-                ),
-
+                package="uncc_example",
+                executable="avoidance_manager",
+                name="avoidance_manager",
+                output="screen",
+                condition=IfCondition(start_avoidance),
                 parameters=[
                     {
-                        'trigger_distance': 0.50,
-
-                        'clear_distance': 0.75,
-
-                        'front_angle_deg': 90.0,
-
-                        'clear_hold_sec': 0.60,
-
-                        'avoidance_timeout_sec': 5.0,
+                        "trigger_distance": 0.30,
+                        "clear_distance": 0.35,
+                        "front_angle_deg": 210.0,
+                        "clear_hold_sec": 0.60,
+                        "avoidance_timeout_sec": 5.0,
                     }
                 ],
             )
@@ -238,42 +197,37 @@ def generate_launch_description():
     # LaunchDescription
     # =========================================
 
-    return LaunchDescription([
-
-        DeclareLaunchArgument(
-            'start_hardware',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_lidar_app',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_slam',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_nav2',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_frontier',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_avoidance',
-            default_value='true',
-        ),
-
-        hardware,
-        lidar_app,
-        slam,
-        nav2,
-        frontier,
-        avoidance,
-    ])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "start_hardware",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_lidar_app",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_slam",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_nav2",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_frontier",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_avoidance",
+                default_value="true",
+            ),
+            hardware,
+            lidar_app,
+            slam,
+            nav2,
+            frontier,
+            avoidance,
+        ]
+    )
