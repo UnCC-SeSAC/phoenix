@@ -109,16 +109,14 @@ jobs:
 
           GH_PRIORITY=$(echo "$FIELD_VALUES" | jq -r '.[]? | select(.name=="Priority") | .value // empty')
 
-          declare -A PRIORITY_MAP=(
-            ["Urgent"]="Highest"
-            ["High"]="High"
-            ["Medium"]="Medium"
-            ["Low"]="Low"
-          )
-          # ⚠️ 인덱싱하기 전에 GH_PRIORITY 자체를 먼저 기본값으로 채워야
-          #    "PRIORITY_MAP[]" 같은 빈 서브스크립트 에러가 안 남
-          GH_PRIORITY="${GH_PRIORITY:-Medium}"
-          JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-Medium}"
+          # ⚠️ 배열 인덱싱 대신 case 문 사용 (빈 값이 들어와도 절대 에러 안 남)
+          case "$GH_PRIORITY" in
+            "Urgent") JIRA_PRIORITY="Highest" ;;
+            "High")   JIRA_PRIORITY="High" ;;
+            "Medium") JIRA_PRIORITY="Medium" ;;
+            "Low")    JIRA_PRIORITY="Low" ;;
+            *)        JIRA_PRIORITY="Medium" ;;
+          esac
 
           # ── ④ 최종 fields JSON 조립 ──
           FIELDS_JSON=$(jq -n \
@@ -137,7 +135,7 @@ jobs:
             echo "$FIELDS_JSON"
             echo "JIRAFIELDS_EOF"
           } >> "$GITHUB_OUTPUT"
-
+          
       # ─────────────────────────────────────────────
       # 5) Jira 이슈 생성
       # ─────────────────────────────────────────────
