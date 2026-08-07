@@ -100,34 +100,55 @@ class MissionExecutor(Node):
     # =========================================================
 
     def process_exploring(self):
+        self.get_logger().info(
+            f'[EXPLORING] target={self._target_str()}',
+            throttle_duration_sec=1.0,
+        )
         # TODO: self.current_target 을 Nav2 목적지로 보내 미탐사 지역 탐사
-        pass
 
     # =========================================================
     # PERSON_DETECTED
     # =========================================================
 
     def process_person_detected(self):
+        self.get_logger().info(
+            f'[PERSON_DETECTED] target={self._target_str()}',
+            throttle_duration_sec=1.0,
+        )
         # TODO: self.current_target 으로 접근 후 구조 동작 수행
         # 완료되면 self.notify_target_complete() 호출
-        pass
 
     # =========================================================
     # FIRE_DETECTED
     # =========================================================
 
     def process_fire_detected(self):
+        self.get_logger().info(
+            f'[FIRE_DETECTED] target={self._target_str()}',
+            throttle_duration_sec=1.0,
+        )
         # TODO: self.current_target 으로 접근 후 진화 동작 수행
         # 완료되면 self.notify_target_complete() 호출
-        pass
 
     # =========================================================
     # RETURNING_TO_BASE
     # =========================================================
 
     def process_returning_to_base(self):
+        self.get_logger().info(
+            f'[RETURNING_TO_BASE] target={self._target_str()}',
+            throttle_duration_sec=1.0,
+        )
         # TODO: self.current_target(충전 도크)으로 복귀 후 도킹 동작 수행
-        pass
+
+    def _target_str(self):
+
+        if self.current_target is None:
+            return 'None'
+
+        position = self.current_target.pose.position
+
+        return f'({position.x:.2f}, {position.y:.2f})'
 
     # =========================================================
     # state_manager 에게 완료 통보

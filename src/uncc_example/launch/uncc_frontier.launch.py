@@ -49,6 +49,10 @@ def generate_launch_description():
         'frontier_exploration_ros2'
     )
 
+    peripherals_share = get_package_share_directory(
+        'peripherals'
+    )
+
     launch_dir = os.path.join(
         uncc_share,
         'launch',
@@ -90,6 +94,10 @@ def generate_launch_description():
 
     start_mission = LaunchConfiguration(
         'start_mission'
+    )
+
+    start_vision = LaunchConfiguration(
+        'start_vision'
     )
 
     # =========================================
@@ -239,7 +247,55 @@ def generate_launch_description():
     )
 
     # =========================================
-    # 7. State Manager / Mission Executor
+    # 7. Depth Camera + Vision Pipeline
+    #    (yolo_detector 는 실제 YOLO 모델 없이 파이프라인 테스트용
+    #    더미 감지만 발행하는 임시 노드 — 나중에 교체 예정)
+    # =========================================
+
+    vision = TimerAction(
+        period=4.0,
+        actions=[
+            include_launch(
+                os.path.join(
+                    peripherals_share,
+                    'launch',
+                    'depth_camera.launch.py',
+                ),
+                IfCondition(start_vision),
+            ),
+
+            Node(
+                package='uncc_example',
+
+                executable='yolo_detector',
+
+                name='yolo_detector',
+
+                output='screen',
+
+                condition=IfCondition(
+                    start_vision
+                ),
+            ),
+
+            Node(
+                package='uncc_example',
+
+                executable='vision_detector',
+
+                name='vision_detector',
+
+                output='screen',
+
+                condition=IfCondition(
+                    start_vision
+                ),
+            ),
+        ],
+    )
+
+    # =========================================
+    # 8. State Manager / Mission Executor
     # =========================================
 
     mission = TimerAction(
@@ -316,11 +372,17 @@ def generate_launch_description():
             default_value='true',
         ),
 
+        DeclareLaunchArgument(
+            'start_vision',
+            default_value='false',
+        ),
+
         hardware,
         lidar_app,
         slam,
         nav2,
         frontier,
         avoidance,
+        vision,
         mission,
     ])

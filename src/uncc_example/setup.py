@@ -52,6 +52,9 @@ setup(
             'avoidance_manager = uncc_example.avoidance_manager:main',
             'state_manager = uncc_example.state_manager:main',
             'mission_executor = uncc_example.mission_executor:main',
+            'vision_detector = uncc_example.vision_detector:main',
+            'yolo_detector = uncc_example.yolo_detector:main',
+            'mission_test = uncc_example.mission_test_publisher:main',
         ],
     },
 )

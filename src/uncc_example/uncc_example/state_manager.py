@@ -1,3 +1,4 @@
+import json
 import math
 
 import rclpy
@@ -8,9 +9,9 @@ from rclpy.time import Time
 
 from tf2_ros import Buffer, TransformListener, TransformException
 
-from std_msgs.msg import String, UInt16
+from std_msgs.msg import Header, String, UInt16
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PoseArray, PoseStamped
+from geometry_msgs.msg import Pose, PoseStamped
 from visualization_msgs.msg import Marker
 
 
@@ -92,21 +93,14 @@ class StateManager(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # -----------------------------
-        # Detections (YOLO + depth 를 map 좌표로 변환해 publish 하는
-        # 별도 노드가 있다고 가정)
+        # Detections (vision_detector 가 YOLO + depth 를 map 좌표로
+        # 변환해 JSON 으로 publish)
         # -----------------------------
         self.create_subscription(
-            PoseArray,
-            '/vision/fire_points',
-            self.fire_points_callback,
-            5,
-        )
-
-        self.create_subscription(
-            PoseArray,
-            '/vision/person_points',
-            self.person_points_callback,
-            5,
+            String,
+            '/vision/detections',
+            self.detection_callback,
+            10,
         )
 
         # -----------------------------
@@ -167,13 +161,30 @@ class StateManager(Node):
     # Detections
     # =========================================================
 
-    def fire_points_callback(self, msg):
-        for pose in msg.poses:
-            self._add_detection('fire', msg.header, pose)
+    def detection_callback(self, msg):
 
-    def person_points_callback(self, msg):
-        for pose in msg.poses:
-            self._add_detection('person', msg.header, pose)
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(
+                f'Invalid detection JSON: {e}'
+            )
+            return
+
+        target_type = payload.get('class')
+
+        if target_type not in ('fire', 'person'):
+            return
+
+        pose = Pose()
+        pose.position.x = payload['x']
+        pose.position.y = payload['y']
+        pose.position.z = payload.get('z', 0.0)
+
+        header = Header()
+        header.frame_id = payload.get('frame_id', self.map_frame)
+
+        self._add_detection(target_type, header, pose)
 
     def _add_detection(self, target_type, header, pose):
 
