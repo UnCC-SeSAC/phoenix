@@ -1,0 +1,47 @@
+name: Create Jira Issue
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  create-issue:
+    name: Create Jira issue from GitHub issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Jira
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+
+      # GitHub 마크다운을 Jira 자체 문법으로 변환 (안 하면 리스트/헤딩이 깨져서 보임)
+      - name: Convert GitHub Markdown to Jira Syntax
+        uses: peter-evans/jira2md@v1
+        id: md2jira
+        with:
+          input-text: |
+            ### GitHub Issue
+            - ${{ github.event.issue.html_url }}
+
+            ${{ github.event.issue.body }}
+          mode: md2jira
+
+      # 이슈 본문 그대로 Jira Task 생성 (서브태스크 아님 → 상위 티켓 입력 불필요)
+      - name: Create Jira Issue
+        id: create
+        uses: atlassian/gajira-create@v3
+        with:
+          project: PROJ            # ← 본인 Jira 프로젝트 키로 변경
+          issuetype: Task
+          summary: "${{ github.event.issue.title }}"
+          description: "${{ steps.md2jira.outputs.output-text }}"
+
+      # 생성된 티켓 번호를 GitHub 이슈 제목 앞에 붙여서 서로 추적 가능하게
+      - name: Update GitHub issue title with ticket number
+        uses: actions-cool/issues-helper@v3
+        with:
+          actions: "update-issue"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "[${{ steps.create.outputs.issue }}] ${{ github.event.issue.title }}"
