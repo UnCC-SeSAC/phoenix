@@ -80,9 +80,15 @@ class StateManager(Node):
 
         self.frontier_target = None  # 최신 Frontier 추천 목적지 (PoseStamped)
 
-        # fire/person 감지가 쌓이는 목적지 스택. 원소: {'type', 'pose'}
+        # fire/person 감지가 쌓이는 목적지 큐. 원소: {'type', 'pose'}
+        # found_targets 와 원소(dict)를 공유한다 — 아직 처리 안 한
+        # 것만 여기 들어있고, target_complete 로 여기서만 빠진다.
         self.target_queue = []
         self.active_target = None  # 현재 상태로 채택된 목적지 (완료 통보 대상)
+
+        # 미션 시작부터 끝까지 유지되는 발견 기록 (완료된 것도 안 지움).
+        # 신규 감지 중복 판단(dedup)과, 나중에 지도에 표시할 데이터로 쓴다.
+        self.found_targets = []
 
         self._last_logged_state = None
 
@@ -192,7 +198,51 @@ class StateManager(Node):
         pose_stamped.header = header
         pose_stamped.pose = pose
 
+        if self._find_found_target(target_type, pose) is not None:
+            # 이미 기록된 대상 — pending/done 상관없이 재감지는
+            # 위치 갱신도, 재방문 대상 추가도 하지 않고 무시한다.
+            # 꺼졌는지 여부는 나중에 지도를 그릴 때 status 로만 확인한다.
+            return
+
+        entry = {
+            'type': target_type,
+            'pose': pose_stamped,
+            'status': 'pending',
+            # 근처의 반대 타입 대기 항목과 짝지어지면 그 dict 를
+            # 가리킨다. 한 번 맺어지면 상대가 완료돼도 안 풀린다 —
+            # '이 사람은 원래 저 불과 한 세트였다'는 사실 자체가
+            # 우선순위 판단에 계속 쓰이기 때문.
+            'partner': None,
+        }
+
+        partner_type = 'person' if target_type == 'fire' else 'fire'
+        partner = self._find_unpaired_partner(partner_type, pose)
+
+        if partner is not None:
+            entry['partner'] = partner
+            partner['partner'] = entry
+
+        self.found_targets.append(entry)
+        self.target_queue.append(entry)
+
+    def _find_unpaired_partner(self, partner_type, pose):
+
         for entry in self.target_queue:
+
+            if entry['type'] != partner_type or entry['partner'] is not None:
+                continue
+
+            if (
+                self._planar_distance(entry['pose'].pose, pose)
+                <= self.fire_person_proximity_threshold
+            ):
+                return entry
+
+        return None
+
+    def _find_found_target(self, target_type, pose):
+
+        for entry in self.found_targets:
 
             if entry['type'] != target_type:
                 continue
@@ -201,14 +251,9 @@ class StateManager(Node):
                 self._planar_distance(entry['pose'].pose, pose)
                 <= self.target_merge_radius
             ):
-                # 같은 목적지로 보고 최신 위치로 갱신
-                entry['pose'] = pose_stamped
-                return
+                return entry
 
-        self.target_queue.append({
-            'type': target_type,
-            'pose': pose_stamped,
-        })
+        return None
 
     # =========================================================
     # Battery
@@ -239,7 +284,11 @@ class StateManager(Node):
 
     def target_complete_callback(self, request, response):
 
-        if self.active_target in self.target_queue:
+        if (
+            self.active_target is not None
+            and self.active_target in self.target_queue
+        ):
+            self.active_target['status'] = 'done'
             self.target_queue.remove(self.active_target)
 
         self.active_target = None
@@ -261,10 +310,10 @@ class StateManager(Node):
             self._enter_returning_to_base()
             return
 
-        nearest = self._pick_nearest_target()
+        priority_target = self._pick_priority_target()
 
-        if nearest is not None:
-            self._enter_urgent_target(nearest)
+        if priority_target is not None:
+            self._enter_urgent_target(priority_target)
             return
 
         self._enter_exploring()
@@ -292,6 +341,13 @@ class StateManager(Node):
         self.state = self.EXPLORING
         self.active_target = None
 
+        # state 만으로는 EXPLORING 안에서 "갈 곳이 정해졌는지(frontier)
+        # 아직 없는지(idle)"를 구분할 수 없어서 target_type 으로 구분한다.
+        # idle 일 땐 pose_stamped=None 이라 current_target 을 publish
+        # 하지 않으므로, 구독자는 target_type=='frontier' 일 때만
+        # current_target 을 유효한 값으로 보고 써야 한다 — 그렇지
+        # 않으면 idle 중에도 이전 frontier 좌표가 그대로 남아있는
+        # current_target 을 잘못 쓰게 된다.
         if self.frontier_target is not None:
             self._publish('frontier', self.frontier_target)
         else:
@@ -320,44 +376,77 @@ class StateManager(Node):
     # Target priority (가까운 목적지부터 처리)
     # =========================================================
 
-    def _pick_nearest_target(self):
+    def _pick_priority_target(self):
+        """
+        지금 상황에서 가장 먼저 처리해야 할 목적지를 고른다.
+
+        이미 active_target 으로 접근 중인 불/사람이 있으면 그대로
+        유지한다 — 유일한 예외는 지금 접근 중인 사람의 partner 로
+        새로 불이 잡힌 경우(그 사람 바로 옆에 불이 막 생긴 것)뿐이고,
+        이미 불을 끄러 가는 중이면 무슨 일이 있어도 안 바꾼다.
+        """
+
+        if (
+            self.active_target is not None
+            and self.active_target in self.target_queue
+        ):
+            if self.active_target['type'] == 'person':
+                partner = self.active_target['partner']
+
+                if partner is not None and partner['status'] == 'pending':
+                    return partner
+
+            return self.active_target
+
+        return self._choose_new_target()
+
+    def _choose_new_target(self):
+        """
+        active_target 이 없을 때(처음이거나 방금 완료됐을 때) 큐
+        전체에서 새로 목적지를 고른다.
+
+        불-사람 짝(partner)은 감지 시점에 한 번 맺어지면 상대가
+        완료돼도 풀리지 않는다 — 그래서 "짝이 있고, 아직 처리할
+        차례인" 항목을 최우선으로 본다:
+
+          - 짝이 있는 불: 항상 우선 (사람이 위험하니 먼저 끈다)
+          - 짝이 있는 사람: 그 짝 불이 이미 꺼졌을 때만 (짝 불이
+            아직 안 꺼졌으면 그 불부터 처리할 차례라 후보에서 제외)
+
+        위 후보가 하나도 없으면(짝 없는 고립된 불/사람만 남음),
+        로봇과 가장 가까운 것을 고른다.
+        """
 
         if not self.target_queue:
             return None
 
-        fires = [
+        combo_ready = [
             entry for entry in self.target_queue
-            if entry['type'] == 'fire'
-        ]
-        persons = [
-            entry for entry in self.target_queue
-            if entry['type'] == 'person'
+            if self._is_combo_ready(entry)
         ]
 
-        nearest_fire = (
-            self._nearest_to_robot(fires) if fires else None
-        )
-        nearest_person = (
-            self._nearest_to_robot(persons) if persons else None
-        )
+        if combo_ready:
+            return self._nearest_to_robot(combo_ready)
 
-        # 불과 사람이 동시에 대기중이면, 로봇 위치가 아니라 둘 사이의
-        # 거리로 무엇을 먼저 처리할지 정한다
-        if nearest_fire is not None and nearest_person is not None:
+        isolated = [
+            entry for entry in self.target_queue
+            if entry['partner'] is None
+        ]
 
-            fire_person_distance = self._planar_distance(
-                nearest_fire['pose'].pose,
-                nearest_person['pose'].pose,
-            )
+        if isolated:
+            return self._nearest_to_robot(isolated)
 
-            if fire_person_distance <= self.fire_person_proximity_threshold:
-                # 사람 근처에 불이 있음: 위험하니 불부터 끈다
-                return nearest_fire
-            else:
-                # 서로 멀리 떨어져 있음: 사람부터 먼저 확인한다
-                return nearest_person
+        return None
 
-        return nearest_fire or nearest_person
+    def _is_combo_ready(self, entry):
+
+        if entry['partner'] is None:
+            return False
+
+        if entry['type'] == 'fire':
+            return True
+
+        return entry['partner']['status'] == 'done'
 
     def _nearest_to_robot(self, entries):
 

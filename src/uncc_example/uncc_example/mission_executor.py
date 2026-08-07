@@ -104,7 +104,12 @@ class MissionExecutor(Node):
             f'[EXPLORING] target={self._target_str()}',
             throttle_duration_sec=1.0,
         )
-        # TODO: self.current_target 을 Nav2 목적지로 보내 미탐사 지역 탐사
+        # TODO: self.current_target 을 Nav2 목적지로 보내 미탐사 지역 탐사.
+        # 단, state_manager 는 target_type=='idle' 일 땐 current_target
+        # 을 새로 publish 하지 않으므로, self.current_target 에는 이전
+        # frontier 목적지가 그대로 남아있을 수 있다. 실제로 Nav2 goal
+        # 을 보내기 전에 self.target_type == 'frontier' 인지 반드시
+        # 확인할 것 — 안 그러면 idle 중에 오래된 좌표로 이동하게 된다.
 
     # =========================================================
     # PERSON_DETECTED
