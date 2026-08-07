@@ -20,6 +20,10 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
+      # 목표 좌표까지 25cm 이내면 도착으로 판단하고 정지 — 불/사람
+      # 좌표를 goal 로 그대로 보내도 그 위로 올라가지 않고 25cm
+      # 앞에서 멈추게 하기 위한 값 (uncc_example state_manager 의
+      # fire/person 접근 목적)
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     # DWB parameters

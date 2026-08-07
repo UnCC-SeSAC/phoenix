@@ -48,11 +48,6 @@ class StateManager(Node):
 
         self.declare_parameter('state_check_period', 0.2)
 
-        # 충전 도크 위치 (map frame). 실제 도크 좌표로 반드시 수정할 것
-        self.declare_parameter('base_x', 0.0)
-        self.declare_parameter('base_y', 0.0)
-        self.declare_parameter('base_yaw', 0.0)
-
         self.map_frame = self.get_parameter('map_frame').value
         self.base_frame = self.get_parameter('base_frame').value
 
@@ -66,8 +61,6 @@ class StateManager(Node):
             self.get_parameter('fire_person_proximity_threshold').value
         )
 
-        self.base_pose = self._build_base_pose()
-
         # -----------------------------
         # State
         # -----------------------------
@@ -75,6 +68,12 @@ class StateManager(Node):
 
         self.robot_x = None
         self.robot_y = None
+
+        # 로봇이 처음 켜졌을 때(TF 가 처음 잡힌 순간)의 map 좌표.
+        # 이후 어떤 target 을 거치든 값이 절대 안 바뀐다 — 이후 '복귀'
+        # 는 이 좌표를 기준으로 한다.
+        self.start_x = None
+        self.start_y = None
 
         self.battery_raw = None
 
@@ -321,7 +320,13 @@ class StateManager(Node):
     def _enter_returning_to_base(self):
         self.state = self.RETURNING_TO_BASE
         self.active_target = None
-        self._publish('base', self.base_pose)
+
+        start_pose = PoseStamped()
+        start_pose.header.frame_id = self.map_frame
+        start_pose.pose.position.x = self.start_x
+        start_pose.pose.position.y = self.start_y
+
+        self._publish('base', start_pose)
 
     def _enter_urgent_target(self, entry):
         self.state = (
@@ -483,6 +488,11 @@ class StateManager(Node):
         self.robot_x = transform.transform.translation.x
         self.robot_y = transform.transform.translation.y
 
+        if self.start_x is None and self.start_y is None:
+            # TF 가 처음 잡힌 첫 tick 에서 딱 한 번만 저장한다.
+            self.start_x = self.robot_x
+            self.start_y = self.robot_y
+
     def _planar_distance(self, pose_a, pose_b):
         return math.hypot(
             pose_a.position.x - pose_b.position.x,
@@ -494,23 +504,6 @@ class StateManager(Node):
             pose.position.x - x,
             pose.position.y - y,
         )
-
-    def _build_base_pose(self):
-
-        base_x = self.get_parameter('base_x').value
-        base_y = self.get_parameter('base_y').value
-        base_yaw = self.get_parameter('base_yaw').value
-
-        pose_stamped = PoseStamped()
-        pose_stamped.header.frame_id = self.map_frame
-
-        pose_stamped.pose.position.x = base_x
-        pose_stamped.pose.position.y = base_y
-
-        pose_stamped.pose.orientation.z = math.sin(base_yaw / 2.0)
-        pose_stamped.pose.orientation.w = math.cos(base_yaw / 2.0)
-
-        return pose_stamped
 
 
 def main(args=None):
