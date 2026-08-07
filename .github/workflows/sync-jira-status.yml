@@ -13,9 +13,28 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const match = context.payload.issue.title.match(/\[([A-Z]+-\d+)\]/);
+            const issueNumber = context.payload.issue.number;
+            const regex = /\[([A-Z]+-\d+)\]/;
+
+            let title = context.payload.issue.title;
+            let match = title.match(regex);
+
+            // create-jira-issue.yml이 아직 제목을 안 바꾼 시점에
+            // 이 워크플로가 같이 트리거됐을 수 있어서, 최신 제목을
+            // 몇 번 재조회하며 재시도 (최대 5회, 3초 간격 = 15초)
+            for (let i = 0; i < 5 && !match; i++) {
+              await new Promise(r => setTimeout(r, 3000));
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+              title = issue.title;
+              match = title.match(regex);
+            }
+
             if (!match) {
-              core.setFailed('제목에서 Jira 키를 못 찾음: ' + context.payload.issue.title);
+              core.setFailed('제목에서 Jira 키를 못 찾음(재시도 후에도 실패): ' + title);
               return;
             }
             core.setOutput('jira_key', match[1]);
