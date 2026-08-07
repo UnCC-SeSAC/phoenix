@@ -203,9 +203,10 @@ def generate_launch_description():
                 "start_hardware",
                 default_value="true",
             ),
+            # lidar 기반 회피 비활성화 false
             DeclareLaunchArgument(
                 "start_lidar_app",
-                default_value="true",
+                default_value="false",
             ),
             DeclareLaunchArgument(
                 "start_slam",
@@ -219,9 +220,10 @@ def generate_launch_description():
                 "start_frontier",
                 default_value="true",
             ),
+            # avoidance manager 비활성화 false
             DeclareLaunchArgument(
                 "start_avoidance",
-                default_value="true",
+                default_value="false",
             ),
             hardware,
             lidar_app,
