@@ -55,6 +55,7 @@ setup(
             'vision_detector = uncc_example.vision_detector:main',
             'yolo_detector = uncc_example.yolo_detector:main',
             'mission_test = uncc_example.mission_test_publisher:main',
+            'fire_extinguisher = uncc_example.fire_extinguisher:main',
         ],
     },
 )
