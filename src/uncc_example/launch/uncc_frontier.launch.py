@@ -88,6 +88,10 @@ def generate_launch_description():
         'start_avoidance'
     )
 
+    start_mission = LaunchConfiguration(
+        'start_mission'
+    )
+
     # =========================================
     # 1. Hardware
     # =========================================
@@ -235,6 +239,43 @@ def generate_launch_description():
     )
 
     # =========================================
+    # 7. State Manager / Mission Executor
+    # =========================================
+
+    mission = TimerAction(
+        period=13.0,
+        actions=[
+            Node(
+                package='uncc_example',
+
+                executable='state_manager',
+
+                name='state_manager',
+
+                output='screen',
+
+                condition=IfCondition(
+                    start_mission
+                ),
+            ),
+
+            Node(
+                package='uncc_example',
+
+                executable='mission_executor',
+
+                name='mission_executor',
+
+                output='screen',
+
+                condition=IfCondition(
+                    start_mission
+                ),
+            ),
+        ],
+    )
+
+    # =========================================
     # LaunchDescription
     # =========================================
 
@@ -270,10 +311,16 @@ def generate_launch_description():
             default_value='true',
         ),
 
+        DeclareLaunchArgument(
+            'start_mission',
+            default_value='true',
+        ),
+
         hardware,
         lidar_app,
         slam,
         nav2,
         frontier,
         avoidance,
+        mission,
     ])
