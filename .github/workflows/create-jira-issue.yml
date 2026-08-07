@@ -71,7 +71,7 @@ jobs:
 
           # ── ① 담당자 매핑: GitHub 아이디 -> Jira 계정 이메일 ──
           declare -A ASSIGNEE_MAP=(
-            ["go-wt-flow"]="본인이메일@example.com"
+            ["go-wt-flow"]="csw6115@gmail.com"
             ["albitro"]="rjh2280@gmail.com"
             ["Chopper-Tony"]="hi.hello.bonjour.ciao@gmail.com"
             ["caron2002"]="qkrtkddnr122@gmail.com"
