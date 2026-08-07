@@ -23,6 +23,7 @@ from launch.substitutions import (
 )
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def include_launch(
@@ -72,6 +73,8 @@ def generate_launch_description():
 
     start_avoidance = LaunchConfiguration("start_avoidance")
 
+    return_to_start_on_complete = LaunchConfiguration("return_to_start_on_complete")
+    goal_preemption_enabled = LaunchConfiguration("goal_preemption_enabled")
     # =========================================
     # 1. Hardware
     # =========================================
@@ -159,8 +162,12 @@ def generate_launch_description():
                         "mrtsp_solver": "greedy",
                         "map_processing_rate_hz": 0.5,
                         # 처음에는 기능을 단순하게
-                        "goal_preemption_enabled": False,
-                        "return_to_start_on_complete": False,
+                        "goal_preemption_enabled": ParameterValue(
+                            goal_preemption_enabled, value_type=bool
+                        ),
+                        "return_to_start_on_complete": ParameterValue(
+                            return_to_start_on_complete, value_type=bool
+                        ),
                     },
                 ],
             )
@@ -225,6 +232,10 @@ def generate_launch_description():
                 "start_avoidance",
                 default_value="false",
             ),
+            # 모든 탐사가 종료 되었을 때 시작지점 복귀
+            DeclareLaunchArgument("return_to_start_on_complete", default_value="true"),
+            # frontier 선점
+            DeclareLaunchArgument("goal_preemption_enabled", default_value="false"),
             hardware,
             lidar_app,
             slam,
