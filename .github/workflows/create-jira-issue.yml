@@ -71,7 +71,7 @@ jobs:
 
           # ── ① 담당자 매핑: GitHub 아이디 -> Jira 계정 이메일 ──
           declare -A ASSIGNEE_MAP=(
-            ["go-wt-flow"]="csw6115@gmail.com"
+            ["go-wt-flow"]="본인이메일@example.com"
             ["albitro"]="rjh2280@gmail.com"
             ["Chopper-Tony"]="hi.hello.bonjour.ciao@gmail.com"
             ["caron2002"]="qkrtkddnr122@gmail.com"
@@ -149,7 +149,38 @@ jobs:
           fields: ${{ steps.extra_fields.outputs.fields_json }}
 
       # ─────────────────────────────────────────────
-      # 6) GitHub 이슈 제목에 Jira 키 반영
+      # 6) 생성 직후 상태를 "진행 중"으로 전환
+      #    (Jira 기본 초기 상태는 보통 "할 일"이라 한 번 더 넘겨줘야 함)
+      # ─────────────────────────────────────────────
+      - name: Transition new issue to In Progress
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_KEY: ${{ steps.create.outputs.issue }}
+        run: |
+          # ⚠️ 실제 Jira 워크플로의 전환 이름과 정확히 일치해야 함
+          TARGET_NAME="진행 중"
+
+          TRANSITIONS=$(curl -s -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY/transitions")
+
+          TRANSITION_ID=$(echo "$TRANSITIONS" | jq -r --arg name "$TARGET_NAME" \
+            '.transitions[] | select(.name==$name) | .id')
+
+          if [ -n "$TRANSITION_ID" ] && [ "$TRANSITION_ID" != "null" ]; then
+            curl -s -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"transition\":{\"id\":\"$TRANSITION_ID\"}}" \
+              "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY/transitions"
+            echo "✅ '$TARGET_NAME'(으)로 전환 완료"
+          else
+            echo "❌ 전환 이름 '$TARGET_NAME'을 찾을 수 없습니다. 사용 가능한 전환 목록:"
+            echo "$TRANSITIONS" | jq -r '.transitions[].name'
+          fi
+
+      # ─────────────────────────────────────────────
+      # 7) GitHub 이슈 제목에 Jira 키 반영
       # ─────────────────────────────────────────────
       - name: Update issue title
         uses: actions/github-script@v7
