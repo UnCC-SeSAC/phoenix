@@ -115,10 +115,10 @@ jobs:
             ["Medium"]="Medium"
             ["Low"]="Low"
           )
-          JIRA_PRIORITY="Medium"
-          if [ -n "$GH_PRIORITY" ]; then
-            JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-}"
-          fi
+          # ⚠️ 인덱싱하기 전에 GH_PRIORITY 자체를 먼저 기본값으로 채워야
+          #    "PRIORITY_MAP[]" 같은 빈 서브스크립트 에러가 안 남
+          GH_PRIORITY="${GH_PRIORITY:-Medium}"
+          JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-Medium}"
 
           # ── ④ 최종 fields JSON 조립 ──
           FIELDS_JSON=$(jq -n \
