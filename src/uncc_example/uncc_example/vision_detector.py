@@ -20,7 +20,7 @@ from geometry_msgs.msg import PointStamped
 
 class VisionDetector(Node):
     """
-    yolo_detector 가 publish 하는 JSON 2D 감지(class_name + pixel box)를
+    yolo_detector 가 publish 하는 JSON 2D 감지(class_name + pixel 좌표점)를
     depth 이미지와 결합해 map 좌표계 3D 위치를 계산하고 JSON 으로
     다시 publish 한다.
 
@@ -158,17 +158,14 @@ class VisionDetector(Node):
             desired_encoding='passthrough',
         )
 
-        x_min, y_min, x_max, y_max = detection['box']
-        center_u = (x_min + x_max) // 2
-        center_v = (y_min + y_max) // 2
-
-        # box 는 RGB 해상도 기준이므로, depth 해상도가 다르면 비율로 맞춘다
+        # x, y 는 RGB 해상도 기준 픽셀 좌표라, depth 해상도가 다르면
+        # 비율로 맞춘다
         depth_h, depth_w = depth_image.shape[:2]
         scale_x = depth_w / detection['width']
         scale_y = depth_h / detection['height']
 
-        u = int(center_u * scale_x)
-        v = int(center_v * scale_y)
+        u = int(detection['x'] * scale_x)
+        v = int(detection['y'] * scale_y)
 
         if not (0 <= v < depth_h and 0 <= u < depth_w):
             return None

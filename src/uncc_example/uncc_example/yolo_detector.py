@@ -52,28 +52,18 @@ class YoloDetector(Node):
         뒤쪽 vision_detector / state_manager 파이프라인을 실제
         depth 카메라 데이터로 테스트할 수 있게 한다.
 
-        반환 형식: [{class_name, score, box, width, height}, ...]
-        box 는 [x_min, y_min, x_max, y_max] 픽셀 좌표.
+        반환 형식: [{class_name, score, x, y, width, height}, ...]
+        x, y 는 픽셀 좌표 점 하나(바운딩 박스 아님).
         """
 
         width = image_msg.width
         height = image_msg.height
 
-        box_w = width // 8
-        box_h = height // 8
-
-        center_x = width // 2
-        center_y = height // 2
-
         return [{
             'class_name': 'fire',
             'score': 1.0,
-            'box': [
-                center_x - box_w,
-                center_y - box_h,
-                center_x + box_w,
-                center_y + box_h,
-            ],
+            'x': width // 2,
+            'y': height // 2,
             'width': width,
             'height': height,
         }]
