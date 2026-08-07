@@ -9,6 +9,30 @@ jobs:
     name: Create Jira issue from GitHub issue
     runs-on: ubuntu-latest
     steps:
+      # ─────────────────────────────────────────────
+      # 1) 마일스톤 보고 어느 Jira 프로젝트에 만들지 결정
+      # ─────────────────────────────────────────────
+      - name: Detect domain project key
+        id: detect
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const map = {
+              '[SLAM]': 'SLAM',
+              '[YOLO]': 'YOLO',
+              '[HW]': 'HW',
+              '[DOC]': 'DOC',
+              '[INTEGRATION]': 'INTG'
+            };
+            const milestoneTitle = context.payload.issue.milestone
+              ? context.payload.issue.milestone.title
+              : null;
+            const projectKey = map[milestoneTitle] || 'PROJ'; // 마일스톤 없으면 기본 PROJ
+            core.setOutput('project_key', projectKey);
+
+      # ─────────────────────────────────────────────
+      # 2) Jira 로그인
+      # ─────────────────────────────────────────────
       - name: Login to Jira
         uses: atlassian/gajira-login@v3
         env:
@@ -16,7 +40,9 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
 
-      # GitHub 마크다운을 Jira 자체 문법으로 변환 (안 하면 리스트/헤딩이 깨져서 보임)
+      # ─────────────────────────────────────────────
+      # 3) GitHub 마크다운 -> Jira 문법 변환
+      # ─────────────────────────────────────────────
       - name: Convert GitHub Markdown to Jira Syntax
         uses: peter-evans/jira2md@v1
         id: md2jira
@@ -28,23 +54,109 @@ jobs:
             ${{ github.event.issue.body }}
           mode: md2jira
 
-      # 이슈 본문 그대로 Jira Task 생성 (서브태스크 아님 → 상위 티켓 입력 불필요)
+      # ─────────────────────────────────────────────
+      # 4) 담당자 / 라벨 / 우선순위 값을 만들어서 fields JSON으로 조립
+      # ─────────────────────────────────────────────
+      - name: Build extra Jira fields (assignee, labels, priority)
+        id: extra_fields
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO_FULL: ${{ github.repository }}
+        run: |
+          set -e
+
+          # ── ① 담당자 매핑: GitHub 아이디 -> Jira 계정 이메일 ──
+          declare -A ASSIGNEE_MAP=(
+            ["go-wt-flow"]="csw6115@gmail.com"
+            ["albitro"]="rjh2280@gmail.com"
+            ["Chopper-Tony"]="hi.hello.bonjour.ciao@gmail.com"
+            ["caron2002"]="qkrtkddnr122@gmail.com"
+            ["git-songsh"]="songsoo0037@gmail.com"
+            ["Yoobin-Seo"]="seoyb1128@naver.com"
+          )
+          GH_ASSIGNEE="${{ github.event.issue.assignee.login }}"
+          ASSIGNEE_ID=""
+          if [ -n "$GH_ASSIGNEE" ] && [ "$GH_ASSIGNEE" != "null" ] && [ -n "${ASSIGNEE_MAP[$GH_ASSIGNEE]:-}" ]; then
+            ASSIGNEE_ID=$(curl -s -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+              "$JIRA_BASE_URL/rest/api/3/user/search?query=${ASSIGNEE_MAP[$GH_ASSIGNEE]}" \
+              | jq -r '.[0].accountId // empty')
+          fi
+
+          # ── ② 라벨 매핑: GitHub 라벨 -> Jira 라벨 (이 3개만 동기화, 나머진 무시) ──
+          declare -A LABEL_MAP=(
+            ["bug"]="bug"
+            ["enhancement"]="enhance"
+            ["documentation"]="doc"
+          )
+          RAW_LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
+          JIRA_LABELS="[]"
+          while IFS= read -r label; do
+            [ -z "$label" ] && continue
+            mapped="${LABEL_MAP[$label]:-}"
+            if [ -n "$mapped" ]; then
+              JIRA_LABELS=$(echo "$JIRA_LABELS" | jq --arg l "$mapped" '. + [$l]')
+            fi
+          done <<< "$RAW_LABELS"
+
+          # ── ③ Priority: GitHub Issue fields에서 읽어와서 Jira Priority로 매핑 ──
+          FIELD_VALUES=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO_FULL/issues/$ISSUE_NUMBER/issue-field-values")
+
+          GH_PRIORITY=$(echo "$FIELD_VALUES" | jq -r '.[]? | select(.name=="Priority") | .value // empty')
+
+          declare -A PRIORITY_MAP=(
+            ["Urgent"]="Highest"
+            ["High"]="High"
+            ["Medium"]="Medium"
+            ["Low"]="Low"
+          )
+          JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-}"
+
+          # ── ④ 최종 fields JSON 조립 ──
+          FIELDS_JSON=$(jq -n \
+            --arg assigneeId "$ASSIGNEE_ID" \
+            --argjson labels "$JIRA_LABELS" \
+            --arg priority "$JIRA_PRIORITY" \
+            '{}
+             + (if $assigneeId != "" then {assignee: {accountId: $assigneeId}} else {} end)
+             + (if ($labels | length) > 0 then {labels: $labels} else {} end)
+             + (if $priority != "" then {priority: {name: $priority}} else {} end)')
+
+          echo "결과 fields: $FIELDS_JSON"
+
+          {
+            echo "fields_json<<JIRAFIELDS_EOF"
+            echo "$FIELDS_JSON"
+            echo "JIRAFIELDS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ─────────────────────────────────────────────
+      # 5) Jira 이슈 생성
+      # ─────────────────────────────────────────────
       - name: Create Jira Issue
         id: create
         uses: atlassian/gajira-create@v3
         with:
-          project: PROJ            # ← 본인 Jira 프로젝트 키로 변경
+          project: ${{ steps.detect.outputs.project_key }}
           issuetype: Task
           summary: "${{ github.event.issue.title }}"
           description: "${{ steps.md2jira.outputs.output-text }}"
+          fields: ${{ steps.extra_fields.outputs.fields_json }}
 
-      # 생성된 티켓 번호를 GitHub 이슈 제목 앞에 붙여서 서로 추적 가능하게
+      # ─────────────────────────────────────────────
+      # 6) GitHub 이슈 제목에 Jira 키 반영
+      # ─────────────────────────────────────────────
       - name: Update issue title
         uses: actions/github-script@v7
         with:
           script: |
             const milestone = context.payload.issue.milestone;
-            const domainTag = milestone ? milestone.title : '';  // 예: [SLAM]
+            const domainTag = milestone ? milestone.title : '';
             const jiraKey = '${{ steps.create.outputs.issue }}';
             const originalTitle = context.payload.issue.title;
 
