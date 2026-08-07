@@ -115,7 +115,10 @@ jobs:
             ["Medium"]="Medium"
             ["Low"]="Low"
           )
-          JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-}"
+          JIRA_PRIORITY="Medium"
+          if [ -n "$GH_PRIORITY" ]; then
+            JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-}"
+          fi
 
           # ── ④ 최종 fields JSON 조립 ──
           FIELDS_JSON=$(jq -n \
