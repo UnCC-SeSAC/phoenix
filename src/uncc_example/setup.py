@@ -56,6 +56,7 @@ setup(
             'yolo_detector = uncc_example.yolo_detector:main',
             'mission_test = uncc_example.mission_test_publisher:main',
             'fire_extinguisher = uncc_example.fire_extinguisher:main',
+            'mission_manager = uncc_example.mission_manager:main',
         ],
     },
 )
