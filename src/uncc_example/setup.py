@@ -51,6 +51,7 @@ setup(
             'hazard_test = uncc_example.hazard_test_publisher:main',
             'avoidance_manager = uncc_example.avoidance_manager:main',
             'vla_navigation_bridge = uncc_example.vla_navigation_bridge_node:main',
+            'vision_detector = uncc_example.vision_detector:main',
         ],
     },
 )

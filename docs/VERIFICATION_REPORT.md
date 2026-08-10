@@ -6,18 +6,19 @@
 
 ```text
 feature/vla-brain
-102852e17365424dc9c6359df9d551b5c8312bdc
+base: e2140a526cd3b007b37e3070ed3aa90abd27bf09
 ```
 
 현재 세션에서 다음 항목을 재검증했습니다.
 
 ```text
 python3 -m pytest -q
-156 passed
+189 passed
 
-colcon build --packages-select fire_vla_core fire_vla_bringup
+colcon build --packages-select fire_vla_core fire_vla_bringup uncc_example
 fire_vla_core PASS
 fire_vla_bringup PASS
+uncc_example PASS
 ```
 
 추가로 VLA Core, Qwen Adapter, decision dedup, ROS backend 및 launch wiring,
@@ -77,7 +78,19 @@ Navigation ownership은 DETERMINISTIC mode와 VLA mode에서 goal sender를 하�
 
 25개 추가 test로 최초/근접/원거리/class 분리/upstream ID/one-to-one/TTL/tie-break/non-map/NaN·Inf/timestamp/confidence/snapshot 시나리오를 확인했습니다. ROS2 Jazzy smoke에서 ID 없는 person `(2.0,1.0)`과 `(2.05,1.03)` 연속 입력 후 `people=1`, `person_0001` 유지, 최신 위치 갱신을 관측했습니다.
 
-실제 YOLO, Depth, object TF, SLAM, Nav2, Robot, Qwen은 이 검증에 사용하지 않았습니다. 실제 팀 Perception final topic/message Adapter는 VLA-03B pending입니다.
+실제 YOLO, camera/depth hardware, object TF, SLAM, Nav2, Robot, Qwen은 VLA-03A 검증에 사용하지 않았습니다.
+
+## VLA-03B Live Perception Bridge 검증
+
+```text
+/vision/detections (std_msgs/String)
+→ vla_perception_bridge
+→ /vla/perception_observation (canonical JSON)
+→ CanonicalPerceptionNormalizer
+→ WorldModel /vla/status
+```
+
+upstream `vision_detector.py`가 confidence와 원본 sec/nanosec timestamp를 map output까지 보존하도록 additive 보강했습니다. person/fire mapping, source timestamp의 UTC ISO 변환, finite/map-frame 검증, smoke/malformed/missing/invalid 입력 drop, VLA-03A stable ID E2E를 테스트했습니다. ROS2 Jazzy manual payload smoke에서 연속 person이 `person_0001`로 유지·갱신되고 `fire_0001`이 생성되며 smoke가 canonical topic과 WorldModel을 변경하지 않음을 확인했습니다. 실제 YOLO node와 camera/depth/TF hardware는 실행하지 않았습니다.
 
 ## VLA-04 Person Report Lifecycle 검증
 

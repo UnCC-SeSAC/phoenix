@@ -4,6 +4,7 @@ from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -78,6 +79,18 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "transformers_max_new_tokens",
             default_value="128",
+        ),
+        DeclareLaunchArgument(
+            "start_perception_bridge",
+            default_value="false",
+            description="Bridge /vision/detections into the canonical VLA topic",
+        ),
+        Node(
+            package="fire_vla_core",
+            executable="vla_perception_bridge",
+            name="vla_perception_bridge",
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("start_perception_bridge")),
         ),
         OpaqueFunction(function=_create_vla_node),
     ])

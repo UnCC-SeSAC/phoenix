@@ -133,7 +133,8 @@ target map pose
 | Producer | Consumer | ROS Boundary | 핵심 데이터 |
 |---|---|---|---|
 | RGB Camera | YOLO | `/ascamera/camera_publisher/rgb0/image` | RGB Image |
-| Perception + TF | VLA | `/vla/perception_observation` | person/fire + map `(x,y)` |
+| Perception + TF | VLA Bridge | `/vision/detections` | person/fire + map `(x,y)` + confidence/source stamp |
+| VLA Bridge | VLA | `/vla/perception_observation` | canonical person/fire batch |
 | Operator / UI | VLA | `/vla/mission` | 자연어 Mission |
 | TF / Localization | VLA | `/vla/robot_pose_json` | robot map `(x,y,yaw)` |
 | VLA | Navigation Bridge | `/vla/navigation_goal` | target map pose |
@@ -142,7 +143,7 @@ target map pose
 | Report Consumer | VLA | `/vla/person_report_result` | 보고 성공/실패 |
 | VLA | Future Pump bridge | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` | correlated 소화 명령/결과/취소 |
 
-Navigation, Person Report, Spray의 VLA-side ROS boundary는 구현/검증되어 있습니다. 실제 Perception producer 연결(VLA-03B)과 Pump/MCU hardware bridge는 남아 있습니다.
+Navigation, Person Report, Spray의 VLA-side ROS boundary와 `/vision/detections` → canonical Perception thin bridge는 구현/검증되어 있습니다. 실제 YOLO/camera/depth/TF hardware smoke와 Pump/MCU hardware bridge는 남아 있습니다.
 
 ---
 
@@ -667,7 +668,7 @@ Semantic WorldModel
 Camera/RGB                   ✅
 YOLO 자체                    팀 작업
 Depth                        팀 작업
-Object TF → map(x,y)         팀 작업 / VLA-03B 대기
+Object TF → map(x,y)         팀 upstream / bridge 계약 완료 (hardware smoke pending)
 
 Canonical Perception         ✅
 Stable ID fallback           ✅

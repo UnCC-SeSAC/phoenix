@@ -228,7 +228,7 @@ JSON:
 }
 ```
 
-중요: `frame_id="map"`과 유한한 2D `map_position`이 필수입니다. `entity_id`는 optional이며, non-empty upstream ID는 보존하고 ID가 없으면 VLA boundary가 같은 class의 최근 2D 위치를 기준으로 MVP stable ID를 연결합니다. bbox/depth/camera-frame 3D/TF는 Perception 책임이며 bbox만 있는 YOLO 결과는 아직 연결되지 않습니다. 실제 팀 topic/message Adapter는 VLA-03B 범위입니다.
+중요: `frame_id="map"`과 유한한 2D `map_position`이 필수입니다. `entity_id`는 optional이며, non-empty upstream ID는 보존하고 ID가 없으면 VLA boundary가 같은 class의 최근 2D 위치를 기준으로 MVP stable ID를 연결합니다. VLA-03B의 optional `vla_perception_bridge`는 `/vision/detections` `std_msgs/String`의 person/fire map 좌표, confidence, 원본 sec/nanosec timestamp를 위 canonical batch로 변환합니다. `smoke`는 MVP에서 발행하지 않습니다. bbox/depth/camera-frame 3D/TF는 Perception 책임이며 3D map은 사용하지 않습니다.
 
 ## 안전한 Demo Input
 
@@ -268,7 +268,7 @@ ros2 topic echo /vla/navigation_result
 - LLM: 기본 backend는 `MockVLABrain`; `ollama`와 `transformers`도 선택 가능
 - Spray: `spray_mode=MOCK`은 `MockSprayAdapter`; `TOPIC_BRIDGE`는 `TopicBridgeSprayAdapter`
 - Report: `report_mode=MOCK`은 `MockReportAdapter`; `TOPIC_BRIDGE`는 `TopicBridgePersonReportAdapter`
-- YOLO → map 좌표 Adapter: 미구현
+- 실제 YOLO/hardware smoke: 미수행; `/vision/detections` → VLA thin bridge는 구현/검증 완료
 
 실제로 연결된 기능:
 
@@ -282,8 +282,8 @@ ros2 topic echo /vla/navigation_result
 현재 checkout에서 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 156 passed
-colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
+python3 -m pytest -q: 189 passed
+colcon build --packages-select fire_vla_core fire_vla_bringup uncc_example: PASS
 코드 및 launch wiring 확인
 Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 Deterministic REPORT_PERSON → `/vla/person_report` → result → WorldModel: PASS
@@ -304,7 +304,7 @@ VLA-01에서 실제 Nav2/Robot 없이 person/fire pose resolve와 `/vla/navigati
 
 VLA-02에서는 deterministic `/vla/navigation_result`를 ROS2 topic boundary에 publish하여 `ActionResult → VLAOrchestrator → WorldModel` lifecycle, terminal status, cancel correlation, stale/duplicate 방어 및 다음 판단 가능 여부를 검증했습니다. 실제 `/navigate_to_pose` Action Server와 Robot은 사용하지 않았습니다.
 
-VLA-03A에서 canonical `/vla/perception_observation`의 `frame_id=map`, timestamp, class, confidence, finite 2D position을 검증하고, upstream ID 우선 및 ID 없는 detection의 map-distance stable ID fallback을 구현했습니다. association radius는 0.5 m, recent candidate TTL은 2.0초이며 빠른 이동/교차/긴 occlusion/process restart에서는 ID switch가 가능한 MVP association입니다. 실제 YOLO/Depth/TF topic Adapter는 VLA-03B로 남아 있습니다.
+VLA-03A에서 canonical `/vla/perception_observation` 검증과 ID 없는 detection의 map-distance stable ID fallback을 구현했습니다. VLA-03B에서는 `origin/state_manage`의 `vision_detector.py` 계약을 기준으로 map output에 confidence와 원본 timestamp를 additive하게 보존하고, optional bridge를 통해 `/vision/detections` → `/vla/perception_observation` → WorldModel을 검증했습니다. person/fire는 전달하고 smoke는 무시합니다. association radius는 0.5 m, TTL은 2.0초입니다. 실제 YOLO model/camera/depth/TF hardware smoke는 수행하지 않았습니다.
 
 VLA-04에서 `report_mode=TOPIC_BRIDGE` composition과 `/vla/person_report`, `/vla/person_report_result` JSON boundary를 추가했습니다. report payload의 person ID, map `(x,y)`, confidence는 WorldModel에서 가져오며 ACCEPTED 단계에서는 상태를 바꾸지 않습니다. correlated `SUCCEEDED` 결과에서만 `reported=true`가 되고, 실패·취소·timeout은 미보고 상태를 유지합니다. 실제 UI/외부 보고 backend는 사용하지 않았습니다.
 

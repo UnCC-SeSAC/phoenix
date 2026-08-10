@@ -65,7 +65,7 @@ VLA-02에서 Humble bridge의 Nav2 `GoalStatus` 정규화, action ID cancel corr
 
 Canonical boundary는 `/vla/perception_observation` `std_msgs/String` JSON을 유지합니다. `frame_id="map"`, timezone-aware timestamp, person/fire class, `[0,1]` confidence와 finite 2D map `(x,y)`를 요구합니다. non-empty upstream `entity_id`는 그대로 보존하고, ID가 없을 때만 같은 class의 최근 WorldModel entity를 0.5 m radius/2.0초 TTL로 nearest association합니다. 한 batch에서 ID는 한 번만 사용하며 거리 동률은 entity ID 순서로 결정합니다.
 
-이는 tracker가 아닌 MVP fallback입니다. 빠른 이동, 근접 교차, 긴 occlusion, process restart에서는 ID switch가 가능하며 전역 영구 ID를 보장하지 않습니다. Depth 기반 camera-frame 3D point는 최종 2D map 위치를 얻기 위한 Perception 내부 중간 계산일 뿐 3D map이 아닙니다. 실제 팀 Perception topic/message wiring은 VLA-03B로 남아 있습니다. obstacle은 VLA semantic entity가 아니며 Nav2 costmap/local planner 책임입니다.
+이는 tracker가 아닌 MVP fallback입니다. 빠른 이동, 근접 교차, 긴 occlusion, process restart에서는 ID switch가 가능하며 전역 영구 ID를 보장하지 않습니다. Depth 기반 camera-frame 3D point는 최종 2D map 위치를 얻기 위한 Perception 내부 중간 계산일 뿐 3D map이 아닙니다. VLA-03B는 `origin/state_manage`의 `/vision/detections` String 계약을 기준으로 person/fire map `(x,y)`, confidence, 원본 timestamp를 canonical boundary로 전달하는 thin bridge를 구현했습니다. smoke는 MVP에서 무시합니다. 실제 YOLO/camera/depth/TF hardware smoke는 수행하지 않았고 obstacle은 Nav2 costmap/local planner 책임입니다.
 
 ## Qwen/XPU 통합 상태
 
@@ -104,4 +104,4 @@ Validator와 Adapter는 fire 존재, ACTIVE, `robot_within_spray_range=true`, �
 
 `firefighter_ui` ROS node는 `/vla/status`만 구독하고 `/vla/mission`만 발행합니다. Python stdlib `ThreadingHTTPServer`와 package static HTML을 사용하며 기본 `127.0.0.1:8080`, `GET /`, `GET /api/status`, `POST /api/mission`만 제공합니다. UI는 Mission, robot/person/fire, decision/safety/execution 상태와 auto-fit 2D semantic SVG overlay를 표시하고 직접 Action/Nav2/Pump command를 제공하지 않습니다.
 
-Mock launch smoke에서 HTTP Mission POST, canonical person/fire/robot 입력, report SUCCEEDED, spray PENDING_VERIFICATION, blocked reason을 status API로 확인했습니다. 실제 live YOLO/Depth/TF feed는 VLA-03B pending이며 UI는 canonical status만 소비하므로 연결 시 UI 코드 변경이 필요하지 않습니다. 실제 Browser GUI automation, Robot, Pump/MCU, Qwen은 사용하지 않았습니다.
+Mock launch smoke에서 HTTP Mission POST, canonical person/fire/robot 입력, report SUCCEEDED, spray PENDING_VERIFICATION, blocked reason을 status API로 확인했습니다. VLA-03B bridge의 deterministic live-topic smoke는 완료했으며 UI는 동일 canonical status를 소비하므로 코드 변경이 필요하지 않았습니다. 실제 YOLO/camera/depth/TF hardware feed는 미검증입니다. 실제 Browser GUI automation, Robot, Pump/MCU, Qwen은 사용하지 않았습니다.

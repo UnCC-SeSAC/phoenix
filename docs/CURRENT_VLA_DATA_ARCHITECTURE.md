@@ -19,7 +19,7 @@
 
 > Depth 기반 camera-frame 3D point는 객체의 2D map 위치를 얻기 위한 Perception 내부 중간 표현이다. 시스템이 3D map을 사용한다는 의미가 아니다.
 
-VLA의 authoritative semantic target position은 `map` frame의 `(x, y)`이다. VLA-03A는 canonical map-frame 검증과 upstream ID 우선/fallback stable ID association까지 구현했다. Perception branch에는 실행 가능한 YOLO publisher, depth 역투영, object TF 변환, 최종 map `(x,y)` publisher가 확인되지 않아 실제 팀 topic/message 연결은 VLA-03B pending이다.
+VLA의 authoritative semantic target position은 `map` frame의 `(x, y)`이다. VLA-03A는 canonical map-frame 검증과 upstream ID 우선/fallback stable ID association을 구현했다. VLA-03B는 `origin/state_manage`의 추적 가능한 `vision_detector.py` 계약을 기준으로 confidence/source timestamp가 보존된 `/vision/detections`를 canonical boundary에 연결했다. 실제 YOLO/camera/depth/TF hardware feed는 아직 검증하지 않았다.
 
 ## 2. 전체 시스템 아키텍처
 
@@ -145,7 +145,8 @@ README는 `/yolo_result`와 raw/normalized image coordinates를 설명하지만 
 | Camera → projection | CameraInfo topic | `sensor_msgs/CameraInfo` | K/intrinsics + frame/stamp | camera calibration | `[IMPLEMENTED infra, use planned]` |
 | YOLO → Perception pipeline | README `/yolo_result` | unknown; candidate `vision_msgs` or `interfaces/ObjectsInfo` | class/confidence/bbox; no verified stable ID | YOLO producer | `[UNKNOWN/NEEDS CONTRACT]` |
 | Projection → TF | planned `/fire/detections_3d` | unknown | camera-frame `(X,Y,Z)`, original stamp | Perception | `[PLANNED/UPSTREAM]` |
-| Perception+TF → VLA | final topic not implemented; VLA expects `/vla/perception_observation` | VLA expects `std_msgs/String` JSON | map-frame 2D entities, ISO timestamp | Perception+TF/SLAM | `[PLANNED/UPSTREAM producer]` |
+| Perception+TF → VLA bridge | `/vision/detections` | `std_msgs/String` JSON | person/fire, confidence, map-frame 2D x/y, source sec/nanosec | Perception+TF/SLAM | `[IMPLEMENTED contract; hardware smoke pending]` |
+| VLA bridge → VLA | `/vla/perception_observation` | `std_msgs/String` JSON | canonical map-frame batch, UTC ISO timestamp | VLA thin adapter | `[IMPLEMENTED/VERIFIED]` |
 | Mission UI/operator → VLA | `/vla/mission` | `std_msgs/String` JSON | mission ID/text | operator | `[IMPLEMENTED]` |
 | VLA → Firefighter UI | `/vla/status` | `std_msgs/String` JSON | WorldModel snapshot + DecisionCycle metadata | VLA | `[IMPLEMENTED/VERIFIED]` |
 | TF bridge → VLA | `/vla/robot_pose_json` | `std_msgs/String` JSON | `map` Pose2D, Unix seconds | TF/localization | `[IMPLEMENTED]` |
@@ -265,21 +266,21 @@ Topic/type: `/vla/navigation_result`, `std_msgs/msg/String`
 
 | 항목 | Perception 실제 출력 | VLA 현재 입력 | 상태 | 필요한 조치 |
 |---|---|---|---|---|
-| topic | README `/yolo_result`; 실제 publisher 미확인 | `/vla/perception_observation` | Gap | upstream 최종 semantic topic 확정 또는 얇은 Adapter topic mapping |
-| ROS type | 미확인; candidate `ObjectsInfo`/`vision_msgs` | `std_msgs/String` JSON | Gap | 실제 producer type 확정 후 한 개 Adapter에서 변환 |
-| class | candidate `class_name` | `class_name`, person/fire | Partial | 실제 label set과 person/fire canonical mapping 확정 |
-| confidence | candidate `score` | `confidence`, person≥0.50/fire≥0.60 | Small mapping | score scale `[0,1]` 확인 후 rename |
+| topic | `/vision/detections` | `/vla/perception_observation` | VLA-03B complete | optional thin bridge가 mapping |
+| ROS type | `std_msgs/String` JSON | `std_msgs/String` JSON | Compatible | bridge에서 schema만 변환 |
+| class | `class`: person/fire/smoke | `class_name`: person/fire | VLA-03B complete | person/fire 전달, smoke ignore |
+| confidence | `confidence` `[0,1]` | `confidence`, person≥0.50/fire≥0.60 | Compatible | 값 보존 |
 | bbox | `box` pixel array | 사용하지 않음 | Expected | Perception 내부 depth 계산에만 사용 |
 | entity ID | 없음 | optional upstream ID + VLA fallback | VLA-03A complete | upstream ID 우선, 없으면 2D association |
-| map_x | 없음 | `map_position.x` 필수 | Blocker | Perception+Depth+TF가 map x 제공 |
-| map_y | 없음 | `map_position.y` 필수 | Blocker | Perception+Depth+TF가 map y 제공 |
+| map_x | `/vision/detections.x` | `map_position.x` 필수 | VLA-03B complete | bridge mapping |
+| map_y | `/vision/detections.y` | `map_position.y` 필수 | VLA-03B complete | bridge mapping |
 | yaw | 없음 | optional, 기본 0; Resolver가 target 방향 재계산 | Compatible | upstream에서 억지로 생성할 필요 없음 |
-| frame_id | detection contract에 없음 | explicit `map` 필수 | VLA-03A complete | VLA-03B Adapter가 map-frame contract 제공 |
-| timestamp | Object messages에 Header 없음 | timezone-aware ISO batch timestamp 필수 | Blocker | 원본 image stamp 보존 후 boundary format 확정 |
+| frame_id | explicit `map` | explicit `map` 필수 | VLA-03B complete | non-map drop |
+| timestamp | `stamp_sec` + `stamp_nanosec` | timezone-aware ISO batch timestamp 필수 | VLA-03B complete | UTC ISO nanosecond 문자열 변환 |
 | source frame | 없음 | VLA에는 불필요하나 traceability에 유용 | Contract needed | upstream 내부/diagnostic field로 보존 여부 결정 |
-| invalid depth | 표현/동작 없음 | `frame_valid` batch flag만 있음 | Blocker | map position 불가능 detection은 upstream drop, 상태/metric 정의 |
-| TF failure | 구현 없음 | map position을 신뢰 | Blocker | upstream drop+warning, old coordinate 재사용 금지 |
-| stale observation | 원본 stamp 보존 미구현 | 1.0초 초과 batch drop | Partial | upstream original stamp와 clock/timezone 계약 |
+| invalid depth | `vision_detector`가 non-positive/NaN/Inf drop | finite map position 요구 | VLA-03B complete | 진단 metric은 향후 upstream 범위 |
+| TF failure | warning 후 해당 detection drop | map position을 신뢰 | Compatible | old coordinate 재사용 없음 |
+| stale observation | 원본 sec/nanosec 보존 | 1.0초 초과 batch drop | VLA-03B complete | bridge가 UTC ISO로 변환 |
 | person | 실제 model label/출력 미확인 | 정식 WorldModel entity | VLA ready/03B dependency | upstream class mapping 확인 |
 | fire | 실제 model label/출력 미확인 | 정식 WorldModel entity | VLA ready/03B dependency | upstream class mapping 확인 |
 | obstacle | 실제 model label 미확인 | 정식 semantic entity 아님; 무시됨 | No VLA mapping | Nav2 costmap/local avoidance owner 유지 |
@@ -556,19 +557,11 @@ Navigation cancel payload:
 - 새 Navigation Manager/arbitration layer를 만들지 않는다.
 - VLA node의 `navigation_mode=MOCK|TOPIC_BRIDGE`는 Adapter composition 선택이며 system ownership mode와 구분한다.
 
-## 17. VLA-03A 완료 및 VLA-03B dependency
+## 17. VLA-03A 및 VLA-03B 완료
 
-VLA-03A canonical contract, safety validation, stable ID fallback과 WorldModel snapshot 경로는 구현/검증 완료했다. 실제 팀 Perception final topic/message를 canonical boundary로 변환하는 Adapter는 VLA-03B pending이다. VLA-03B는 아래 질문이 확정된 후 시작한다.
+VLA-03A canonical validation, stable ID fallback과 WorldModel snapshot 경로에 이어 VLA-03B thin bridge를 구현/검증했다. upstream `vision_detector.py`는 `/yolo/detections`의 person/fire pixel/depth/source stamp를 CameraInfo와 TF로 map `(x,y)`로 변환하며 `/vision/detections` String을 발행한다. confidence와 source sec/nanosec를 backward-compatible field로 보존하고 invalid depth, invalid intrinsics, malformed input, TF failure는 발행하지 않는다.
 
-1. 최종 map-frame object output의 topic과 ROS message type은 무엇인가?
-2. 각 detection에 original image timestamp와 명시적인 `frame_id="map"`가 포함되는가?
-3. upstream stable person/fire ID를 제공할 계획이 있는가? 제공 시 형식과 lifecycle은 무엇인가?
-4. class canonical value와 confidence 범위는 정확히 무엇인가 (`person`, `fire`, obstacle 포함 여부)?
-5. invalid depth와 TF lookup failure는 detection drop으로 처리하는가? 진단 상태는 어디에 노출하는가?
-6. `/fire/detections_3d`는 camera-frame 중간 topic인가, map-frame 변환 결과인가? 최종 VLA용 2D projection topic은 별도로 무엇인가?
-7. timestamp clock 기준(ROS time/system time), QoS, 최대 허용 latency/rate는 무엇인가?
-
-이 질문이 확정되기 전에는 VLA-03B를 구현하지 않으며, VLA가 bbox/depth/TF 책임을 가져오지 않는다.
+`vla_perception_bridge`는 `/vision/detections` 한 건을 canonical detections 길이 1 batch로 변환한다. person/fire만 전달하고 smoke는 무시하며 stable ID는 생성하지 않고 기존 VLA-03A fallback에 맡긴다. deterministic ROS smoke는 완료했지만 실제 YOLO model, camera/depth, TF hardware pipeline은 실행하지 않았다. VLA는 계속 bbox/depth/deprojection/TF 책임을 가져오지 않는다.
 
 ## 18. VLA-04 Person Report boundary
 
@@ -584,7 +577,7 @@ WorldModel person (reported=false)
 → WorldModel
 ```
 
-발행 payload는 `action_id`, `mission_id`, `person_id`, `map_position{x,y}`, `confidence`, ISO `timestamp`, `frame_id=map`이다. 위치와 confidence는 LLM text가 아니라 WorldModel이 source of truth다. Submission과 terminal result는 분리하며 correlated `SUCCEEDED`에서만 `reported=true`, `state=REPORTED`로 전이한다. VLA-06 UI의 report 상태 표시는 구현 완료했다. 실제 외부 reporting consumer와 VLA-03B Perception producer wiring은 여전히 pending이다.
+발행 payload는 `action_id`, `mission_id`, `person_id`, `map_position{x,y}`, `confidence`, ISO `timestamp`, `frame_id=map`이다. 위치와 confidence는 LLM text가 아니라 WorldModel이 source of truth다. Submission과 terminal result는 분리하며 correlated `SUCCEEDED`에서만 `reported=true`, `state=REPORTED`로 전이한다. VLA-06 UI의 report 상태 표시는 구현 완료했다. 실제 외부 reporting consumer는 pending이며 VLA-03B bridge wiring은 완료했다.
 
 ## 19. VLA-05 Spray boundary
 
@@ -613,4 +606,4 @@ Browser POST /api/mission
 → FirefighterUINode → GET /api/status → Browser
 ```
 
-`/vla/status`는 `timestamp`, existing `world_model` snapshot, `decision`, `validation`, `submission`, `blocked_reason`을 제공한다. UI backend는 thread-safe copy를 HTTP thread에 전달하며 loopback에만 bind한다. Frontend는 Mission, robot/person/fire, execution/safety 상태와 robot/home/person/fire/current target의 auto-fit 2D semantic overlay를 표시한다. UI는 Action을 직접 생성하거나 Validator, Navigation, Report, Spray Port를 우회하지 않는다. occupancy grid, 인증, DB, 외부 공개는 범위 밖이다. Live Perception producer는 VLA-03B pending이지만 UI의 canonical status contract에는 영향이 없다.
+`/vla/status`는 `timestamp`, existing `world_model` snapshot, `decision`, `validation`, `submission`, `blocked_reason`을 제공한다. UI backend는 thread-safe copy를 HTTP thread에 전달하며 loopback에만 bind한다. Frontend는 Mission, robot/person/fire, execution/safety 상태와 robot/home/person/fire/current target의 auto-fit 2D semantic overlay를 표시한다. UI는 Action을 직접 생성하거나 Validator, Navigation, Report, Spray Port를 우회하지 않는다. occupancy grid, 인증, DB, 외부 공개는 범위 밖이다. VLA-03B bridge는 완료했으며 실제 YOLO/camera/depth/TF hardware feed 미검증은 UI의 canonical status contract에 영향이 없다.
