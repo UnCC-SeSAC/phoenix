@@ -10,28 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # ─────────────────────────────────────────────
-      # 1) 마일스톤 보고 어느 Jira 프로젝트에 만들지 결정
-      # ─────────────────────────────────────────────
-      - name: Detect domain project key
-        id: detect
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const map = {
-              '[SLAM]': 'SLAM',
-              '[YOLO]': 'YOLO',
-              '[HW]': 'HW',
-              '[DOC]': 'DOC',
-              '[INTEGRATION]': 'INTG'
-            };
-            const milestoneTitle = context.payload.issue.milestone
-              ? context.payload.issue.milestone.title
-              : null;
-            const projectKey = map[milestoneTitle] || 'PROJ'; // 마일스톤 없으면 기본 PROJ
-            core.setOutput('project_key', projectKey);
-
-      # ─────────────────────────────────────────────
-      # 2) Jira 로그인
+      # 1) Jira 로그인
       # ─────────────────────────────────────────────
       - name: Login to Jira
         uses: atlassian/gajira-login@v3
@@ -41,7 +20,7 @@ jobs:
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
 
       # ─────────────────────────────────────────────
-      # 3) GitHub 마크다운 -> Jira 문법 변환
+      # 2) GitHub 마크다운 -> Jira 문법 변환
       # ─────────────────────────────────────────────
       - name: Convert GitHub Markdown to Jira Syntax
         uses: peter-evans/jira2md@v1
@@ -55,7 +34,7 @@ jobs:
           mode: md2jira
 
       # ─────────────────────────────────────────────
-      # 4) 담당자 / 라벨 / 우선순위 값을 만들어서 fields JSON으로 조립
+      # 3) 담당자 / 라벨 / 우선순위 값을 만들어서 fields JSON으로 조립
       # ─────────────────────────────────────────────
       - name: Build extra Jira fields (assignee, labels, priority)
         id: extra_fields
@@ -71,7 +50,7 @@ jobs:
 
           # ── ① 담당자 매핑: GitHub 아이디 -> Jira 계정 이메일 ──
           declare -A ASSIGNEE_MAP=(
-            ["go-wt-flow"]="csw6115@gmail.com"
+            ["go-wt-flow"]="csw6115@example.com"
             ["albitro"]="rjh2280@gmail.com"
             ["Chopper-Tony"]="hi.hello.bonjour.ciao@gmail.com"
             ["caron2002"]="qkrtkddnr122@gmail.com"
@@ -135,23 +114,22 @@ jobs:
             echo "$FIELDS_JSON"
             echo "JIRAFIELDS_EOF"
           } >> "$GITHUB_OUTPUT"
-          
+
       # ─────────────────────────────────────────────
-      # 5) Jira 이슈 생성
+      # 4) Jira 이슈 생성 (프로젝트는 항상 PROJ 고정)
       # ─────────────────────────────────────────────
       - name: Create Jira Issue
         id: create
         uses: atlassian/gajira-create@v3
         with:
-          project: ${{ steps.detect.outputs.project_key }}
+          project: PROJ
           issuetype: Task
           summary: "${{ github.event.issue.title }}"
           description: "${{ steps.md2jira.outputs.output-text }}"
           fields: ${{ steps.extra_fields.outputs.fields_json }}
 
       # ─────────────────────────────────────────────
-      # 6) 생성 직후 상태를 "진행 중"으로 전환
-      #    (Jira 기본 초기 상태는 보통 "할 일"이라 한 번 더 넘겨줘야 함)
+      # 5) 생성 직후 상태를 "진행 중"으로 전환
       # ─────────────────────────────────────────────
       - name: Transition new issue to In Progress
         env:
@@ -181,7 +159,8 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────
-      # 7) GitHub 이슈 제목에 Jira 키 반영
+      # 6) GitHub 이슈 제목에 Jira 키 + 도메인 태그 반영
+      #    (프로젝트는 하나로 합쳤지만 도메인 구분은 태그로 계속 유지)
       # ─────────────────────────────────────────────
       - name: Update issue title
         uses: actions/github-script@v7
