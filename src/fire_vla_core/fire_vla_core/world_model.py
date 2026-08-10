@@ -137,13 +137,21 @@ class WorldModel:
             self._event("DUPLICATE_RESULT_IGNORED", action_id=result.action_id, detail=result.message)
             return False
 
-        self._remember_processed_result(result.action_id)
-        action = self.pending_actions.pop(result.action_id, None)
+        action = self.pending_actions.get(result.action_id)
         if action is None and self.current_action and self.current_action.action_id == result.action_id:
             action = self.current_action
+        if action is None:
+            self._event(
+                "UNRELATED_RESULT_IGNORED",
+                action_id=result.action_id,
+                entity_id=result.target_id,
+                detail=result.message,
+            )
+            return False
 
-        if action:
-            action.status = self._lifecycle_from_result(result.status)
+        self._remember_processed_result(result.action_id)
+        self.pending_actions.pop(result.action_id, None)
+        action.status = self._lifecycle_from_result(result.status)
 
         if result.source == ExecutionSource.NAVIGATION:
             self.robot.navigation_status = result.status.value

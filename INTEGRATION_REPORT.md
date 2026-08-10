@@ -55,6 +55,12 @@
 
 이 범위는 현재 요구사항보다 크거나 외부 계약이 미확정입니다.
 
+## Navigation ownership 및 VLA-02 result lifecycle
+
+Navigation goal owner는 system mode로 분리합니다. DETERMINISTIC mode에서는 Frontier/StateManager/MissionExecutor만 goal을 보내고 VLA sender를 끕니다. VLA mode에서는 VLA Brain과 `VLANavigationBridgeNode`만 goal을 보내고 Frontier/MissionExecutor sender를 끕니다. 동시 owner 구성과 별도 arbitration manager는 지원하지 않습니다. Core node의 `MOCK|TOPIC_BRIDGE` parameter는 Adapter composition 선택이며 system ownership mode와 구분합니다.
+
+VLA-02에서 Humble bridge의 Nav2 `GoalStatus` 정규화, action ID cancel correlation, Jazzy `TopicBridgeNavigationAdapter` result parsing, WorldModel terminal lifecycle을 unit/integration test로 확인했습니다. 미등록 action ID 결과는 `UNRELATED_RESULT_IGNORED`로 차단하고, 동일 terminal result는 한 번만 적용합니다. ROS2 Jazzy smoke에서 deterministic `/vla/navigation_result`의 SUCCEEDED가 `current_action`을 해제하고 `last_action`을 갱신하는 것을 확인했습니다. 실제 Nav2 Action Server와 Robot은 사용하지 않았습니다.
+
 ## Qwen/XPU 통합 상태
 
 현재 코드에는 `TransformersQwenAdapter`와 `mock`/`ollama`/`transformers` backend 선택, 그리고 VLA Node에만 XPU Python을 적용하는 `vla_python_executable` launch wiring이 구현되어 있습니다. 현재 선택 모델은 `Qwen/Qwen2.5-1.5B-Instruct`이며 기본 device는 Intel XPU `xpu:0`입니다.

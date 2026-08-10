@@ -170,6 +170,15 @@ ros2 launch fire_vla_bringup topic_bridge_vla.launch.py \
   vla_python_executable:=<workspace>/.venv-xpu/bin/python
 ```
 
+## Navigation goal ownership mode
+
+SLAM, TF, Localization은 두 mode의 공통 기반이며, goal decision owner는 launch composition으로 하나만 활성화합니다. 별도 arbitration manager는 두지 않습니다.
+
+- **DETERMINISTIC mode**: Frontier/StateManager/MissionExecutor가 `/navigate_to_pose` goal을 소유하며 VLA navigation goal sender는 끕니다.
+- **VLA mode**: VLA Brain → `VLANavigationBridgeNode`가 `/navigate_to_pose` goal을 소유하며 Frontier와 MissionExecutor goal sender는 끕니다.
+
+두 owner가 동시에 활성화되는 구성은 지원하지 않습니다. `VLAOrchestratorNode`의 `navigation_mode=MOCK|TOPIC_BRIDGE`는 Adapter 선택 parameter이며 위 system ownership mode와 같은 개념이 아닙니다. 현재 `topic_bridge_vla.launch.py`는 VLA-side sender만 구성하고 팀 Frontier/MissionExecutor를 함께 시작하지 않습니다.
+
 ## 입력 토픽
 
 ### Mission
@@ -266,7 +275,7 @@ ros2 topic echo /vla/navigation_result
 현재 checkout에서 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 64 passed
+python3 -m pytest -q: 75 passed
 colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 코드 및 launch wiring 확인
 Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
@@ -281,6 +290,6 @@ Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 - TF `map → base_footprint`
 - 실제 로봇 주행
 
-VLA-01에서 실제 Nav2/Robot 없이 person/fire pose resolve, invalid target 및 validation reject 미발행, duplicate submission 방어와 `/vla/navigation_goal` JSON 발행을 검증했습니다. 실제 Nav2 result E2E는 아직 완료되지 않았습니다.
+VLA-01에서 실제 Nav2/Robot 없이 person/fire pose resolve와 `/vla/navigation_goal` 발행을 검증했습니다. VLA-02에서는 deterministic `/vla/navigation_result`를 ROS2 topic boundary에 publish하여 `ActionResult → VLAOrchestrator → WorldModel` lifecycle, terminal status, cancel correlation, stale/duplicate 방어 및 다음 판단 가능 여부를 검증했습니다. 실제 `/navigate_to_pose` Action Server와 Robot은 사용하지 않았습니다.
 
 Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `INTEGRATION_REPORT.md`와 `HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.
