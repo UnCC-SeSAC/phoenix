@@ -9,9 +9,9 @@ from rclpy.time import Time
 
 from tf2_ros import Buffer, TransformListener, TransformException
 
-from std_msgs.msg import Header, String, UInt16
-from std_srvs.srv import Trigger
-from geometry_msgs.msg import Pose, PoseStamped
+from std_msgs.msg import String, UInt16
+from std_srvs.srv import SetBool
+from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
 
 
@@ -159,9 +159,13 @@ class StateManager(Node):
             10,
         )
 
-        # 행동을 담당하는 노드가 현재 목적지를 다 처리했을 때 호출
+        # 행동을 담당하는 노드가 현재 목적지를 다 처리했을 때 호출.
+        # request.data 로 실제 성공 여부(불이 꺼졌는지 등)를 같이
+        # 받는다 — 완료 처리와 결과값을 한 번에 원자적으로 처리하기
+        # 위해 Trigger 대신 SetBool 사용 (별도 토픽으로 따로 받으면
+        # active_target 이 이미 지워진 뒤일 수 있는 레이스가 생김).
         self.create_service(
-            Trigger,
+            SetBool,
             '~/target_complete',
             self.target_complete_callback,
         )
@@ -191,21 +195,17 @@ class StateManager(Node):
         if target_type not in ('fire', 'person'):
             return
 
-        pose = Pose()
-        pose.position.x = payload['x']
-        pose.position.y = payload['y']
-        pose.position.z = payload.get('z', 0.0)
+        pose_stamped = self._make_pose_stamped(
+            payload.get('frame_id', self.map_frame),
+            payload['x'],
+            payload['y'],
+        )
 
-        header = Header()
-        header.frame_id = payload.get('frame_id', self.map_frame)
+        self._add_detection(target_type, pose_stamped)
 
-        self._add_detection(target_type, header, pose)
+    def _add_detection(self, target_type, pose_stamped):
 
-    def _add_detection(self, target_type, header, pose):
-
-        pose_stamped = PoseStamped()
-        pose_stamped.header = header
-        pose_stamped.pose = pose
+        pose = pose_stamped.pose
 
         if self._find_found_target(target_type, pose) is not None:
             # 이미 기록된 대상 — pending/done 상관없이 재감지는
@@ -222,6 +222,9 @@ class StateManager(Node):
             # '이 사람은 원래 저 불과 한 세트였다'는 사실 자체가
             # 우선순위 판단에 계속 쓰이기 때문.
             'partner': None,
+            # fire 만 의미 있음 — target_complete_callback 이
+            # 실제 진화 성공 여부를 여기에 채운다 (지도 표시용).
+            'extinguished': None,
         }
 
         partner_type = 'person' if target_type == 'fire' else 'fire'
@@ -244,7 +247,9 @@ class StateManager(Node):
                 continue
 
             if (
-                self._planar_distance(entry['pose'].pose, pose)
+                self._planar_distance_xy(
+                    pose.position.x, pose.position.y, entry['pose'].pose
+                )
                 <= self.fire_person_proximity_threshold
             ):
                 return entry
@@ -259,7 +264,9 @@ class StateManager(Node):
                 continue
 
             if (
-                self._planar_distance(entry['pose'].pose, pose)
+                self._planar_distance_xy(
+                    pose.position.x, pose.position.y, entry['pose'].pose
+                )
                 <= self.target_merge_radius
             ):
                 return entry
@@ -286,20 +293,28 @@ class StateManager(Node):
 
     def _target_category(self, entry):
         """
-        지도 표시용 3분류: person / fire_extinguished /
-        fire_unextinguished. 내부 로직(우선순위 판단 등)에 쓰는
-        type/status 는 그대로 두고, publish 할 때만 하나로 합친다
-        — 구독하는 쪽(map_visualizer)이 내부 상태 의미를 몰라도
-        되게 하기 위함.
+        지도 표시용 5분류: person_unconfirmed / person_confirmed /
+        fire_unvisited / fire_failed / fire_extinguished. 내부
+        로직(우선순위 판단 등)에 쓰는 type/status 는 그대로 두고,
+        publish 할 때만 하나로 합친다 — 구독하는 쪽(map_visualizer)이
+        내부 상태 의미를 몰라도 되게 하기 위함.
+
+        사람은 아직 구조 성공/실패를 알려주는 노드가 없어서(fire_
+        extinguisher 같은 게 없음) 방문 여부(status)만으로 나뉜다.
         """
 
         if entry['type'] == 'person':
-            return 'person'
+            if entry['status'] == 'done':
+                return 'person_confirmed'
+            return 'person_unconfirmed'
 
-        if entry['status'] == 'done':
+        if entry['status'] != 'done':
+            return 'fire_unvisited'
+
+        if entry['extinguished']:
             return 'fire_extinguished'
 
-        return 'fire_unextinguished'
+        return 'fire_failed'
 
     # =========================================================
     # Battery
@@ -330,11 +345,14 @@ class StateManager(Node):
 
     def target_complete_callback(self, request, response):
 
-        if (
-            self.active_target is not None
-            and self.active_target in self.target_queue
-        ):
+        # active_target 이 있으면 항상 target_queue 안에도 있다 —
+        # 여기서 빼는 게 유일한 제거 경로이자 active_target 을 None
+        # 으로 되돌리는 지점이기도 하기 때문에 멤버십 재확인이 불필요.
+        if self.active_target is not None:
             self.active_target['status'] = 'done'
+            # fire 는 request.data 로 실제 진화 성공 여부가 들어온다
+            # (person/base 는 의미 없지만 넣어도 무해함).
+            self.active_target['extinguished'] = request.data
             self.target_queue.remove(self.active_target)
             self._publish_found_targets()
 
@@ -369,10 +387,9 @@ class StateManager(Node):
         self.state = self.RETURNING_TO_BASE
         self.active_target = None
 
-        start_pose = PoseStamped()
-        start_pose.header.frame_id = self.map_frame
-        start_pose.pose.position.x = self.start_x
-        start_pose.pose.position.y = self.start_y
+        start_pose = self._make_pose_stamped(
+            self.map_frame, self.start_x, self.start_y
+        )
 
         self._publish('base', start_pose)
 
@@ -439,10 +456,7 @@ class StateManager(Node):
         이미 불을 끄러 가는 중이면 무슨 일이 있어도 안 바꾼다.
         """
 
-        if (
-            self.active_target is not None
-            and self.active_target in self.target_queue
-        ):
+        if self.active_target is not None:
             if self.active_target['type'] == 'person':
                 partner = self.active_target['partner']
 
@@ -541,17 +555,18 @@ class StateManager(Node):
             self.start_x = self.robot_x
             self.start_y = self.robot_y
 
-    def _planar_distance(self, pose_a, pose_b):
-        return math.hypot(
-            pose_a.position.x - pose_b.position.x,
-            pose_a.position.y - pose_b.position.y,
-        )
-
     def _planar_distance_xy(self, x, y, pose):
         return math.hypot(
             pose.position.x - x,
             pose.position.y - y,
         )
+
+    def _make_pose_stamped(self, frame_id, x, y):
+        pose_stamped = PoseStamped()
+        pose_stamped.header.frame_id = frame_id
+        pose_stamped.pose.position.x = x
+        pose_stamped.pose.position.y = y
+        return pose_stamped
 
 
 def main(args=None):

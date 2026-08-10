@@ -61,6 +61,10 @@ class VisionDetector(Node):
         )
 
         self.latest_camera_info = None
+        self.fx = None
+        self.fy = None
+        self.cx = None
+        self.cy = None
 
         # -----------------------------
         # TF (카메라 좌표 -> map 좌표 변환용)
@@ -99,6 +103,12 @@ class VisionDetector(Node):
     # =========================================================
 
     def camera_info_callback(self, msg):
+        # 카메라 내부 파라미터는 캘리브레이션 후 고정값이라, 감지마다
+        # 다시 꺼내 쓰지 않고 CameraInfo 가 갱신될 때만 뽑아둔다.
+        self.fx = msg.k[0]
+        self.fy = msg.k[4]
+        self.cx = msg.k[2]
+        self.cy = msg.k[5]
         self.latest_camera_info = msg
 
     # =========================================================
@@ -133,12 +143,6 @@ class VisionDetector(Node):
 
     def _compute_map_position(self, detection):
 
-        camera_info = self.latest_camera_info
-        fx = camera_info.k[0]
-        fy = camera_info.k[4]
-        cx = camera_info.k[2]
-        cy = camera_info.k[5]
-
         u = detection['x']
         v = detection['y']
         depth_m = detection['depth']
@@ -149,8 +153,8 @@ class VisionDetector(Node):
             seconds=detection['stamp_sec'],
             nanoseconds=detection['stamp_nanosec'],
         ).to_msg()
-        point.point.x = (u - cx) * depth_m / fx
-        point.point.y = (v - cy) * depth_m / fy
+        point.point.x = (u - self.cx) * depth_m / self.fx
+        point.point.y = (v - self.cy) * depth_m / self.fy
         point.point.z = depth_m
 
         try:
@@ -172,7 +176,6 @@ class VisionDetector(Node):
             'class': class_name,
             'x': map_point.point.x,
             'y': map_point.point.y,
-            'z': map_point.point.z,
             'frame_id': self.map_frame,
         }
 
