@@ -33,3 +33,5 @@ checkpoints/
 .cache/huggingface/
 .cache/torch/
 huggingface/
+
+HANDOFF_2026-08-07_VLA_BRAIN.md
