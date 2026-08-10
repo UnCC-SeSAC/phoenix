@@ -51,7 +51,23 @@
 - Frontier score에 VLA MissionValue 직접 결합
 - YOLO bbox → map 좌표 변환
 - Pump 실제 제어
-- Qwen 연결
 - Nav2와 SLAM launch 자동 중복 실행
 
 이 범위는 현재 요구사항보다 크거나 외부 계약이 미확정입니다.
+
+## Qwen/XPU 통합 상태
+
+현재 코드에는 `TransformersQwenAdapter`와 `mock`/`ollama`/`transformers` backend 선택, 그리고 VLA Node에만 XPU Python을 적용하는 `vla_python_executable` launch wiring이 구현되어 있습니다. 현재 선택 모델은 `Qwen/Qwen2.5-1.5B-Instruct`이며 기본 device는 Intel XPU `xpu:0`입니다.
+
+이전 integration verification에서 Intel Arc B580 XPU smoke와 다음 ROS2 runtime 경로가 확인되었습니다.
+
+```text
+Mission "대기해."
+→ VLAOrchestratorNode
+→ TransformersQwenAdapter / Qwen2.5 / XPU
+→ ActionDecision(WAIT, target=null)
+→ strict parser → TargetResolver → ActionValidator
+→ ActionDispatcher → MockWaitAdapter ACCEPTED
+```
+
+이는 handoff 기준 integration history이며 현재 문서 최신화 세션에서 실제 Qwen inference를 재실행한 결과는 아닙니다. 현재 세션에서는 Python unit test, ROS2 package build, 코드 및 launch 구조를 별도로 재검증했습니다.

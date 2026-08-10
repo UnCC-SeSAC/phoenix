@@ -152,11 +152,23 @@ ros2 launch fire_vla_bringup topic_bridge_vla.launch.py
 현재 기본값은:
 
 ```text
-use_mock_llm = true
+llm_backend = mock
 navigation_mode = TOPIC_BRIDGE
 ```
 
 따라서 Qwen 없이도 ROS2/Nav2 연결부터 검증할 수 있습니다.
+
+`llm_backend`의 허용값은 `mock`, `ollama`, `transformers`이며 기본값은 `mock`입니다. 현재 Transformers backend의 기본 Runtime 설정은 `Qwen/Qwen2.5-1.5B-Instruct`, `xpu:0`, `float32`입니다. CPU 자동 fallback은 사용하지 않습니다.
+
+ROS2 Jazzy system Python과 XPU Python 환경은 분리되어 있으므로 Transformers를 사용할 때는 `vla_python_executable`에 XPU venv의 Python을 지정합니다. 이 prefix는 `VLAOrchestratorNode`에만 적용되며 다른 ROS Node의 interpreter는 바꾸지 않습니다.
+
+```bash
+ros2 launch fire_vla_bringup topic_bridge_vla.launch.py \
+  llm_backend:=transformers \
+  transformers_model_id:=Qwen/Qwen2.5-1.5B-Instruct \
+  transformers_device:=xpu:0 \
+  vla_python_executable:=<workspace>/.venv-xpu/bin/python
+```
 
 ## 입력 토픽
 
@@ -237,7 +249,7 @@ ros2 topic echo /vla/navigation_result
 
 ## 현재 Mock인 기능
 
-- LLM: `MockVLABrain`
+- LLM: 기본 backend는 `MockVLABrain`; `ollama`와 `transformers`도 선택 가능
 - Spray: `MockSprayAdapter`
 - Report: `MockReportAdapter`
 - YOLO → map 좌표 Adapter: 미구현
@@ -251,20 +263,21 @@ ros2 topic echo /vla/navigation_result
 
 ## 검증 결과
 
-이 환경에서는 ROS2 런타임이 없어 실제 `colcon build`와 Nav2 실행은 수행하지 못했습니다.
-
-검증 완료:
+현재 checkout에서 재검증한 결과:
 
 ```text
-17 Python tests passed
-전체 Python compileall 성공
-ROS 비설치 환경에서 fire_vla_core.ros.orchestrator_node import 성공
+python3 -m pytest -q: 58 passed
+colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
+코드 및 launch wiring 확인
 ```
 
-실제 장비에서 확인해야 할 것:
+이번 검증에서 재실행하지 않은 항목:
 
+- 실제 Qwen XPU inference 및 ROS2 + Qwen runtime
 - Jazzy ↔ Humble DDS discovery
 - `/vla/*` String 토픽 양방향 통신
 - Nav2 Action Server readiness
 - TF `map → base_footprint`
 - 실제 로봇 주행
+
+Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `INTEGRATION_REPORT.md`와 `HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.
