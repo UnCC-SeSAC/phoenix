@@ -97,3 +97,11 @@ Submission `ACCEPTED`만으로 person 상태를 변경하지 않으며 `SUCCEEDE
 `spray_mode=MOCK|TOPIC_BRIDGE`로 composition을 선택합니다. Topic Bridge mode는 `/vla/spray_command`에 `action_id`, `mission_id`, authoritative `fire_id`, `command=SPRAY`, timestamp JSON을 발행합니다. `/vla/spray_result`는 correlated terminal result를 `ActionResult(source=SPRAY)`로 정규화하고 `/vla/spray_cancel`은 현재 active action ID만 전달합니다.
 
 Validator와 Adapter는 fire 존재, ACTIVE, `robot_within_spray_range=true`, 최대 시도 미만 조건을 방어합니다. ACCEPTED만으로 fire 상태를 바꾸지 않습니다. SUCCEEDED는 `spray_count`를 증가시키고 `PENDING_VERIFICATION`으로 전이할 뿐이며 후속 semantic observation 검증 전에는 EXTINGUISHED로 처리하지 않습니다. VLA Spray ROS boundary는 구현/검증 완료이고 실제 Pump/MCU bridge는 pending/upstream입니다.
+
+## VLA-06 Firefighter Mission / Semantic Status UI
+
+기존 `/vla/world_model`은 semantic snapshot을 제공하지만 decision/reason/blocked cycle을 모두 표현하지 않아, 이를 유지하면서 읽기 전용 `/vla/status` `std_msgs/String` JSON boundary를 추가했습니다. Payload는 `WorldModel.create_snapshot()`을 그대로 `world_model`에 사용하고 최신 meaningful DecisionCycle의 `decision`, `validation`, `submission`, `blocked_reason`과 timestamp만 덧붙입니다. LLM reason, validation reason, blocked reason은 별도 필드로 유지합니다.
+
+`firefighter_ui` ROS node는 `/vla/status`만 구독하고 `/vla/mission`만 발행합니다. Python stdlib `ThreadingHTTPServer`와 package static HTML을 사용하며 기본 `127.0.0.1:8080`, `GET /`, `GET /api/status`, `POST /api/mission`만 제공합니다. UI는 Mission, robot/person/fire, decision/safety/execution 상태와 auto-fit 2D semantic SVG overlay를 표시하고 직접 Action/Nav2/Pump command를 제공하지 않습니다.
+
+Mock launch smoke에서 HTTP Mission POST, canonical person/fire/robot 입력, report SUCCEEDED, spray PENDING_VERIFICATION, blocked reason을 status API로 확인했습니다. 실제 live YOLO/Depth/TF feed는 VLA-03B pending이며 UI는 canonical status만 소비하므로 연결 시 UI 코드 변경이 필요하지 않습니다. 실제 Browser GUI automation, Robot, Pump/MCU, Qwen은 사용하지 않았습니다.

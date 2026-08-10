@@ -13,7 +13,7 @@ feature/vla-brain
 
 ```text
 python3 -m pytest -q
-135 passed
+156 passed
 
 colcon build --packages-select fire_vla_core fire_vla_bringup
 fire_vla_core PASS
@@ -108,3 +108,17 @@ EXTINGUISH
 20개 test로 authoritative fire ID command, submission/terminal 분리, SUCCEEDED의 `PENDING_VERIFICATION` 및 `spray_count+1`, FAILED/ABORTED/CANCELED/TIMED_OUT의 ACTIVE 유지, out-of-range/inactive/max-attempt/unknown 차단, command/result/cancel correlation, duplicate/stale/mismatched result 방어, physical result decision signature invalidation과 VLA-03A `fire_0001` 연계를 확인했습니다.
 
 ROS2 Jazzy topic smoke에서 `/vla/spray_command`를 실제 구독하고 `/vla/spray_result` SUCCEEDED를 회신하여 `current_action=null`, `fire.state=PENDING_VERIFICATION`, `spray_count=1`을 확인했습니다. 실제 Pump/MCU, 물 분사, Robot, Qwen, VLA-03B는 사용하지 않았습니다.
+
+## VLA-06 Firefighter UI 검증
+
+```text
+Browser POST /api/mission
+→ /vla/mission
+→ VLAOrchestrator / WorldModel / DecisionCycle
+→ /vla/status
+→ Firefighter UI GET /api/status
+```
+
+21개 test로 status serialization, robot/person/fire, decision/LLM reason/validation reason/blocked reason 분리, immutable status store, Mission ID 및 빈·비문자열·malformed request 차단, loopback host/port validation, HTML/API 응답, navigation/report/spray lifecycle 표시와 기존 launch의 UI 비강제 구성을 확인했습니다.
+
+ROS2 Jazzy mock launch와 실제 HTTP smoke에서 Mission 1회 입력, canonical `person_0001`/`fire_0001` 표시, report `reported=true`, spray `PENDING_VERIFICATION`/`spray_count=1`, blocked reason과 2D semantic map HTML을 확인했습니다. GUI browser visual automation은 실행하지 않았으며 HTTP/HTML/API/ROS boundary까지 검증했습니다. 실제 Robot, Pump/MCU, Qwen, live Perception은 사용하지 않았습니다.

@@ -23,6 +23,7 @@ from ..domain import Pose2D
 from ..llm import MockVLABrain, OllamaLLMClient, TransformersQwenAdapter
 from ..orchestrator import VLAOrchestrator
 from ..resolver import TargetResolver
+from ..status import VLAStatusTracker
 from ..validator import ActionValidator
 from ..world_model import WorldModel, WorldModelConfig
 from .perception_normalizer import CanonicalPerceptionNormalizer
@@ -95,6 +96,7 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("report_mode", "MOCK")
         self.declare_parameter("spray_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")
+        self.declare_parameter("status_topic", "/vla/status")
         self.declare_parameter(
             "perception_topic",
             "/vla/perception_observation",
@@ -121,6 +123,7 @@ class VLAOrchestratorNode(Node):
         self.world = WorldModel(WorldModelConfig())
         self.perception_normalizer = CanonicalPerceptionNormalizer(self.world)
         self.mock_results = MockResultQueue()
+        self.status_tracker = VLAStatusTracker()
 
         llm_backend = str(self.get_parameter("llm_backend").value)
         llm = create_llm_backend(
@@ -225,6 +228,11 @@ class VLAOrchestratorNode(Node):
             "/vla/world_model",
             10,
         )
+        self.status_pub = self.create_publisher(
+            String,
+            str(self.get_parameter("status_topic").value),
+            10,
+        )
         self.action_pub = self.create_publisher(
             String,
             "/vla/action_validated",
@@ -309,6 +317,7 @@ class VLAOrchestratorNode(Node):
                 self.orchestrator.process_results(self.spray)
 
             cycle = self.orchestrator.decide_once()
+            self.status_tracker.update(cycle)
             if cycle.validation and cycle.validation.action:
                 msg = String()
                 msg.data = json.dumps(
@@ -333,9 +342,17 @@ class VLAOrchestratorNode(Node):
             self.get_logger().exception("Unexpected VLA orchestration failure")
 
     def _publish_state(self) -> None:
+        snapshot = self.world.create_snapshot()
         msg = String()
-        msg.data = json.dumps(self.world.create_snapshot(), ensure_ascii=False)
+        msg.data = json.dumps(snapshot, ensure_ascii=False)
         self.state_pub.publish(msg)
+
+        status_msg = String()
+        status_msg.data = json.dumps(
+            self.status_tracker.create_payload(snapshot),
+            ensure_ascii=False,
+        )
+        self.status_pub.publish(status_msg)
 
 
 def main(args=None) -> None:

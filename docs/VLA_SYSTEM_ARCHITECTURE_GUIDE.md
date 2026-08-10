@@ -685,7 +685,7 @@ Person Report Result         ✅
 
 VLA Spray Topic Bridge       ✅
 Pump/MCU hardware bridge     ⏳ upstream
-UI / Dashboard               ⏳ VLA-06
+Firefighter Mission/Status UI ✅
 Actual Robot VLA E2E         ⏳ 후반
 ```
 
@@ -721,3 +721,15 @@ Input
 2. 불을 꺼라   → Pump
 3. 사람을 보고 → Report
 ```
+
+---
+
+# 21. Firefighter Mission / Semantic Status UI
+
+```text
+Browser
+├─ POST /api/mission → /vla/mission
+└─ GET /api/status ← FirefighterUINode ← /vla/status
+```
+
+`/vla/status`는 WorldModel snapshot과 최신 decision, validation, submission, blocked reason을 전달한다. UI는 Mission과 robot/person/fire, navigation/report/spray lifecycle, safety 상태를 한 화면에 표시하며 browser SVG로 map-frame semantic point를 auto-fit한다. SLAM occupancy grid는 표시하지 않는다. 기본 서버는 `127.0.0.1:8080`이고 직접 Action/Nav2/Pump 제어 endpoint는 없다. 실제 Perception이 VLA-03B에서 연결되어도 UI는 동일 status boundary를 사용한다.

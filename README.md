@@ -258,6 +258,7 @@ ros2 launch fire_vla_bringup local_mock_vla.launch.py
 ```bash
 ros2 topic echo /vla/action_validated
 ros2 topic echo /vla/world_model
+ros2 topic echo /vla/status
 ros2 topic echo /vla/navigation_goal
 ros2 topic echo /vla/navigation_result
 ```
@@ -281,12 +282,13 @@ ros2 topic echo /vla/navigation_result
 현재 checkout에서 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 135 passed
+python3 -m pytest -q: 156 passed
 colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 코드 및 launch wiring 확인
 Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 Deterministic REPORT_PERSON → `/vla/person_report` → result → WorldModel: PASS
 Deterministic EXTINGUISH → `/vla/spray_command` → result → WorldModel: PASS
+Firefighter UI Mission POST → `/vla/mission`, `/vla/status` → HTTP API: PASS
 ```
 
 이번 검증에서 재실행하지 않은 항목:
@@ -307,5 +309,19 @@ VLA-03A에서 canonical `/vla/perception_observation`의 `frame_id=map`, timesta
 VLA-04에서 `report_mode=TOPIC_BRIDGE` composition과 `/vla/person_report`, `/vla/person_report_result` JSON boundary를 추가했습니다. report payload의 person ID, map `(x,y)`, confidence는 WorldModel에서 가져오며 ACCEPTED 단계에서는 상태를 바꾸지 않습니다. correlated `SUCCEEDED` 결과에서만 `reported=true`가 되고, 실패·취소·timeout은 미보고 상태를 유지합니다. 실제 UI/외부 보고 backend는 사용하지 않았습니다.
 
 VLA-05에서 `spray_mode=TOPIC_BRIDGE`와 `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` canonical boundary를 추가했습니다. Validator 승인과 Adapter의 방어 조건을 모두 통과한 ACTIVE/in-range 화점만 발행합니다. correlated `SUCCEEDED`는 즉시 EXTINGUISHED가 아니라 `PENDING_VERIFICATION`으로 전이하며, 실제 관측 검증이 진압 완료를 결정합니다. VLA-side boundary만 검증했으며 실제 Pump/MCU bridge와 hardware는 pending입니다.
+
+## 소방관 Mission/Status UI MVP
+
+추가 dependency 없이 Python stdlib HTTP server와 정적 HTML/CSS/JS를 사용합니다. 기본 bind는 loopback `127.0.0.1:8080`이며 UI는 Mission만 입력하고 Action/Nav2/Pump를 직접 실행하지 않습니다.
+
+```bash
+# Mock VLA와 UI를 함께 실행
+ros2 launch fire_vla_bringup firefighter_ui_mock.launch.py
+
+# 기존 VLA에 UI만 선택적으로 연결
+ros2 launch fire_vla_bringup firefighter_ui.launch.py
+```
+
+Browser에서 `http://127.0.0.1:8080`을 열면 Mission, robot/person/fire, decision/reason/blocked, execution 상태와 2D semantic overlay를 확인할 수 있습니다. API는 `GET /`, `GET /api/status`, `POST /api/mission`만 제공합니다. occupancy grid 배경과 live YOLO/Depth/TF 입력은 범위 밖이며 VLA-03B 이후에도 UI는 동일 `/vla/status`를 소비합니다.
 
 Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `docs/INTEGRATION_REPORT.md`와 `docs/private/handoffs/HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.

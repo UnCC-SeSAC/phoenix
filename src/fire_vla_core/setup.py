@@ -6,6 +6,7 @@ setup(
     name=package_name,
     version="0.2.0",
     packages=find_packages(exclude=["tests"]),
+    package_data={"fire_vla_core.web": ["index.html"]},
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
@@ -23,6 +24,7 @@ setup(
             "vla_orchestrator = fire_vla_core.ros.orchestrator_node:main",
             "mock_demo = fire_vla_core.mock_demo:main",
             "vla_demo_input = fire_vla_core.ros.demo_input_node:main",
+            "firefighter_ui = fire_vla_core.ros.firefighter_ui_node:main",
         ],
     },
 )

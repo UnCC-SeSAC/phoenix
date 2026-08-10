@@ -147,6 +147,7 @@ README는 `/yolo_result`와 raw/normalized image coordinates를 설명하지만 
 | Projection → TF | planned `/fire/detections_3d` | unknown | camera-frame `(X,Y,Z)`, original stamp | Perception | `[PLANNED/UPSTREAM]` |
 | Perception+TF → VLA | final topic not implemented; VLA expects `/vla/perception_observation` | VLA expects `std_msgs/String` JSON | map-frame 2D entities, ISO timestamp | Perception+TF/SLAM | `[PLANNED/UPSTREAM producer]` |
 | Mission UI/operator → VLA | `/vla/mission` | `std_msgs/String` JSON | mission ID/text | operator | `[IMPLEMENTED]` |
+| VLA → Firefighter UI | `/vla/status` | `std_msgs/String` JSON | WorldModel snapshot + DecisionCycle metadata | VLA | `[IMPLEMENTED/VERIFIED]` |
 | TF bridge → VLA | `/vla/robot_pose_json` | `std_msgs/String` JSON | `map` Pose2D, Unix seconds | TF/localization | `[IMPLEMENTED]` |
 | VLA → Navigation bridge | `/vla/navigation_goal` | `std_msgs/String` JSON | map-frame target Pose2D | Resolver/WorldModel | `[IMPLEMENTED/VERIFIED]` |
 | Navigation bridge → VLA | `/vla/navigation_result` | `std_msgs/String` JSON | correlated terminal result | Nav2 bridge | `[IMPLEMENTED/VERIFIED without real Nav2]` |
@@ -583,7 +584,7 @@ WorldModel person (reported=false)
 → WorldModel
 ```
 
-발행 payload는 `action_id`, `mission_id`, `person_id`, `map_position{x,y}`, `confidence`, ISO `timestamp`, `frame_id=map`이다. 위치와 confidence는 LLM text가 아니라 WorldModel이 source of truth다. Submission과 terminal result는 분리하며 correlated `SUCCEEDED`에서만 `reported=true`, `state=REPORTED`로 전이한다. 외부 UI/reporting backend 연결은 VLA-06 범위이고 VLA-03B Perception producer wiring은 여전히 pending이다.
+발행 payload는 `action_id`, `mission_id`, `person_id`, `map_position{x,y}`, `confidence`, ISO `timestamp`, `frame_id=map`이다. 위치와 confidence는 LLM text가 아니라 WorldModel이 source of truth다. Submission과 terminal result는 분리하며 correlated `SUCCEEDED`에서만 `reported=true`, `state=REPORTED`로 전이한다. VLA-06 UI의 report 상태 표시는 구현 완료했다. 실제 외부 reporting consumer와 VLA-03B Perception producer wiring은 여전히 pending이다.
 
 ## 19. VLA-05 Spray boundary
 
@@ -600,3 +601,16 @@ WorldModel ACTIVE/in-range fire
 ```
 
 Command payload는 `action_id`, `mission_id`, authoritative `fire_id`, `command=SPRAY`, ISO timestamp다. `/vla/spray_cancel`은 active action ID를 전달하고 terminal CANCELED 결과 전에는 lifecycle을 완료하지 않는다. SUCCEEDED도 실제 진압 완료가 아니라 suppression verification 시작을 뜻한다. VLA-side ROS boundary는 구현/검증 완료이며 실제 Pump driver, MCU firmware, duration/intensity와 hardware ack 계약은 pending/upstream이다.
+
+## 20. VLA-06 Firefighter UI boundary
+
+```text
+Browser POST /api/mission
+→ FirefighterUINode → /vla/mission
+→ VLAOrchestrator
+→ WorldModel snapshot + latest DecisionCycle
+→ /vla/status
+→ FirefighterUINode → GET /api/status → Browser
+```
+
+`/vla/status`는 `timestamp`, existing `world_model` snapshot, `decision`, `validation`, `submission`, `blocked_reason`을 제공한다. UI backend는 thread-safe copy를 HTTP thread에 전달하며 loopback에만 bind한다. Frontend는 Mission, robot/person/fire, execution/safety 상태와 robot/home/person/fire/current target의 auto-fit 2D semantic overlay를 표시한다. UI는 Action을 직접 생성하거나 Validator, Navigation, Report, Spray Port를 우회하지 않는다. occupancy grid, 인증, DB, 외부 공개는 범위 밖이다. Live Perception producer는 VLA-03B pending이지만 UI의 canonical status contract에는 영향이 없다.
