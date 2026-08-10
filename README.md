@@ -302,4 +302,4 @@ VLA-03A에서 canonical `/vla/perception_observation`의 `frame_id=map`, timesta
 
 VLA-04에서 `report_mode=TOPIC_BRIDGE` composition과 `/vla/person_report`, `/vla/person_report_result` JSON boundary를 추가했습니다. report payload의 person ID, map `(x,y)`, confidence는 WorldModel에서 가져오며 ACCEPTED 단계에서는 상태를 바꾸지 않습니다. correlated `SUCCEEDED` 결과에서만 `reported=true`가 되고, 실패·취소·timeout은 미보고 상태를 유지합니다. 실제 UI/외부 보고 backend는 사용하지 않았습니다.
 
-Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `INTEGRATION_REPORT.md`와 `HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.
+Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `docs/INTEGRATION_REPORT.md`와 `docs/private/handoffs/HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.

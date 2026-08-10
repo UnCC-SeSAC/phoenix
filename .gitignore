@@ -34,5 +34,4 @@ checkpoints/
 .cache/torch/
 huggingface/
 
-codex_tasks/
-handoffs/
+docs/private/
