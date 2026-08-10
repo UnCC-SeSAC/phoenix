@@ -1,0 +1,69 @@
+explorer_node:
+  ros__parameters:
+    map_topic: /map
+    global_costmap_topic: /global_costmap/costmap
+    local_costmap_topic: /local_costmap/costmap
+    hazard_map_topic: /hazard_map
+
+    map_frame: map
+    base_frame: base_footprint
+
+    # Frontier detection on SLAM /map
+    free_threshold: 20
+    min_frontier_cluster_size: 8
+    max_frontiers: 100
+
+    # Only the best cheap candidates are sent to Nav2 planner.
+    # This is intentionally small for Raspberry Pi 5.
+    max_candidates_to_plan: 8
+
+    min_goal_distance: 0.45
+    max_goal_distance: 10.0
+
+    # Slow exploration loop reduces CPU load while SLAM + Nav2 run.
+    exploration_period: 3.0
+    replan_delay_after_goal: 1.5
+
+    # Safety monitor
+    safety_check_period: 0.5
+    local_safety_radius: 0.18
+    local_stop_threshold: 0.98
+    hazard_stop_threshold: 0.85
+
+    # Candidate evaluation
+    goal_narrowness_radius: 0.40
+    unknown_global_cost: 0.70
+    minimum_score: -10.0
+
+    # Score =
+    # + information gain
+    # + mission value
+    # - path cost
+    # - hazard risk
+    # - global cost
+    # - narrowness
+    # - failure penalty
+    information_gain_weight: 2.0
+    mission_value_weight: 1.5
+    path_cost_weight: 0.8
+    hazard_weight: 2.0
+    global_cost_weight: 0.5
+    narrowness_weight: 0.5
+    failure_weight: 2.0
+
+    info_reference_m: 2.0
+    path_reference_m: 8.0
+
+    failure_radius: 0.60
+    failure_ttl: 120.0
+
+hazard_map_node:
+  ros__parameters:
+    map_topic: /map
+    hazard_points_topic: /hazard_points
+    hazard_map_topic: /hazard_map
+
+    hazard_radius: 1.0
+    lethal_radius: 0.25
+    hazard_ttl: 60.0
+    publish_frequency: 1.0

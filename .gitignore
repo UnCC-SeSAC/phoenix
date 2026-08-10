@@ -1,0 +1,6 @@
+src/install
+src/build
+src/log
+
+__pycache__
+*.pyc
