@@ -5,7 +5,7 @@ from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import Bool, String
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 
@@ -40,7 +40,6 @@ class MissionExecutor(Node):
 
         self._nav_goal_handle = None
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
-        self._nav_goal_state = None  # 그 goal 을 보낼 때의 self.state
 
         # -----------------------------
         # 진화 동작 (fire_extinguisher 노드)
@@ -88,7 +87,7 @@ class MissionExecutor(Node):
         # state_manager 에게 현재 목적지 처리가 끝났음을 알리는 클라이언트
         # -----------------------------
         self.target_complete_client = self.create_client(
-            Trigger,
+            SetBool,
             "/state_manager/target_complete",
         )
 
@@ -120,14 +119,21 @@ class MissionExecutor(Node):
         if self.state == StateManager.EXPLORING:
             self.process_exploring()
 
-        elif self.state == StateManager.PERSON_DETECTED:
-            self.process_person_detected()
-
-        elif self.state == StateManager.FIRE_DETECTED:
-            self.process_fire_detected()
-
-        elif self.state == StateManager.RETURNING_TO_BASE:
-            self.process_returning_to_base()
+        elif self.state in (
+            StateManager.PERSON_DETECTED,
+            StateManager.FIRE_DETECTED,
+            StateManager.RETURNING_TO_BASE,
+        ):
+            # 셋 다 "현재 목적지로 이동" 뿐이라 동일하게 처리한다.
+            # 도착 후 동작(PERSON_DETECTED 는 TODO 인 구조 동작,
+            # FIRE_DETECTED 는 fire_extinguisher 호출, RETURNING_TO_
+            # BASE 는 도착만으로 완료)이 서로 다른 부분은 도착 시점인
+            # _nav_goal_result 에서 분기한다.
+            self.get_logger().info(
+                f"[{self.state}] target={self._target_str()}",
+                throttle_duration_sec=1.0,
+            )
+            self._send_nav_goal(self.current_target)
 
     # =========================================================
     # EXPLORING
@@ -148,42 +154,6 @@ class MissionExecutor(Node):
             # goal(예: 복귀하다 배터리가 회복된 경우)이 있으면 취소만
             # 하고 다음 frontier 를 기다린다.
             self._cancel_nav_goal()
-
-    # =========================================================
-    # PERSON_DETECTED
-    # =========================================================
-
-    def process_person_detected(self):
-        self.get_logger().info(
-            f"[PERSON_DETECTED] target={self._target_str()}",
-            throttle_duration_sec=1.0,
-        )
-        self._send_nav_goal(self.current_target)
-        # TODO: 도착 후 구조 동작 수행 (지금은 도착만 하면 바로 완료 처리됨)
-
-    # =========================================================
-    # FIRE_DETECTED
-    # =========================================================
-
-    def process_fire_detected(self):
-        self.get_logger().info(
-            f"[FIRE_DETECTED] target={self._target_str()}",
-            throttle_duration_sec=1.0,
-        )
-        self._send_nav_goal(self.current_target)
-        # 도착하면 _nav_goal_result 가 fire_extinguisher 노드를 불러서
-        # 진화 동작을 수행하고, 그 응답이 와야 완료 처리된다.
-
-    # =========================================================
-    # RETURNING_TO_BASE
-    # =========================================================
-
-    def process_returning_to_base(self):
-        self.get_logger().info(
-            f"[RETURNING_TO_BASE] target={self._target_str()}",
-            throttle_duration_sec=1.0,
-        )
-        self._send_nav_goal(self.current_target)
 
     def _target_str(self):
 
@@ -223,7 +193,6 @@ class MissionExecutor(Node):
         self._cancel_nav_goal()
 
         self._nav_goal_xy = target_xy
-        self._nav_goal_state = self.state
 
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped
@@ -263,7 +232,11 @@ class MissionExecutor(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info("Nav2 목적지 도착")
 
-            if self._nav_goal_state == StateManager.FIRE_DETECTED:
+            # 도착 시점의 (지금) state 로 분기한다 — 활성 target 이
+            # 있는 동안엔 state_manager 가 바꾸지 않으므로, goal을
+            # 보낼 때 따로 스냅샷을 떠둘 필요 없이 이 시점의 값을
+            # 그대로 신뢰할 수 있다.
+            if self.state == StateManager.FIRE_DETECTED:
                 # 도착만으론 완료가 아니다 — 진화 노드를 불러서 그
                 # 응답이 와야 완료 처리한다.
                 self._call_fire_extinguisher()
@@ -298,6 +271,8 @@ class MissionExecutor(Node):
         """
         불을 껐든 못 껐든(msg.data 상관없이) 결과가 왔으면 그냥
         완료 처리하고 다음 목적지로 넘어간다 — 재시도하지 않는다.
+        실제 성공 여부는 state_manager 에 그대로 전달해서 지도
+        표시(꺼짐/안꺼짐)에 반영되게 한다.
         """
 
         if not msg.data:
@@ -305,18 +280,23 @@ class MissionExecutor(Node):
                 "fire_extinguisher 가 실패를 report 함 — 그래도 넘어감"
             )
 
-        self.notify_target_complete()
+        self.notify_target_complete(success=msg.data)
 
     # =========================================================
     # state_manager 에게 완료 통보
     # =========================================================
 
-    def notify_target_complete(self):
+    def notify_target_complete(self, success=True):
 
         if not self.target_complete_client.service_is_ready():
+            self.get_logger().warn(
+                "state_manager/target_complete 서비스가 아직 준비되지 않음"
+            )
             return
 
-        future = self.target_complete_client.call_async(Trigger.Request())
+        future = self.target_complete_client.call_async(
+            SetBool.Request(data=success)
+        )
 
         future.add_done_callback(self.target_complete_done)
 

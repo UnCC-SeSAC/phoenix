@@ -73,7 +73,6 @@ class MissionTestPublisher(Node):
             'class': class_name,
             'x': x,
             'y': y,
-            'z': 0.0,
             'frame_id': 'map',
         })
         self.detection_pub.publish(msg)

@@ -75,10 +75,16 @@ class YoloDetector(Node):
 
     def image_callback(self, msg):
 
-        if self.latest_depth is None:
-            # 아직 depth 프레임을 한 번도 못 받았으면 깊이를 알 수
-            # 없으니 이번 프레임은 건너뛴다 (depth 카메라가 잠깐
-            # 끊겨도 다음 프레임에서 다시 시도됨).
+        # 점수 필터부터 먼저 통과시켜서, 살아남는 감지가 하나도
+        # 없으면 depth 이미지 디코딩(무거운 작업) 자체를 건너뛴다.
+        detections = [
+            detection for detection in self.detect(msg)
+            if detection['score'] >= self.min_score
+        ]
+
+        if not detections or self.latest_depth is None:
+            # depth 프레임을 아직 못 받았어도 마찬가지로 건너뛴다
+            # (depth 카메라가 잠깐 끊겨도 다음 프레임에서 재시도됨).
             return
 
         depth_image = self.bridge.imgmsg_to_cv2(
@@ -87,18 +93,22 @@ class YoloDetector(Node):
         )
         depth_h, depth_w = depth_image.shape[:2]
 
-        for detection in self.detect(msg):
+        # RGB 해상도는 프레임 전체에서 한 번만 정해지므로, 보정
+        # 비율도 감지별로 반복 계산하지 않고 한 번만 구한다.
+        scale_x = depth_w / msg.width
+        scale_y = depth_h / msg.height
+        depth_header = self.latest_depth.header
 
-            if detection['score'] < self.min_score:
-                continue
+        for detection in detections:
 
-            result = self._read_depth(detection, depth_image, depth_w, depth_h)
+            result = self._read_depth(
+                detection, depth_image, depth_w, depth_h, scale_x, scale_y
+            )
 
             if result is None:
                 continue
 
             u, v, depth_m = result
-            depth_header = self.latest_depth.header
 
             out = String()
             out.data = json.dumps({
@@ -117,12 +127,9 @@ class YoloDetector(Node):
             })
             self.detection_pub.publish(out)
 
-    def _read_depth(self, detection, depth_image, depth_w, depth_h):
-
-        # detection 의 x, y 는 RGB 해상도 기준이라, depth 해상도가
-        # 다르면 비율로 맞춰서 읽는다.
-        scale_x = depth_w / detection['width']
-        scale_y = depth_h / detection['height']
+    def _read_depth(
+        self, detection, depth_image, depth_w, depth_h, scale_x, scale_y
+    ):
 
         u = int(detection['x'] * scale_x)
         v = int(detection['y'] * scale_y)
@@ -151,24 +158,17 @@ class YoloDetector(Node):
         뒤쪽 vision_detector / state_manager 파이프라인을 실제
         depth 카메라 데이터로 테스트할 수 있게 한다.
 
-        반환 형식: [{class_name, score, x, y, width, height}, ...]
+        반환 형식: [{class_name, score, x, y}, ...]
         x, y 는 RGB 이미지 기준 픽셀 좌표 점 하나(바운딩 박스
-        아님), width/height 는 RGB 이미지 해상도. 이 필드들은
-        depth 를 읽기 위한 중간 계산에만 쓰이고, 실제 publish
-        되는 JSON 에는 안 실린다 — 대신 depth 해상도 기준으로
-        보정된 x, y 와 depth(미터) 가 나간다.
+        아님). RGB 해상도는 image_msg 에서 바로 얻을 수 있으니
+        따로 실을 필요 없다.
         """
-
-        width = image_msg.width
-        height = image_msg.height
 
         return [{
             'class_name': 'fire',
             'score': 1.0,
-            'x': width // 2,
-            'y': height // 2,
-            'width': width,
-            'height': height,
+            'x': image_msg.width // 2,
+            'y': image_msg.height // 2,
         }]
 
 
