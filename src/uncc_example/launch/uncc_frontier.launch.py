@@ -247,9 +247,11 @@ def generate_launch_description():
     )
 
     # =========================================
-    # 7. Depth Camera + Vision Pipeline
+    # 7. Depth Camera + yolo_detector
     #    (yolo_detector 는 실제 YOLO 모델 없이 파이프라인 테스트용
-    #    더미 감지만 발행하는 임시 노드 — 나중에 교체 예정)
+    #    더미 감지만 발행하는 임시 노드 — 나중에 다른 사람이 작성한
+    #    코드로 교체될 예정이라 mission_manager 와 별도 프로세스로
+    #    유지한다)
     # =========================================
 
     vision = TimerAction(
@@ -277,25 +279,16 @@ def generate_launch_description():
                     start_vision
                 ),
             ),
-
-            Node(
-                package='uncc_example',
-
-                executable='vision_detector',
-
-                name='vision_detector',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_vision
-                ),
-            ),
         ],
     )
 
     # =========================================
-    # 8. State Manager / Mission Executor
+    # 8. Mission Manager
+    #    (vision_detector + state_manager + mission_executor 를
+    #    한 프로세스에서 같이 돌린다 — RAM 절약 목적. start_vision
+    #    이 false 여도 vision_detector 는 이 안에서 같이 뜨지만,
+    #    depth 카메라 하드웨어 자체가 안 켜져있으면 그냥 데이터
+    #    없이 대기만 한다)
     # =========================================
 
     mission = TimerAction(
@@ -304,23 +297,9 @@ def generate_launch_description():
             Node(
                 package='uncc_example',
 
-                executable='state_manager',
+                executable='mission_manager',
 
-                name='state_manager',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_mission
-                ),
-            ),
-
-            Node(
-                package='uncc_example',
-
-                executable='mission_executor',
-
-                name='mission_executor',
+                name='mission_manager',
 
                 output='screen',
 
