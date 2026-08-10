@@ -150,7 +150,7 @@ README는 `/yolo_result`와 raw/normalized image coordinates를 설명하지만 
 | TF bridge → VLA | `/vla/robot_pose_json` | `std_msgs/String` JSON | `map` Pose2D, Unix seconds | TF/localization | `[IMPLEMENTED]` |
 | VLA → Navigation bridge | `/vla/navigation_goal` | `std_msgs/String` JSON | map-frame target Pose2D | Resolver/WorldModel | `[IMPLEMENTED/VERIFIED]` |
 | Navigation bridge → VLA | `/vla/navigation_result` | `std_msgs/String` JSON | correlated terminal result | Nav2 bridge | `[IMPLEMENTED/VERIFIED without real Nav2]` |
-| VLA → Pump | production ROS boundary 미정 | current `SprayPort`, mock adapter | Action/ActionResult | VLA + Pump team | `[PLANNED/UPSTREAM]` |
+| VLA → Pump bridge | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` | `std_msgs/String` JSON | correlated spray command/terminal result/cancel | VLA + future Pump bridge | `[IMPLEMENTED/VERIFIED VLA boundary; hardware pending]` |
 | VLA → Report | `/vla/person_report`, `/vla/person_report_result` | `std_msgs/String` JSON | authoritative person data + correlated ActionResult | VLA + future reporting consumer | `[IMPLEMENTED/VERIFIED without external backend]` |
 
 ## 6. VLA 현재 input contract
@@ -389,7 +389,7 @@ NavigationResult (/vla/navigation_result)
  RETURN_HOME
 ```
 
-`SEARCH`와 `RETURN_HOME`은 별 Port가 아니라 `NavigationPort`로 dispatch된다. Production ROS boundary는 Topic Bridge Navigation과 Person Report에 구현되어 있다. Spray/Wait는 현재 mock adapter다.
+`SEARCH`와 `RETURN_HOME`은 별 Port가 아니라 `NavigationPort`로 dispatch된다. Production ROS boundary는 Topic Bridge Navigation, Person Report, Spray에 구현되어 있다. Wait는 현재 mock adapter다.
 
 ## 13. WorldModel snapshot
 
@@ -467,7 +467,7 @@ LLM output은 항상 strict JSON의 `action`, `target`, `reason` 세 필드이�
 |---|---|---|---|---|
 | NAVIGATE_TO | person/fire stable ID | WorldModel 2D pose + facing yaw | target exists, fresh robot pose, finite/bounds | NavigationPort → `/vla/navigation_goal` |
 | REPORT_PERSON | person stable ID | target ID, no target pose | person exists and not reported | ReportPort → `/vla/person_report`; result on `/vla/person_report_result` |
-| EXTINGUISH | fire ID | target ID, no target pose | ACTIVE, within spray range, attempts limit | SprayPort → current mock; production ROS TBD |
+| EXTINGUISH | fire stable ID | target ID, no target pose | ACTIVE, within spray range, attempts limit | SprayPort → `/vla/spray_command`; result on `/vla/spray_result` |
 | SEARCH | unexplored zone ID | zone 2D pose | fresh robot pose, finite/bounds | NavigationPort → `/vla/navigation_goal` |
 | WAIT | JSON null | no pose | common action validity | WaitPort → current mock |
 | RETURN_HOME | JSON null | robot.home_pose | fresh robot pose, finite/bounds | NavigationPort → `/vla/navigation_goal` |
@@ -584,3 +584,19 @@ WorldModel person (reported=false)
 ```
 
 발행 payload는 `action_id`, `mission_id`, `person_id`, `map_position{x,y}`, `confidence`, ISO `timestamp`, `frame_id=map`이다. 위치와 confidence는 LLM text가 아니라 WorldModel이 source of truth다. Submission과 terminal result는 분리하며 correlated `SUCCEEDED`에서만 `reported=true`, `state=REPORTED`로 전이한다. 외부 UI/reporting backend 연결은 VLA-06 범위이고 VLA-03B Perception producer wiring은 여전히 pending이다.
+
+## 19. VLA-05 Spray boundary
+
+```text
+WorldModel ACTIVE/in-range fire
+→ EXTINGUISH stable fire ID
+→ Validator
+→ TopicBridgeSprayAdapter
+→ /vla/spray_command
+→ future Pump/MCU bridge
+→ /vla/spray_result
+→ ActionResult(SPRAY)
+→ WorldModel PENDING_VERIFICATION
+```
+
+Command payload는 `action_id`, `mission_id`, authoritative `fire_id`, `command=SPRAY`, ISO timestamp다. `/vla/spray_cancel`은 active action ID를 전달하고 terminal CANCELED 결과 전에는 lifecycle을 완료하지 않는다. SUCCEEDED도 실제 진압 완료가 아니라 suppression verification 시작을 뜻한다. VLA-side ROS boundary는 구현/검증 완료이며 실제 Pump driver, MCU firmware, duration/intensity와 hardware ack 계약은 pending/upstream이다.

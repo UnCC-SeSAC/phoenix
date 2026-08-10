@@ -28,6 +28,7 @@ from ..world_model import WorldModel, WorldModelConfig
 from .perception_normalizer import CanonicalPerceptionNormalizer
 from .topic_bridge_navigation_adapter import TopicBridgeNavigationAdapter
 from .topic_bridge_person_report_adapter import TopicBridgePersonReportAdapter
+from .topic_bridge_spray_adapter import TopicBridgeSprayAdapter
 
 
 def _unix_seconds_to_iso(value: float) -> str:
@@ -92,6 +93,7 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("transformers_max_new_tokens", 128)
         self.declare_parameter("navigation_mode", "MOCK")
         self.declare_parameter("report_mode", "MOCK")
+        self.declare_parameter("spray_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")
         self.declare_parameter(
             "perception_topic",
@@ -107,6 +109,9 @@ class VLAOrchestratorNode(Node):
             "navigation_cancel_topic",
             "/vla/navigation_cancel",
         )
+        self.declare_parameter("spray_command_topic", "/vla/spray_command")
+        self.declare_parameter("spray_result_topic", "/vla/spray_result")
+        self.declare_parameter("spray_cancel_topic", "/vla/spray_cancel")
         self.declare_parameter("person_report_topic", "/vla/person_report")
         self.declare_parameter(
             "person_report_result_topic",
@@ -158,6 +163,30 @@ class VLAOrchestratorNode(Node):
                 "navigation_mode은 MOCK 또는 TOPIC_BRIDGE여야 합니다."
             )
 
+        validator = ActionValidator()
+        spray_mode = str(self.get_parameter("spray_mode").value).upper()
+        if spray_mode == "TOPIC_BRIDGE":
+            self.spray = TopicBridgeSprayAdapter(
+                self,
+                self.world,
+                command_topic=str(
+                    self.get_parameter("spray_command_topic").value
+                ),
+                result_topic=str(
+                    self.get_parameter("spray_result_topic").value
+                ),
+                cancel_topic=str(
+                    self.get_parameter("spray_cancel_topic").value
+                ),
+                max_spray_attempts=validator.max_spray_attempts,
+            )
+        elif spray_mode == "MOCK":
+            self.spray = MockSprayAdapter(self.mock_results)
+        else:
+            raise ValueError(
+                "spray_mode은 MOCK 또는 TOPIC_BRIDGE여야 합니다."
+            )
+
         report_mode = str(self.get_parameter("report_mode").value).upper()
         if report_mode == "TOPIC_BRIDGE":
             self.report = TopicBridgePersonReportAdapter(
@@ -179,7 +208,7 @@ class VLAOrchestratorNode(Node):
 
         dispatcher = ActionDispatcher(
             self.navigation,
-            MockSprayAdapter(self.mock_results),
+            self.spray,
             self.report,
             MockWaitAdapter(self.mock_results),
         )
@@ -187,7 +216,7 @@ class VLAOrchestratorNode(Node):
             self.world,
             llm,
             TargetResolver(),
-            ActionValidator(),
+            validator,
             dispatcher,
         )
 
@@ -226,7 +255,7 @@ class VLAOrchestratorNode(Node):
         self.get_logger().info(
             "VLA orchestrator started: "
             f"llm_backend={llm_backend}, navigation_mode={navigation_mode}, "
-            f"report_mode={report_mode}"
+            f"report_mode={report_mode}, spray_mode={spray_mode}"
         )
 
     def _mission_cb(self, msg: String) -> None:
@@ -276,6 +305,8 @@ class VLAOrchestratorNode(Node):
                 self.orchestrator.process_results(self.navigation)
             if isinstance(self.report, TopicBridgePersonReportAdapter):
                 self.orchestrator.process_results(self.report)
+            if isinstance(self.spray, TopicBridgeSprayAdapter):
+                self.orchestrator.process_results(self.spray)
 
             cycle = self.orchestrator.decide_once()
             if cycle.validation and cycle.validation.action:

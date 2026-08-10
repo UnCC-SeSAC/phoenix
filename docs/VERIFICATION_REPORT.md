@@ -13,7 +13,7 @@ feature/vla-brain
 
 ```text
 python3 -m pytest -q
-115 passed
+135 passed
 
 colcon build --packages-select fire_vla_core fire_vla_bringup
 fire_vla_core PASS
@@ -93,3 +93,18 @@ REPORT_PERSON
 15개 test로 authoritative person ID/map position/confidence payload, ACCEPTED와 terminal result 분리, SUCCEEDED에서만 `reported=true`, FAILED/ABORTED/CANCELED/TIMED_OUT 미보고 유지, unknown/already-reported 차단, Dispatcher/Adapter duplicate submission, stale/duplicate terminal result 방어, decision signature 변화와 VLA-03A `person_0001` 연계를 확인했습니다.
 
 ROS2 Jazzy topic smoke에서 `/vla/person_report` payload를 실제 구독하고 `/vla/person_report_result` SUCCEEDED를 회신하여 WorldModel `reported=true`를 확인했습니다. 실제 UI, 외부 보고 backend, Robot, Nav2, Qwen, VLA-03B는 사용하지 않았습니다.
+
+## VLA-05 Spray Lifecycle 검증
+
+```text
+EXTINGUISH
+→ Resolver → Validator → Dispatcher
+→ /vla/spray_command
+→ /vla/spray_result
+→ ActionResult(SPRAY)
+→ VLAOrchestrator → WorldModel
+```
+
+20개 test로 authoritative fire ID command, submission/terminal 분리, SUCCEEDED의 `PENDING_VERIFICATION` 및 `spray_count+1`, FAILED/ABORTED/CANCELED/TIMED_OUT의 ACTIVE 유지, out-of-range/inactive/max-attempt/unknown 차단, command/result/cancel correlation, duplicate/stale/mismatched result 방어, physical result decision signature invalidation과 VLA-03A `fire_0001` 연계를 확인했습니다.
+
+ROS2 Jazzy topic smoke에서 `/vla/spray_command`를 실제 구독하고 `/vla/spray_result` SUCCEEDED를 회신하여 `current_action=null`, `fire.state=PENDING_VERIFICATION`, `spray_count=1`을 확인했습니다. 실제 Pump/MCU, 물 분사, Robot, Qwen, VLA-03B는 사용하지 않았습니다.

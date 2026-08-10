@@ -89,3 +89,11 @@ Mission "대기해."
 `report_mode=MOCK|TOPIC_BRIDGE`로 ReportPort composition을 선택합니다. Topic Bridge mode는 `/vla/person_report`에 `action_id`, `mission_id`, stable `person_id`, authoritative WorldModel `map_position`, `confidence`, `timestamp`, `frame_id=map` JSON을 발행하고 `/vla/person_report_result`의 correlated terminal result를 `ActionResult(source=REPORT)`로 정규화합니다.
 
 Submission `ACCEPTED`만으로 person 상태를 변경하지 않으며 `SUCCEEDED` terminal result가 WorldModel에 적용될 때만 `reported=true`, `state=REPORTED`가 됩니다. FAILED/ABORTED/CANCELED/TIMED_OUT은 미보고 상태를 유지합니다. Validator는 unknown/already-reported person을 차단하고 Dispatcher와 Adapter가 동일 `action_id` 중복 발행을 방어합니다. 실제 UI나 외부 reporting backend 없이 ROS2 topic round-trip smoke를 확인했습니다.
+
+## VLA-05 Spray Topic Adapter
+
+팀 branch 조사에서 확인된 `state_manage`의 `fire_extinguisher`는 `std_srvs/Trigger` 기반 즉시 성공 더미이며 action ID, cancel/timeout, correlated result 계약이 없습니다. 실제 Pump/MCU production contract는 확인되지 않아 이를 직접 결합하지 않고 VLA-side canonical boundary를 구현했습니다.
+
+`spray_mode=MOCK|TOPIC_BRIDGE`로 composition을 선택합니다. Topic Bridge mode는 `/vla/spray_command`에 `action_id`, `mission_id`, authoritative `fire_id`, `command=SPRAY`, timestamp JSON을 발행합니다. `/vla/spray_result`는 correlated terminal result를 `ActionResult(source=SPRAY)`로 정규화하고 `/vla/spray_cancel`은 현재 active action ID만 전달합니다.
+
+Validator와 Adapter는 fire 존재, ACTIVE, `robot_within_spray_range=true`, 최대 시도 미만 조건을 방어합니다. ACCEPTED만으로 fire 상태를 바꾸지 않습니다. SUCCEEDED는 `spray_count`를 증가시키고 `PENDING_VERIFICATION`으로 전이할 뿐이며 후속 semantic observation 검증 전에는 EXTINGUISHED로 처리하지 않습니다. VLA Spray ROS boundary는 구현/검증 완료이고 실제 Pump/MCU bridge는 pending/upstream입니다.

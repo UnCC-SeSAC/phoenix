@@ -140,9 +140,9 @@ target map pose
 | Navigation Bridge | VLA | `/vla/navigation_result` | success/fail/cancel |
 | VLA | Report Consumer | `/vla/person_report` | 발견 인명 정보 |
 | Report Consumer | VLA | `/vla/person_report_result` | 보고 성공/실패 |
-| VLA | Pump | Production boundary pending | 소화 명령 |
+| VLA | Future Pump bridge | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` | correlated 소화 명령/결과/취소 |
 
-현재 Navigation과 Person Report ROS boundary는 구현/검증되어 있고, 실제 Perception producer 연결(VLA-03B)과 Pump production boundary(VLA-05)는 남아 있습니다.
+Navigation, Person Report, Spray의 VLA-side ROS boundary는 구현/검증되어 있습니다. 실제 Perception producer 연결(VLA-03B)과 Pump/MCU hardware bridge는 남아 있습니다.
 
 ---
 
@@ -484,7 +484,7 @@ WAIT        → WaitPort
 ```text
 NavigationPort  → Topic Bridge 구현 완료
 ReportPort      → Topic Bridge 구현 완료
-SprayPort       → Mock
+SprayPort       → Topic Bridge 구현 완료
 WaitPort        → Mock
 ```
 
@@ -561,18 +561,21 @@ state = REPORTED
 
 # 16. VLA Output ③ Pump
 
-현재:
+현재 VLA-side canonical boundary:
 
 ```text
 Qwen
 → EXTINGUISH fire_0001
 → Resolver
 → Validator
-→ SprayPort
-→ Mock
+→ TopicBridgeSprayAdapter
+→ /vla/spray_command
+→ future Pump/MCU bridge
+→ /vla/spray_result
+→ PENDING_VERIFICATION
 ```
 
-VLA-05에서 실제 Pump production boundary를 연결할 예정입니다.
+실제 Pump/MCU hardware bridge는 pending이며, spray SUCCEEDED만으로 EXTINGUISHED 처리하지 않습니다.
 
 ---
 
@@ -680,7 +683,8 @@ Navigation Result lifecycle  ✅
 Person Report Bridge         ✅
 Person Report Result         ✅
 
-Pump actual Adapter          ⏳ VLA-05
+VLA Spray Topic Bridge       ✅
+Pump/MCU hardware bridge     ⏳ upstream
 UI / Dashboard               ⏳ VLA-06
 Actual Robot VLA E2E         ⏳ 후반
 ```

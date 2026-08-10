@@ -16,4 +16,5 @@ vla:
     navigation_result_topic: "/vla/navigation_result"
     spray_command_topic: "/vla/spray_command"
     spray_result_topic: "/vla/spray_result"
+    spray_cancel_topic: "/vla/spray_cancel"
     report_topic: "/vla/person_report"

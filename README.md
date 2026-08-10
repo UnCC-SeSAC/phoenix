@@ -138,6 +138,9 @@ ros2 launch uncc_example vla_navigation_bridge.launch.py
 ros2 topic echo /vla/robot_pose_json --once
 ros2 topic echo /vla/navigation_goal
 ros2 topic echo /vla/navigation_result
+ros2 topic echo /vla/spray_command
+ros2 topic echo /vla/spray_result
+ros2 topic echo /vla/spray_cancel
 ros2 topic echo /vla/person_report
 ros2 topic echo /vla/person_report_result
 ```
@@ -262,7 +265,7 @@ ros2 topic echo /vla/navigation_result
 ## 현재 Mock인 기능
 
 - LLM: 기본 backend는 `MockVLABrain`; `ollama`와 `transformers`도 선택 가능
-- Spray: `MockSprayAdapter`
+- Spray: `spray_mode=MOCK`은 `MockSprayAdapter`; `TOPIC_BRIDGE`는 `TopicBridgeSprayAdapter`
 - Report: `report_mode=MOCK`은 `MockReportAdapter`; `TOPIC_BRIDGE`는 `TopicBridgePersonReportAdapter`
 - YOLO → map 좌표 Adapter: 미구현
 
@@ -278,18 +281,19 @@ ros2 topic echo /vla/navigation_result
 현재 checkout에서 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 115 passed
+python3 -m pytest -q: 135 passed
 colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 코드 및 launch wiring 확인
 Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 Deterministic REPORT_PERSON → `/vla/person_report` → result → WorldModel: PASS
+Deterministic EXTINGUISH → `/vla/spray_command` → result → WorldModel: PASS
 ```
 
 이번 검증에서 재실행하지 않은 항목:
 
 - 실제 Qwen XPU inference 및 ROS2 + Qwen runtime
 - Jazzy ↔ Humble DDS discovery
-- `/vla/*` String 토픽 양방향 통신
+- Jazzy ↔ Humble `/vla/*` String 토픽 양방향 통신
 - Nav2 Action Server readiness
 - TF `map → base_footprint`
 - 실제 로봇 주행
@@ -301,5 +305,7 @@ VLA-02에서는 deterministic `/vla/navigation_result`를 ROS2 topic boundary에
 VLA-03A에서 canonical `/vla/perception_observation`의 `frame_id=map`, timestamp, class, confidence, finite 2D position을 검증하고, upstream ID 우선 및 ID 없는 detection의 map-distance stable ID fallback을 구현했습니다. association radius는 0.5 m, recent candidate TTL은 2.0초이며 빠른 이동/교차/긴 occlusion/process restart에서는 ID switch가 가능한 MVP association입니다. 실제 YOLO/Depth/TF topic Adapter는 VLA-03B로 남아 있습니다.
 
 VLA-04에서 `report_mode=TOPIC_BRIDGE` composition과 `/vla/person_report`, `/vla/person_report_result` JSON boundary를 추가했습니다. report payload의 person ID, map `(x,y)`, confidence는 WorldModel에서 가져오며 ACCEPTED 단계에서는 상태를 바꾸지 않습니다. correlated `SUCCEEDED` 결과에서만 `reported=true`가 되고, 실패·취소·timeout은 미보고 상태를 유지합니다. 실제 UI/외부 보고 backend는 사용하지 않았습니다.
+
+VLA-05에서 `spray_mode=TOPIC_BRIDGE`와 `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` canonical boundary를 추가했습니다. Validator 승인과 Adapter의 방어 조건을 모두 통과한 ACTIVE/in-range 화점만 발행합니다. correlated `SUCCEEDED`는 즉시 EXTINGUISHED가 아니라 `PENDING_VERIFICATION`으로 전이하며, 실제 관측 검증이 진압 완료를 결정합니다. VLA-side boundary만 검증했으며 실제 Pump/MCU bridge와 hardware는 pending입니다.
 
 Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `docs/INTEGRATION_REPORT.md`와 `docs/private/handoffs/HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.
