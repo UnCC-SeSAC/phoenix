@@ -4,7 +4,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
@@ -48,6 +48,16 @@ class MissionExecutor(Node):
         self.fire_extinguisher_client = self.create_client(
             Trigger,
             "/fire_extinguisher/extinguish",
+        )
+
+        # ~/extinguish 는 "시작해라" 트리거일 뿐이고, 실제 성공/실패
+        # 결과는 이 토픽으로 비동기로 온다. 성공/실패 상관없이
+        # 결과가 오면 그냥 완료 처리하고 넘어간다 (재시도 안 함).
+        self.create_subscription(
+            Bool,
+            "/fire_extinguisher/result",
+            self.fire_extinguisher_result_callback,
+            10,
         )
 
         # -----------------------------
@@ -270,6 +280,11 @@ class MissionExecutor(Node):
     # =========================================================
 
     def _call_fire_extinguisher(self):
+        """
+        ~/extinguish 는 동작을 "시작"만 시키는 트리거다. 완료
+        여부는 여기서 기다리지 않고 fire_extinguisher_result_callback
+        (토픽 구독)에서 처리한다.
+        """
 
         if not self.fire_extinguisher_client.service_is_ready():
             self.get_logger().warn(
@@ -277,21 +292,18 @@ class MissionExecutor(Node):
             )
             return
 
-        future = self.fire_extinguisher_client.call_async(Trigger.Request())
-        future.add_done_callback(self._fire_extinguisher_done)
+        self.fire_extinguisher_client.call_async(Trigger.Request())
 
-    def _fire_extinguisher_done(self, future):
+    def fire_extinguisher_result_callback(self, msg):
+        """
+        불을 껐든 못 껐든(msg.data 상관없이) 결과가 왔으면 그냥
+        완료 처리하고 다음 목적지로 넘어간다 — 재시도하지 않는다.
+        """
 
-        try:
-            response = future.result()
-
-        except Exception as e:
-            self.get_logger().error(f"fire_extinguisher 호출 실패: {e}")
-            return
-
-        if not response.success:
-            self.get_logger().error("fire_extinguisher 가 실패를 반환함")
-            return
+        if not msg.data:
+            self.get_logger().warn(
+                "fire_extinguisher 가 실패를 report 함 — 그래도 넘어감"
+            )
 
         self.notify_target_complete()
 
