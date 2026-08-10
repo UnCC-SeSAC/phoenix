@@ -49,6 +49,8 @@ class ActionValidator:
         if action.action == ActionType.REPORT_PERSON:
             if not action.target or action.target not in world.people:
                 return self._reject(action, "보고할 사람 대상이 WorldModel에 없습니다.")
+            if world.people[action.target].reported:
+                return self._reject(action, "이미 보고가 완료된 사람입니다.")
 
         if action.action == ActionType.EXTINGUISH:
             if not action.target or action.target not in world.fires:

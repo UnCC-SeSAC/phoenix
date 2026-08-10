@@ -83,3 +83,9 @@ Mission "대기해."
 ```
 
 이는 handoff 기준 integration history이며 현재 문서 최신화 세션에서 실제 Qwen inference를 재실행한 결과는 아닙니다. 현재 세션에서는 Python unit test, ROS2 package build, 코드 및 launch 구조를 별도로 재검증했습니다.
+
+## VLA-04 Person Report Topic Adapter
+
+`report_mode=MOCK|TOPIC_BRIDGE`로 ReportPort composition을 선택합니다. Topic Bridge mode는 `/vla/person_report`에 `action_id`, `mission_id`, stable `person_id`, authoritative WorldModel `map_position`, `confidence`, `timestamp`, `frame_id=map` JSON을 발행하고 `/vla/person_report_result`의 correlated terminal result를 `ActionResult(source=REPORT)`로 정규화합니다.
+
+Submission `ACCEPTED`만으로 person 상태를 변경하지 않으며 `SUCCEEDED` terminal result가 WorldModel에 적용될 때만 `reported=true`, `state=REPORTED`가 됩니다. FAILED/ABORTED/CANCELED/TIMED_OUT은 미보고 상태를 유지합니다. Validator는 unknown/already-reported person을 차단하고 Dispatcher와 Adapter가 동일 `action_id` 중복 발행을 방어합니다. 실제 UI나 외부 reporting backend 없이 ROS2 topic round-trip smoke를 확인했습니다.

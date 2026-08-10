@@ -13,7 +13,7 @@ feature/vla-brain
 
 ```text
 python3 -m pytest -q
-100 passed
+115 passed
 
 colcon build --packages-select fire_vla_core fire_vla_bringup
 fire_vla_core PASS
@@ -78,3 +78,18 @@ Navigation ownership은 DETERMINISTIC mode와 VLA mode에서 goal sender를 하�
 25개 추가 test로 최초/근접/원거리/class 분리/upstream ID/one-to-one/TTL/tie-break/non-map/NaN·Inf/timestamp/confidence/snapshot 시나리오를 확인했습니다. ROS2 Jazzy smoke에서 ID 없는 person `(2.0,1.0)`과 `(2.05,1.03)` 연속 입력 후 `people=1`, `person_0001` 유지, 최신 위치 갱신을 관측했습니다.
 
 실제 YOLO, Depth, object TF, SLAM, Nav2, Robot, Qwen은 이 검증에 사용하지 않았습니다. 실제 팀 Perception final topic/message Adapter는 VLA-03B pending입니다.
+
+## VLA-04 Person Report Lifecycle 검증
+
+```text
+REPORT_PERSON
+→ Resolver → Validator → Dispatcher
+→ /vla/person_report
+→ /vla/person_report_result
+→ ActionResult(REPORT)
+→ VLAOrchestrator → WorldModel
+```
+
+15개 test로 authoritative person ID/map position/confidence payload, ACCEPTED와 terminal result 분리, SUCCEEDED에서만 `reported=true`, FAILED/ABORTED/CANCELED/TIMED_OUT 미보고 유지, unknown/already-reported 차단, Dispatcher/Adapter duplicate submission, stale/duplicate terminal result 방어, decision signature 변화와 VLA-03A `person_0001` 연계를 확인했습니다.
+
+ROS2 Jazzy topic smoke에서 `/vla/person_report` payload를 실제 구독하고 `/vla/person_report_result` SUCCEEDED를 회신하여 WorldModel `reported=true`를 확인했습니다. 실제 UI, 외부 보고 backend, Robot, Nav2, Qwen, VLA-03B는 사용하지 않았습니다.

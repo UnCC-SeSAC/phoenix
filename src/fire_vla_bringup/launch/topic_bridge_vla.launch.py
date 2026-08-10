@@ -46,12 +46,15 @@ def _create_vla_node(context):
             ),
             "decision_period_sec": 1.0,
             "navigation_mode": "TOPIC_BRIDGE",
+            "report_mode": "TOPIC_BRIDGE",
             "mission_topic": "/vla/mission",
             "perception_topic": "/vla/perception_observation",
             "robot_pose_topic": "/vla/robot_pose_json",
             "navigation_goal_topic": "/vla/navigation_goal",
             "navigation_result_topic": "/vla/navigation_result",
             "navigation_cancel_topic": "/vla/navigation_cancel",
+            "person_report_topic": "/vla/person_report",
+            "person_report_result_topic": "/vla/person_report_result",
         }],
     )]
 

@@ -27,6 +27,7 @@ from ..validator import ActionValidator
 from ..world_model import WorldModel, WorldModelConfig
 from .perception_normalizer import CanonicalPerceptionNormalizer
 from .topic_bridge_navigation_adapter import TopicBridgeNavigationAdapter
+from .topic_bridge_person_report_adapter import TopicBridgePersonReportAdapter
 
 
 def _unix_seconds_to_iso(value: float) -> str:
@@ -90,6 +91,7 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("transformers_device", "xpu:0")
         self.declare_parameter("transformers_max_new_tokens", 128)
         self.declare_parameter("navigation_mode", "MOCK")
+        self.declare_parameter("report_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")
         self.declare_parameter(
             "perception_topic",
@@ -104,6 +106,11 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter(
             "navigation_cancel_topic",
             "/vla/navigation_cancel",
+        )
+        self.declare_parameter("person_report_topic", "/vla/person_report")
+        self.declare_parameter(
+            "person_report_result_topic",
+            "/vla/person_report_result",
         )
 
         self.world = WorldModel(WorldModelConfig())
@@ -151,10 +158,29 @@ class VLAOrchestratorNode(Node):
                 "navigation_mode은 MOCK 또는 TOPIC_BRIDGE여야 합니다."
             )
 
+        report_mode = str(self.get_parameter("report_mode").value).upper()
+        if report_mode == "TOPIC_BRIDGE":
+            self.report = TopicBridgePersonReportAdapter(
+                self,
+                self.world,
+                report_topic=str(
+                    self.get_parameter("person_report_topic").value
+                ),
+                result_topic=str(
+                    self.get_parameter("person_report_result_topic").value
+                ),
+            )
+        elif report_mode == "MOCK":
+            self.report = MockReportAdapter(self.mock_results)
+        else:
+            raise ValueError(
+                "report_mode은 MOCK 또는 TOPIC_BRIDGE여야 합니다."
+            )
+
         dispatcher = ActionDispatcher(
             self.navigation,
             MockSprayAdapter(self.mock_results),
-            MockReportAdapter(self.mock_results),
+            self.report,
             MockWaitAdapter(self.mock_results),
         )
         self.orchestrator = VLAOrchestrator(
@@ -199,7 +225,8 @@ class VLAOrchestratorNode(Node):
         )
         self.get_logger().info(
             "VLA orchestrator started: "
-            f"llm_backend={llm_backend}, navigation_mode={navigation_mode}"
+            f"llm_backend={llm_backend}, navigation_mode={navigation_mode}, "
+            f"report_mode={report_mode}"
         )
 
     def _mission_cb(self, msg: String) -> None:
@@ -247,6 +274,8 @@ class VLAOrchestratorNode(Node):
             self.orchestrator.process_results(self.mock_results)
             if isinstance(self.navigation, TopicBridgeNavigationAdapter):
                 self.orchestrator.process_results(self.navigation)
+            if isinstance(self.report, TopicBridgePersonReportAdapter):
+                self.orchestrator.process_results(self.report)
 
             cycle = self.orchestrator.decide_once()
             if cycle.validation and cycle.validation.action:
