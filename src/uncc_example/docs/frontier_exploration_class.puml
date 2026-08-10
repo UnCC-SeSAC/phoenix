@@ -1,0 +1,281 @@
+@startuml
+' Frontier exploration class diagram for current Hiwonder/Nav2 stack
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam defaultFontName SansSerif
+
+title UNCC Frontier 기반 자율 탐사 클래스 구조\n(Hiwonder + SLAM Toolbox + Nav2 + Hazard Map)
+
+package "기존 Hiwonder / Nav2" {
+
+  class SlamToolbox <<ROS2 Node>> {
+    +publishMap() : /map
+    +publishMapToOdomTF()
+  }
+
+  class GlobalCostmap <<Nav2 Costmap>> {
+    +globalFrame : map
+    +resolution : 0.05
+    +updateFrequency : 1.0
+    +staticLayer
+    +obstacleLayer(/scan_raw)
+    +inflationLayer
+  }
+
+  class LocalCostmap <<Nav2 Costmap>> {
+    +globalFrame : odom
+    +rollingWindow : true
+    +width : 3.0
+    +height : 3.0
+    +resolution : 0.03
+    +voxelLayer(/scan_raw)
+    +inflationLayer
+  }
+
+  class PlannerServer <<Nav2>> {
+    +computePathToPose()
+  }
+
+  class BtNavigator <<Nav2>> {
+    +navigateToPose()
+    +cancelGoal()
+  }
+
+  class ControllerServer <<Nav2>> {
+    +followPath()
+    +publishCmdVelNav()
+  }
+
+  class VelocitySmoother <<Nav2>> {
+    +smoothVelocity()
+    +publishCmdVel()
+  }
+
+  class RobotController <<Hiwonder>> {
+    +subscribe(/cmd_vel)
+    +publish(/odom_raw)
+  }
+}
+
+package "uncc_example - 새로 구현" {
+
+  class ExplorerNode <<ROS2 Node>> {
+    -currentMap : MapData
+    -globalCostmap : CostmapData
+    -localCostmap : CostmapData
+    -hazardMap : HazardMapData
+    -robotPose : Pose2D
+    -frontiers : List<Frontier>
+    -currentGoal : Frontier
+    +mapCallback()
+    +globalCostmapCallback()
+    +localCostmapCallback()
+    +hazardMapCallback()
+    +updateRobotPoseFromTF()
+    +exploreOnce()
+    +filterCandidates()
+    +selectBestFrontier()
+    +handleNavigationResult()
+    +requestReplan()
+  }
+
+  class FrontierDetector {
+    +detectFrontierCells(map) : List<Cell>
+    +clusterFrontiers(cells) : List<Frontier>
+    +calculateCentroid(cluster) : Pose2D
+    +chooseSafeGoal(cluster, map) : Pose2D
+    +calculateInformationGain(frontier, map) : double
+  }
+
+  class PriorityCalculator {
+    -wInfoGain : double
+    -wMission : double
+    -wPath : double
+    -wHazard : double
+    -wGlobalCost : double
+    -wNarrowness : double
+    -wFailure : double
+    +calculateGlobalCost(frontier, globalCostmap) : double
+    +calculateNarrowness(frontier, globalCostmap) : double
+    +calculateHazardRisk(frontier, hazardMap) : double
+    +calculateMissionValue(frontier, hazardMap) : double
+    +calculateScore(frontier) : double
+  }
+
+  class Nav2Navigator {
+    -computePathClient
+    -navigateToPoseClient
+    +isReachable(goal) : bool
+    +calculatePathCost(goal) : double
+    +sendGoal(goal)
+    +cancelGoal()
+    +isNavigating() : bool
+  }
+
+  class HazardMapNode <<ROS2 Node>> {
+    -hazardMap : HazardMapData
+    +perceptionCallback()
+    +projectDetectionToMap()
+    +applySpatialSpread()
+    +applyTemporalDecay()
+    +publishHazardMap() : /hazard_map
+  }
+
+  class SafetyMonitor {
+    -localCostmap : CostmapData
+    -hazardMap : HazardMapData
+    +isImmediatePathBlocked() : bool
+    +isLocalHazardTooHigh() : bool
+    +shouldCancelGoal() : bool
+  }
+
+  class MapData <<Data>> {
+    +resolution : double
+    +width : int
+    +height : int
+    +originX : double
+    +originY : double
+    +occupancyData[] : int8
+    +worldToCell(x, y)
+    +cellToWorld(i, j)
+    +getCell(i, j)
+    +isFree(i, j) : bool
+    +isUnknown(i, j) : bool
+  }
+
+  class CostmapData <<Data>> {
+    +resolution : double
+    +width : int
+    +height : int
+    +originX : double
+    +originY : double
+    +costData[]
+    +getCostWorld(x, y) : int
+    +isLethal(x, y) : bool
+    +isInflated(x, y) : bool
+  }
+
+  class HazardMapData <<Data>> {
+    +resolution : double
+    +width : int
+    +height : int
+    +riskData[] : float
+    +missionValueData[] : float
+    +getRisk(x, y) : double
+    +getMissionValue(x, y) : double
+  }
+
+  class Pose2D <<Data>> {
+    +x : double
+    +y : double
+    +yaw : double
+  }
+
+  class Frontier <<Data>> {
+    +cells : List<Cell>
+    +goalPose : Pose2D
+    +informationGain : double
+    +missionValue : double
+    +navigationCost : double
+    +globalCost : double
+    +hazardRisk : double
+    +narrowness : double
+    +failurePenalty : double
+    +score : double
+    +failureCount : int
+  }
+
+  class PerceptionInfo <<Data>> {
+    +fireConfidence : double
+    +personDetected : bool
+    +obstacleInfo
+    +hazardClass
+    +positionInMap : Pose2D
+  }
+}
+
+note right of PriorityCalculator
+권장 점수식
+
+Score =
+  + wI * InformationGain
+  + wM * MissionValue
+  - wP * PathCost
+  - wH * HazardRisk
+  - wG * GlobalCost
+  - wN * Narrowness
+  - wF * FailurePenalty
+
+화재 탐사 로봇에서는
+"fireHint"를 MissionValue로,
+실제 접근 위험은 HazardRisk로
+분리하는 것이 좋음.
+end note
+
+note bottom of FrontierDetector
+Frontier 검출 기준:
+현재 /map에서 FREE 셀이
+UNKNOWN 셀과 인접하면 frontier.
+
+Frontier 생성 자체는 SLAM /map 사용.
+Global Costmap은 후보 검증/점수화에 사용.
+end note
+
+note bottom of HazardMapNode
+1차 구현:
+Hazard Map을 Nav2 costmap과 분리하고
+Frontier 점수 + 목표 취소 판단에 사용.
+
+2차 구현:
+Nav2 custom Costmap Layer 또는
+Keepout/Costmap Filter로 hazard를
+경로 계획에 직접 반영 가능.
+end note
+
+' Existing data flow
+SlamToolbox --> ExplorerNode : /map\nnav_msgs/OccupancyGrid
+SlamToolbox --> GlobalCostmap : live /map
+GlobalCostmap --> ExplorerNode : /global_costmap/costmap(_raw)
+LocalCostmap --> ExplorerNode : /local_costmap/costmap(_raw)
+
+' Ownership / collaboration
+ExplorerNode *-- FrontierDetector
+ExplorerNode *-- PriorityCalculator
+ExplorerNode *-- Nav2Navigator
+ExplorerNode *-- SafetyMonitor
+ExplorerNode o-- MapData
+ExplorerNode o-- CostmapData
+ExplorerNode o-- HazardMapData
+ExplorerNode o-- Frontier
+ExplorerNode o-- Pose2D
+
+HazardMapNode *-- HazardMapData
+HazardMapNode --> ExplorerNode : /hazard_map
+PerceptionInfo --> HazardMapNode : perception result
+
+FrontierDetector --> MapData
+FrontierDetector --> Frontier
+PriorityCalculator --> Frontier
+PriorityCalculator --> CostmapData
+PriorityCalculator --> HazardMapData
+SafetyMonitor --> CostmapData
+SafetyMonitor --> HazardMapData
+
+Nav2Navigator --> PlannerServer : ComputePathToPose
+Nav2Navigator --> BtNavigator : NavigateToPose
+BtNavigator --> ControllerServer
+ControllerServer --> VelocitySmoother : /cmd_vel_nav
+VelocitySmoother --> RobotController : /cmd_vel
+
+' Sensor based costmaps
+RobotController ..> LocalCostmap : motion + /scan_raw/TF
+RobotController ..> GlobalCostmap : motion + /scan_raw/TF
+
+' Optional future integration
+HazardMapNode ..> GlobalCostmap : <<v2 custom hazard layer>>
+HazardMapNode ..> LocalCostmap : <<v2 custom hazard layer>>
+
+@enduml

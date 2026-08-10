@@ -1,0 +1,153 @@
+@startuml
+' Frontier exploration sequence diagram for current Hiwonder/Nav2 stack
+
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam defaultFontName SansSerif
+
+title UNCC Frontier 기반 탐사 시퀀스\nSLAM + Global/Local Costmap + Hazard Map + Nav2
+
+actor "환경" as Env
+participant "LD19 / Robot\n(/scan_raw, /odom, TF)" as Robot
+participant "SLAM Toolbox" as Slam
+participant "Global Costmap" as GCost
+participant "Local Costmap" as LCost
+participant "Perception" as Perception
+participant "HazardMapNode" as Hazard
+participant "ExplorerNode" as Explorer
+participant "FrontierDetector" as FD
+participant "PriorityCalculator" as PC
+participant "Nav2Navigator" as Nav
+participant "PlannerServer" as Planner
+participant "BtNavigator" as BT
+participant "ControllerServer" as Controller
+participant "VelocitySmoother" as Smoother
+
+== 세계 모델 갱신 ==
+Env -> Robot : LiDAR / robot motion
+Robot -> Slam : /scan_raw + odom->base TF
+Slam -> Slam : scan matching / pose graph
+Slam --> Explorer : /map
+Slam --> GCost : live /map
+Robot --> GCost : /scan_raw + TF
+Robot --> LCost : /scan_raw + TF
+GCost --> Explorer : global costmap
+LCost --> Explorer : local costmap
+
+opt 화재/사람/위험 인식 결과가 있음
+  Perception -> Hazard : PerceptionInfo
+  Hazard -> Hazard : map frame으로 투영\n위험도 spread + decay
+  Hazard --> Explorer : /hazard_map
+end
+
+== 탐사 주기 ==
+loop exploration timer (예: 1~2 Hz)
+  Explorer -> Explorer : TF(map -> base_footprint)로 robotPose 갱신
+  Explorer -> FD : detectFrontierCells(currentMap)
+  FD -> FD : FREE-UNKNOWN 경계 검출
+  FD -> FD : connected-component clustering
+  FD -> FD : cluster별 안전한 goalPose 계산
+  FD --> Explorer : frontier candidates
+
+  alt frontier가 없음
+    Explorer -> Explorer : explorationComplete = true
+    note right of Explorer
+      종료 조건 예시
+      - frontier 없음
+      - frontier 총 면적 임계값 이하
+      - 모든 후보가 반복 실패
+    end note
+  else 후보 존재
+    loop 각 Frontier 후보
+      Explorer -> FD : calculateInformationGain(frontier)
+      FD --> Explorer : informationGain
+
+      Explorer -> Nav : calculatePathCost(goalPose)
+      Nav -> Planner : ComputePathToPose(goalPose)
+
+      alt 경로 없음 / planner 실패
+        Planner --> Nav : failure
+        Nav --> Explorer : unreachable
+        Explorer -> Explorer : 후보 제거 또는 failurePenalty 증가
+      else 경로 존재
+        Planner --> Nav : Path
+        Nav --> Explorer : reachable + navigationCost
+
+        Explorer -> PC : calculateScore(frontier, globalCostmap, hazardMap)
+        PC -> PC : globalCost / narrowness 계산
+        PC -> PC : hazardRisk / missionValue 계산
+        PC --> Explorer : score
+      end
+    end
+
+    Explorer -> Explorer : 최고 score Frontier 선택
+
+    == Nav2 목표 전송 ==
+    Explorer -> Nav : sendGoal(bestFrontier.goalPose)
+    Nav -> BT : NavigateToPose
+    BT -> Planner : global path 계획 / 재계획
+    Planner --> BT : global path
+    BT -> Controller : FollowPath
+
+    loop 목표 도달 전
+      Controller -> Smoother : /cmd_vel_nav
+      Smoother -> Robot : /cmd_vel
+      Robot -> Slam : 새 /scan_raw + odometry/TF
+      Robot -> GCost : 새 obstacle observation
+      Robot -> LCost : 새 obstacle observation
+      Slam --> Explorer : 갱신된 /map
+      GCost --> Explorer : 갱신 global costmap
+      LCost --> Explorer : 갱신 local costmap
+      Hazard --> Explorer : 갱신 hazard map
+
+      Explorer -> Explorer : local safety 검사
+
+      alt local costmap이 막힘 또는 hazardRisk가 임계값 초과
+        Explorer -> Nav : cancelGoal()
+        Nav -> BT : Cancel NavigateToPose
+        Explorer -> Explorer : failurePenalty++\n현재 목표 blacklist/쿨다운
+        break 재탐색
+      else 진행 가능
+        Controller -> Controller : local path tracking
+      end
+    end
+
+    alt 목표 도달 성공
+      BT --> Nav : SUCCEEDED
+      Nav --> Explorer : navigation result
+      Explorer -> Explorer : frontier 방문 완료 처리
+      note right of Explorer
+        즉시 다음 frontier를 고정하지 않고
+        새 /map 기준으로 다시 frontier 탐색.
+      end note
+    else 목표 실패
+      BT --> Nav : ABORTED / CANCELED
+      Nav --> Explorer : navigation result
+      Explorer -> Explorer : failurePenalty 증가\n재탐색
+    end
+  end
+end
+
+note over Explorer,PC
+권장 score
+
++ InformationGain
++ MissionValue (fire/person hint 등)
+- NavigationCost
+- HazardRisk
+- GlobalCost
+- Narrowness
+- FailurePenalty
+
+Local Costmap은 먼 frontier의 점수보다
+"현재 이동을 계속할 수 있는가" 판단에 더 적합.
+end note
+
+note over Slam,GCost
+온라인 SLAM 탐사에서는
+SLAM Toolbox가 map -> odom을 담당하므로
+AMCL의 map -> odom TF를 동시에 켜지 않는 것이 중요.
+end note
+
+@enduml
