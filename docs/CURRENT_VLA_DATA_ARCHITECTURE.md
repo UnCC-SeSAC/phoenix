@@ -2,16 +2,17 @@
 
 분석 기준:
 
-- VLA branch: `feature/vla-brain` @ `102852e17365424dc9c6359df9d551b5c8312bdc`
-- Perception branch: `origin/albitro/image_processing` @ `0bf507edc801086bb90ecbff7e5a4eabf5662363`
+- VLA branch: `feature/vla-brain` @ `07fc86d1b4de1d46aa897252ee625d214d49bda0`
+- Live Perception source: `origin/state_manage` @ `e432bed33af50861aaf4a501212d014c6c0bc9d3`
+- Legacy image-processing reference: `origin/albitro/image_processing` @ `0bf507edc801086bb90ecbff7e5a4eabf5662363`
 - 분석일: 2026-08-10
 - 관련 Issue: #25, #28, #29, #30, #31, #33, #41
 
 상태 표기:
 
-- `[IMPLEMENTED]`: 현재 읽은 branch 코드에서 확인됨
-- `[PLANNED/UPSTREAM]`: Issue 또는 계획에는 있으나 현재 branch 구현으로 확인되지 않음
-- `[UNKNOWN/NEEDS CONTRACT]`: producer/consumer 사이에서 확정이 필요한 계약
+- `[IMPLEMENTED/VERIFIED]`: 현재 VLA branch 코드와 software test/smoke에서 확인됨
+- `[AGREED UPSTREAM CONTRACT]`: 팀과 합의된 최신 producer 계약이며 live hardware 검증은 남음
+- `[HARDWARE PENDING]`: 실제 camera/YOLO/TF/Robot 환경에서 확인이 필요함
 
 ## 1. 결론
 
@@ -24,136 +25,123 @@ VLA의 authoritative semantic target position은 `map` frame의 `(x, y)`이다. 
 ## 2. 전체 시스템 아키텍처
 
 ```text
-                              2D SLAM / 2D Nav2 System
-
-                 ┌──────── RGB Camera [IMPLEMENTED infra] ────────┐
-                 │                                                 │
-                 ▼                                                 │
-       YOLO class/confidence/bbox                           Depth image
-       [PARTIAL/implementation unavailable]                [IMPLEMENTED infra]
-                 │                                                 │
-                 └───────────────┬─────────────────────────────────┘
-                                 │ + CameraInfo
-                                 ▼
-                    camera optical-frame 3D point
-                     (X,Y,Z: Perception 중간 계산)
-                         [PLANNED/UPSTREAM #28/#29]
-                                 │
-                                 ▼
-                      TF(source frame → map)
-                         [PLANNED/UPSTREAM #29]
-                                 │
-                                 ▼
-                     map-frame object 2D (x,y)
-                         [PLANNED/UPSTREAM]
-                                 │
-                                 ▼
-             /vla/perception_observation / std_msgs/String JSON
-              [IMPLEMENTED VLA consumer, upstream producer absent]
-                                 │
-                                 ▼
-                       SemanticObservation
-                                 │
-                                 ▼
-                       Semantic WorldModel
-                                 │
-                                 ▼
-                     LLMPort → Qwen2.5 VLA
-                                 │
-                                 ▼
-                         ActionDecision
-                                 │
-                    TargetResolver → Validator
-                                 │
-                                 ▼
-                         ActionDispatcher
-                    ┌────────────┼─────────────┐
-                    ▼            ▼             ▼
-              NavigationPort  SprayPort    ReportPort
-                    │         [MOCK]        [MOCK]
-                    ▼
-             VLANavigationBridge
-                    │
-                    ▼
-            Nav2 NavigateToPose (2D map)
-                    │
-                    ▼
-              /cmd_vel / Robot controller
+RGB / Depth source frame
+        ↓
+YOLO raw detection — /yolo/detections (std_msgs/String)
+class_name, confidence, representative pixel x/y, frame_size,
+depth, depth_status, shared source stamp_sec/nanosec
+        ↓
+VisionDetector — CameraInfo + camera optical-frame point + TF
+        ↓
+/vision/detections (std_msgs/String)
+class, confidence, map x/y, frame_id=map, source stamp
+        ↓
+VLAPerceptionBridgeNode
+        ↓
+/vla/perception_observation (canonical std_msgs/String JSON)
+        ↓
+CanonicalPerceptionNormalizer — VLA-03A stable-ID fallback
+        ↓
+SemanticObservation → WorldModel → Qwen/Resolver/Validator/Dispatcher
 ```
 
-SLAM/TF/Localization/Nav2는 공통 2D navigation infrastructure다. 객체의 camera-frame 3D point는 map-frame 2D target을 산출하기 위한 Perception 내부 단계이며 VLA Domain에 전달하지 않는다.
+SLAM/TF/Localization/Nav2는 공통 2D navigation infrastructure다. Depth로 계산한 camera-frame `(X,Y,Z)`는 map-frame 2D object position을 얻기 위한 Perception 내부 중간값이며 VLA Domain이나 3D map으로 전달하지 않는다.
 
-## 3. Perception branch 현재 구현
+## 3. Live Perception upstream contract
 
-### 3.1 확인된 구현
+### 3.1 YOLO raw detection `[AGREED UPSTREAM CONTRACT]`
 
-- `[IMPLEMENTED]` `src/video_frame.py`: 기본 `result_img` Image 구독 및 AVI 저장. detection data producer가 아니다.
-- `[IMPLEMENTED]` `src/view_result.py`: Image 결과 viewer. detection data producer가 아니다.
-- `[IMPLEMENTED]` depth camera launch 및 RGB/depth camera topic infrastructure.
-- `[IMPLEMENTED]` `interfaces/ObjectInfo.msg`: `class_name`, `box`, `score`, `width`, `height`.
-- `[IMPLEMENTED]` `interfaces/ObjectsInfo.msg`: `ObjectInfo[] objects`.
-- `[IMPLEMENTED]` YOLO launch는 `image_topic=/ascamera/camera_publisher/rgb0/image`, `device=cpu`, `pub_result_img=true`를 설정한다.
+Topic/type: `/yolo/detections`, `std_msgs/msg/String` JSON
 
-### 3.2 확인 불가능하거나 미구현인 부분
+```json
+{
+  "class_name": "person",
+  "confidence": 0.93,
+  "x": 320,
+  "y": 240,
+  "frame_size": [640, 480],
+  "depth": 2.1,
+  "depth_status": "ok",
+  "stamp_sec": 1786329608,
+  "stamp_nanosec": 489463639
+}
+```
 
-`src/yolov5_ros2/yolov5_ros2`는 repository 내부 Python package가 아니라 `/ros2_ws/src/yolov5_ros2/yolov5_ros2`를 가리키는 절대 symlink다. 따라서 다음은 branch checkout을 source of truth로 삼아 구현됐다고 판정할 수 없다.
-
-- `[UNKNOWN/NEEDS CONTRACT]` detection publisher의 실제 topic/type/schema
-- `[UNKNOWN/NEEDS CONTRACT]` 실제 class set (`person`, `fire`, `obstacle`)과 label normalization
-- `[PLANNED/UPSTREAM #28]` bbox 내부 depth median, invalid-depth 판정, hole filling, mm→m
-- `[PLANNED/UPSTREAM #29]` CameraInfo K 기반 역투영
-- `[PLANNED/UPSTREAM #29]` 원본 image timestamp 보존
-- `[PLANNED/UPSTREAM #29]` camera optical frame → `map` TF
-- `[PLANNED/UPSTREAM #29]` TF 실패 시 drop 및 옛 좌표 재사용 금지
-- `[PLANNED/UPSTREAM #29]` `/fire/detections_3d`
-- `[UNKNOWN/NEEDS CONTRACT]` stable tracking/entity ID
-- `[UNKNOWN/NEEDS CONTRACT]` 최종 VLA용 map-frame 2D output
-
-README는 `/yolo_result`와 raw/normalized image coordinates를 설명하지만 실행 publisher 코드를 branch에서 확인할 수 없으므로 실제 계약으로 확정하지 않는다. `ObjectInfo.box`는 pixel bbox이며 map 좌표가 아니다. `ObjectInfo/ObjectsInfo`에는 ROS Header, timestamp, frame ID, entity ID, depth 상태, map 좌표가 없다.
-
-## 4. Perception 실제 output contract
-
-현재 branch 코드만으로 확정 가능한 detection data contract는 제한적이다.
-
-| 항목 | 현재 확인 결과 | 상태 |
+| Field | 의미 | VLA WorldModel 전달 |
 |---|---|---|
-| RGB input | `/ascamera/camera_publisher/rgb0/image` launch parameter | `[IMPLEMENTED]` |
-| Result image | `result_img` 또는 README의 `/result_img`; namespace 확정 불가 | `[UNKNOWN/NEEDS CONTRACT]` |
-| Detection topic | README는 `/yolo_result`, publisher 구현은 repository에 없음 | `[UNKNOWN/NEEDS CONTRACT]` |
-| Detection ROS type | package는 `vision_msgs`에 의존하지만 실제 publisher type 확인 불가 | `[UNKNOWN/NEEDS CONTRACT]` |
-| Candidate message | `interfaces/ObjectsInfo`: `objects[]` | `[IMPLEMENTED definition only]` |
-| Class | `ObjectInfo.class_name: string` | `[IMPLEMENTED definition only]` |
-| Confidence | `ObjectInfo.score: float32` | `[IMPLEMENTED definition only]` |
-| Bbox | `ObjectInfo.box: int32[]`, width, height | `[IMPLEMENTED definition only]` |
-| Entity/tracking ID | 필드 및 tracker producer 없음 | `[UNKNOWN/NEEDS CONTRACT]` |
-| Timestamp/Header | `ObjectInfo/ObjectsInfo`에 없음 | `[UNKNOWN/NEEDS CONTRACT]` |
-| Source frame | 없음 | `[UNKNOWN/NEEDS CONTRACT]` |
-| Depth | 최종 detection message에 없음 | `[PLANNED/UPSTREAM #28]` |
-| camera-frame 3D | 없음 | `[PLANNED/UPSTREAM #29]` |
-| final map x/y | 없음 | `[PLANNED/UPSTREAM]` |
-| invalid depth | 표현/동작 없음 | `[PLANNED/UPSTREAM #28/#29]` |
-| TF failure | 구현 없음; Issue는 발행 생략+경고 요구 | `[PLANNED/UPSTREAM #29]` |
+| `class_name` | `person`, `fire`, `smoke` | person/fire만 전달; smoke ignore |
+| `confidence` | YOLO confidence `[0,1]` | Yes |
+| `x`, `y` | representative image pixel | No |
+| `frame_size` | pixel 좌표 기준 `[width,height]` | No |
+| `depth` | representative pixel의 meter depth 또는 null | No |
+| `depth_status` | `ok`, `fallback_bottom`, `fallback_below`, `fallback_ring`, `unknown` | No |
+| `stamp_sec/nanosec` | 원본 RGB/depth source-frame timestamp | UTC ISO로 변환 후 Yes |
 
-`/fire/detections_3d`라는 계획 이름은 camera-frame 3D 또는 TF 결과를 전달하는 Perception pipeline 단계일 수 있다. 이것을 3D map으로 해석하지 않는다. 최종 VLA boundary는 반드시 `frame_id=map`, `map_x`, `map_y` 또는 이에 동등한 2D 표현이어야 한다.
+`x/y`는 map 좌표가 아니다. `frame_size`, raw depth/status, camera-frame point는 Perception metadata이므로 WorldModel에 저장하지 않는다. 한 source frame에서 여러 객체가 검출되면 detection별 String message를 발행하더라도 모두 같은 `stamp_sec/nanosec`를 공유한다. 각 객체의 class/confidence/pixel/depth/status는 독립적이다.
+
+현재 upstream은 stable tracking ID를 제공하지 않는다. VLA-03A가 same-class nearest map position, radius 0.5 m, TTL 2.0초, batch one-to-one 방식으로 process-local ID를 연결한다. 이는 full MOT가 아니며 빠른 이동, 근접 교차, 긴 occlusion에서 ID switch가 가능하다.
+
+### 3.2 Depth validity
+
+| `depth_status` | 합의된 처리 |
+|---|---|
+| `ok` | 유효한 meter depth이면 transform |
+| `fallback_bottom` / `fallback_below` / `fallback_ring` | 유효한 meter depth이면 transform |
+| `unknown` | `depth=null`; detection drop |
+
+현재 `vision_detector.py`는 `depth`가 숫자가 아니면 drop하므로 `depth_status="unknown"` + `depth=null` 조합은 안전하게 발행되지 않는다. 다만 `depth_status` 문자열 자체를 분기하지는 않는다. 따라서 upstream이 계약을 위반해 `unknown`과 numeric depth를 함께 보내는 경우까지 명시적으로 차단한다고 보장하지 않으며, 이 조합과 실제 status 분포는 live hardware verification 항목이다.
+
+추가로 depth `<=0`/NaN/Inf, invalid CameraInfo/intrinsics, malformed detection, invalid confidence/timestamp, TF failure는 map detection을 발행하지 않는다. 과거 map coordinate를 재사용하지 않는다.
+
+`origin/state_manage`의 현재 `yolo_detector.py`는 dummy detector 기반 이전 구현이므로 새 `frame_size`/`depth_status` 계약을 live publisher로 재검증한 결과는 아니다. 이 문서는 합의된 최신 upstream contract와 VLA consumer 구현 상태를 구분한다.
+
+## 4. Map output과 VLA-03B bridge
+
+### 4.1 VisionDetector → `/vision/detections` `[IMPLEMENTED]`
+
+```json
+{
+  "class": "person",
+  "confidence": 0.93,
+  "x": 2.4,
+  "y": 1.7,
+  "frame_id": "map",
+  "stamp_sec": 1786329608,
+  "stamp_nanosec": 489463639
+}
+```
+
+기존 deterministic consumer가 쓰는 `class/x/y/frame_id`를 유지하고 confidence와 원본 timestamp를 additive하게 보존한다. pixel, `frame_size`, depth/status, camera-frame Z는 이 boundary를 넘지 않는다.
+
+### 4.2 VLA Perception Bridge `[IMPLEMENTED/VERIFIED]`
+
+`src/fire_vla_core/fire_vla_core/ros/perception_bridge_node.py`는 `/vision/detections` 한 건을 `/vla/perception_observation`의 detections 길이 1 canonical batch로 변환한다. person/fire만 전달하고 smoke는 ignore한다. tracking, stable ID 생성, WorldModel 직접 수정, Qwen/navigation 판단은 하지 않는다.
+
+```text
+/vision/detections
+→ VLAPerceptionBridgeNode
+→ /vla/perception_observation
+→ CanonicalPerceptionNormalizer
+→ VLA-03A stable ID fallback
+→ SemanticObservation → WorldModel
+```
+
+VLA-03B software integration은 구현 완료했다. 189 tests, `fire_vla_core`/`fire_vla_bringup`/`uncc_example` build와 deterministic ROS smoke에서 `/vision/detections → bridge → WorldModel → /vla/status`를 확인했다. 실제 YOLO model, RGB/depth camera, CameraInfo sync, live camera→map TF, QoS/rate/latency는 `[HARDWARE PENDING]`이다.
 
 ## 5. 전체 시스템 boundary Input / Output
 
-| Producer → Consumer | ROS boundary | Type | Payload/coordinate/timestamp | Source of truth | 상태 |
-|---|---|---|---|---|---|
-| RGB camera → YOLO | `/ascamera/camera_publisher/rgb0/image` | `sensor_msgs/Image` | image header/source camera frame | camera driver | `[IMPLEMENTED infra]` |
-| Depth camera → depth processor | camera-specific depth topic | `sensor_msgs/Image` | depth + source image stamp | camera driver | `[IMPLEMENTED infra, processing planned]` |
-| Camera → projection | CameraInfo topic | `sensor_msgs/CameraInfo` | K/intrinsics + frame/stamp | camera calibration | `[IMPLEMENTED infra, use planned]` |
-| YOLO → Perception pipeline | README `/yolo_result` | unknown; candidate `vision_msgs` or `interfaces/ObjectsInfo` | class/confidence/bbox; no verified stable ID | YOLO producer | `[UNKNOWN/NEEDS CONTRACT]` |
-| Projection → TF | planned `/fire/detections_3d` | unknown | camera-frame `(X,Y,Z)`, original stamp | Perception | `[PLANNED/UPSTREAM]` |
-| Perception+TF → VLA bridge | `/vision/detections` | `std_msgs/String` JSON | person/fire, confidence, map-frame 2D x/y, source sec/nanosec | Perception+TF/SLAM | `[IMPLEMENTED contract; hardware smoke pending]` |
-| VLA bridge → VLA | `/vla/perception_observation` | `std_msgs/String` JSON | canonical map-frame batch, UTC ISO timestamp | VLA thin adapter | `[IMPLEMENTED/VERIFIED]` |
-| Mission UI/operator → VLA | `/vla/mission` | `std_msgs/String` JSON | mission ID/text | operator | `[IMPLEMENTED]` |
-| VLA → Firefighter UI | `/vla/status` | `std_msgs/String` JSON | WorldModel snapshot + DecisionCycle metadata | VLA | `[IMPLEMENTED/VERIFIED]` |
-| TF bridge → VLA | `/vla/robot_pose_json` | `std_msgs/String` JSON | `map` Pose2D, Unix seconds | TF/localization | `[IMPLEMENTED]` |
-| VLA → Navigation bridge | `/vla/navigation_goal` | `std_msgs/String` JSON | map-frame target Pose2D | Resolver/WorldModel | `[IMPLEMENTED/VERIFIED]` |
-| Navigation bridge → VLA | `/vla/navigation_result` | `std_msgs/String` JSON | correlated terminal result | Nav2 bridge | `[IMPLEMENTED/VERIFIED without real Nav2]` |
-| VLA → Pump bridge | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` | `std_msgs/String` JSON | correlated spray command/terminal result/cancel | VLA + future Pump bridge | `[IMPLEMENTED/VERIFIED VLA boundary; hardware pending]` |
-| VLA → Report | `/vla/person_report`, `/vla/person_report_result` | `std_msgs/String` JSON | authoritative person data + correlated ActionResult | VLA + future reporting consumer | `[IMPLEMENTED/VERIFIED without external backend]` |
+| Producer → Consumer | ROS boundary | Type | Payload/coordinate/timestamp | 상태 |
+|---|---|---|---|---|
+| RGB/depth → YOLO | camera-specific image topics | `sensor_msgs/Image` | shared source frame/stamp | `[HARDWARE PENDING]` |
+| YOLO → VisionDetector | `/yolo/detections` | `std_msgs/String` JSON | class/confidence/pixel/frame_size/depth/status/source stamp | `[AGREED UPSTREAM CONTRACT]` |
+| VisionDetector → VLA bridge | `/vision/detections` | `std_msgs/String` JSON | person/fire, confidence, map x/y, source stamp | `[IMPLEMENTED; HARDWARE PENDING]` |
+| VLA bridge → VLA | `/vla/perception_observation` | `std_msgs/String` JSON | canonical map-frame batch, UTC ISO timestamp | `[IMPLEMENTED/VERIFIED]` |
+| Mission UI/operator → VLA | `/vla/mission` | `std_msgs/String` JSON | mission ID/text | `[IMPLEMENTED/VERIFIED]` |
+| VLA → Firefighter UI | `/vla/status` | `std_msgs/String` JSON | WorldModel + DecisionCycle metadata | `[IMPLEMENTED/VERIFIED]` |
+| TF bridge → VLA | `/vla/robot_pose_json` | `std_msgs/String` JSON | robot map Pose2D/Unix time | `[IMPLEMENTED]` |
+| VLA ↔ Navigation bridge | `/vla/navigation_goal/result/cancel` | `std_msgs/String` JSON | correlated map goal/result/cancel | `[IMPLEMENTED/VERIFIED without real Nav2]` |
+| VLA ↔ Pump bridge | `/vla/spray_command/result/cancel` | `std_msgs/String` JSON | correlated spray lifecycle | `[IMPLEMENTED VLA boundary; hardware pending]` |
+| VLA ↔ Report consumer | `/vla/person_report/result` | `std_msgs/String` JSON | authoritative person/report result | `[IMPLEMENTED VLA boundary]` |
 
 ## 6. VLA 현재 input contract
 
@@ -270,26 +258,26 @@ Topic/type: `/vla/navigation_result`, `std_msgs/msg/String`
 | ROS type | `std_msgs/String` JSON | `std_msgs/String` JSON | Compatible | bridge에서 schema만 변환 |
 | class | `class`: person/fire/smoke | `class_name`: person/fire | VLA-03B complete | person/fire 전달, smoke ignore |
 | confidence | `confidence` `[0,1]` | `confidence`, person≥0.50/fire≥0.60 | Compatible | 값 보존 |
-| bbox | `box` pixel array | 사용하지 않음 | Expected | Perception 내부 depth 계산에만 사용 |
+| representative pixel/frame_size | raw `x/y`, `[width,height]` | 사용하지 않음 | Expected | Perception transform metadata로만 사용 |
 | entity ID | 없음 | optional upstream ID + VLA fallback | VLA-03A complete | upstream ID 우선, 없으면 2D association |
 | map_x | `/vision/detections.x` | `map_position.x` 필수 | VLA-03B complete | bridge mapping |
 | map_y | `/vision/detections.y` | `map_position.y` 필수 | VLA-03B complete | bridge mapping |
 | yaw | 없음 | optional, 기본 0; Resolver가 target 방향 재계산 | Compatible | upstream에서 억지로 생성할 필요 없음 |
 | frame_id | explicit `map` | explicit `map` 필수 | VLA-03B complete | non-map drop |
 | timestamp | `stamp_sec` + `stamp_nanosec` | timezone-aware ISO batch timestamp 필수 | VLA-03B complete | UTC ISO nanosecond 문자열 변환 |
-| source frame | 없음 | VLA에는 불필요하나 traceability에 유용 | Contract needed | upstream 내부/diagnostic field로 보존 여부 결정 |
-| invalid depth | `vision_detector`가 non-positive/NaN/Inf drop | finite map position 요구 | VLA-03B complete | 진단 metric은 향후 upstream 범위 |
+| source frame | VisionDetector parameter로 고정 | canonical은 `map`만 허용 | Compatible | raw frame은 VLA Domain에 전달하지 않음 |
+| invalid depth/status | nonnumeric/null/`<=0`/NaN/Inf drop | finite map position 요구 | VLA-03B complete | `unknown+null` drop 확인; status-string consistency는 hardware pending |
 | TF failure | warning 후 해당 detection drop | map position을 신뢰 | Compatible | old coordinate 재사용 없음 |
 | stale observation | 원본 sec/nanosec 보존 | 1.0초 초과 batch drop | VLA-03B complete | bridge가 UTC ISO로 변환 |
-| person | 실제 model label/출력 미확인 | 정식 WorldModel entity | VLA ready/03B dependency | upstream class mapping 확인 |
-| fire | 실제 model label/출력 미확인 | 정식 WorldModel entity | VLA ready/03B dependency | upstream class mapping 확인 |
-| obstacle | 실제 model label 미확인 | 정식 semantic entity 아님; 무시됨 | No VLA mapping | Nav2 costmap/local avoidance owner 유지 |
-| NaN/Inf | 동작 미확인 | canonical boundary에서 차단 | VLA-03A complete | upstream도 finite map coordinate만 제공 |
+| person | 합의된 raw class 및 bridge mapping | 정식 WorldModel entity | VLA-03B complete | live model output은 hardware pending |
+| fire | 합의된 raw class 및 bridge mapping | 정식 WorldModel entity | VLA-03B complete | live model output은 hardware pending |
+| smoke | 합의된 raw class | MVP semantic entity 아님 | Explicit ignore | WorldModel/Action/Qwen/UI 확장 없음 |
+| NaN/Inf | VisionDetector와 canonical boundary에서 drop | finite 좌표만 허용 | VLA-03B complete | fail-closed |
 | map bounds | 동작 미확인 | ingest 시 없음, ActionValidator만 ±100m | Contract gap | 실제 map bounds owner/정책 확인 |
 
 ## 8. Entity ID ownership
 
-현재 Perception branch에는 tracking ID가 확인되지 않는다. VLA-03A canonical boundary는 non-empty upstream ID를 우선 보존하고, ID가 없을 때 같은 class의 최근 map position으로 fallback ID를 연결한다.
+현재 합의된 upstream contract에는 tracking ID가 없다. VLA-03A canonical boundary는 non-empty upstream ID를 우선 보존하고, ID가 없을 때 같은 class의 최근 map position으로 fallback ID를 연결한다.
 
 현재 MVP 계약:
 
@@ -303,8 +291,8 @@ Topic/type: `/vla/navigation_result`, `std_msgs/msg/String`
 
 | 단계 | Owner | 계약 |
 |---|---|---|
-| YOLO class/bbox/confidence | Perception | image-space detection |
-| bbox depth sampling | Perception | valid depth 또는 distance unknown |
+| YOLO class/confidence/representative pixel/frame_size | Perception | image-space detection |
+| representative pixel depth/status | Perception | valid meter depth 또는 `unknown`/null |
 | camera-frame `(X,Y,Z)` | Perception 내부 | 중간 계산, 3D map 데이터 아님 |
 | camera/source → map TF | Perception + TF infrastructure | original image timestamp 기준 변환 |
 | final object map `(x,y)` | Perception + TF/2D SLAM | VLA boundary의 authoritative target location |
@@ -317,9 +305,9 @@ VLA는 bbox, raw depth, camera intrinsics, camera-frame z, 3D TF projection을 �
 
 ## 10. Stale / invalid 책임 경계
 
-### Perception에서 drop해야 하는 것 `[PLANNED/UPSTREAM]`
+### VisionDetector에서 drop하는 것 `[IMPLEMENTED; LIVE HARDWARE PENDING]`
 
-- invalid/0/insufficient depth로 유효한 object position을 계산할 수 없는 detection
+- `depth_status="unknown"` + `depth=null`, nonnumeric/0/negative/NaN/Inf depth로 유효한 object position을 계산할 수 없는 detection
 - CameraInfo가 없거나 intrinsic이 유효하지 않은 detection
 - source frame이 없거나 변환 불가능한 detection
 - original image timestamp의 TF lookup 실패
@@ -559,9 +547,9 @@ Navigation cancel payload:
 
 ## 17. VLA-03A 및 VLA-03B 완료
 
-VLA-03A canonical validation, stable ID fallback과 WorldModel snapshot 경로에 이어 VLA-03B thin bridge를 구현/검증했다. upstream `vision_detector.py`는 `/yolo/detections`의 person/fire pixel/depth/source stamp를 CameraInfo와 TF로 map `(x,y)`로 변환하며 `/vision/detections` String을 발행한다. confidence와 source sec/nanosec를 backward-compatible field로 보존하고 invalid depth, invalid intrinsics, malformed input, TF failure는 발행하지 않는다.
+VLA-03A canonical validation, stable ID fallback과 WorldModel snapshot 경로에 이어 VLA-03B thin bridge를 구현/검증했다. upstream raw contract는 person/fire/smoke, confidence, representative pixel x/y, frame_size, depth/status와 source stamp를 정의한다. `vision_detector.py`는 person/fire의 pixel/depth/source stamp를 CameraInfo와 TF로 map `(x,y)`로 변환하며 `/vision/detections` String을 발행한다. confidence와 source sec/nanosec를 backward-compatible field로 보존하고 invalid depth, invalid intrinsics, malformed input, TF failure는 발행하지 않는다. 동일 source frame의 multiple detections는 같은 timestamp를 유지한다.
 
-`vla_perception_bridge`는 `/vision/detections` 한 건을 canonical detections 길이 1 batch로 변환한다. person/fire만 전달하고 smoke는 무시하며 stable ID는 생성하지 않고 기존 VLA-03A fallback에 맡긴다. deterministic ROS smoke는 완료했지만 실제 YOLO model, camera/depth, TF hardware pipeline은 실행하지 않았다. VLA는 계속 bbox/depth/deprojection/TF 책임을 가져오지 않는다.
+`vla_perception_bridge`는 `/vision/detections` 한 건을 canonical detections 길이 1 batch로 변환하며 pixel/frame_size/depth/status는 WorldModel로 전달하지 않는다. person/fire만 전달하고 smoke는 무시하며 stable ID는 생성하지 않고 기존 VLA-03A fallback에 맡긴다. deterministic ROS smoke는 완료했지만 실제 YOLO model, camera/depth, TF hardware pipeline은 실행하지 않았다. VLA는 계속 bbox/depth/deprojection/TF 책임을 가져오지 않는다.
 
 ## 18. VLA-04 Person Report boundary
 
