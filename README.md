@@ -266,9 +266,10 @@ ros2 topic echo /vla/navigation_result
 현재 checkout에서 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 58 passed
+python3 -m pytest -q: 64 passed
 colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 코드 및 launch wiring 확인
+Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 ```
 
 이번 검증에서 재실행하지 않은 항목:
@@ -279,5 +280,7 @@ colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 - Nav2 Action Server readiness
 - TF `map → base_footprint`
 - 실제 로봇 주행
+
+VLA-01에서 실제 Nav2/Robot 없이 person/fire pose resolve, invalid target 및 validation reject 미발행, duplicate submission 방어와 `/vla/navigation_goal` JSON 발행을 검증했습니다. 실제 Nav2 result E2E는 아직 완료되지 않았습니다.
 
 Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `INTEGRATION_REPORT.md`와 `HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.

@@ -6,14 +6,14 @@
 
 ```text
 feature/vla-brain
-dc56f6e627942326eab4aa0a363ef34f46d7fe07
+19afe915d6a7eaf5cc437ce8d71edf792c0c5068
 ```
 
 현재 세션에서 다음 항목을 재검증했습니다.
 
 ```text
 python3 -m pytest -q
-58 passed
+64 passed
 
 colcon build --packages-select fire_vla_core fire_vla_bringup
 fire_vla_core PASS
@@ -35,15 +35,14 @@ Qwen2.5 XPU smoke와 ROS2 `Mission → WAIT → Resolver → Validator → MockW
 통합 PASS는 이전 integration verification 이력입니다. 해당 이력을 현재 checkout에서 다시
 실행한 결과로 해석하지 않습니다.
 
-## 남은 주요 검증 공백
+## VLA-01 Topic Bridge 검증
 
 ```text
-Qwen ActionDecision
+Deterministic ActionDecision
 → TargetResolver
 → ActionValidator
 → TopicBridgeNavigationAdapter
 → /vla/navigation_goal JSON publish
 ```
 
-`TopicBridgeNavigationAdapter` 구현과 launch wiring은 존재하지만 직접 단위 테스트와
-Qwen backend를 포함한 발행 검증은 VLA-01 범위입니다.
+직접 unit/integration test와 ROS2 Jazzy topic smoke를 통과했습니다. person/fire의 WorldModel pose resolve, invalid target 및 stale pose validation reject의 미발행, 동일 action ID 중복 방어를 확인했습니다. 실제 Nav2/Robot과 Qwen XPU는 이 검증에서 사용하지 않았으며 Nav2 result E2E는 VLA-02 범위입니다.

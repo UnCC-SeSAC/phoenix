@@ -42,8 +42,7 @@ diagnostic text이며 Validator의 물리 안전 판단 근거가 아니다.
 - `TopicBridgeNavigationAdapter` 코드와 launch wiring
 - `fire_vla_core`, `fire_vla_bringup` packaging
 
-Topic Bridge의 Qwen 기반 navigation goal 발행 검증은 아직 완료 상태가 아니며
-VLA-01 범위다.
+VLA-01에서 deterministic ActionDecision 기반 navigation goal 발행을 실제 ROS2 topic boundary까지 검증했다. 실제 Qwen XPU와 Nav2/Robot은 이 검증에서 사용하지 않았다.
 
 ## 3. Qwen2.5와 XPU Runtime
 
@@ -116,9 +115,10 @@ map bounds, target 존재 여부, 화점 ACTIVE 상태, spray range 및 시도 �
 현재 checkout에서 2026-08-10에 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 58 passed
+python3 -m pytest -q: 64 passed
 colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 코드 및 launch 구조 확인
+Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 ```
 
 현재 세션에서 실제 Qwen XPU inference, ROS2 + Qwen runtime, Nav2/robot 및 physical
@@ -140,7 +140,7 @@ Mission "대기해."
 
 ## 8. 남은 Integration 작업
 
-- VLA-01: Qwen Action → Topic Bridge `/vla/navigation_goal` 발행 검증
+- VLA-01: Action → Topic Bridge `/vla/navigation_goal` 발행 검증 완료
 - VLA-02: Nav2 Navigation Result → VLA WorldModel E2E 연결
 - VLA-03: Perception 출력 → SemanticObservation → WorldModel 연결
 - VLA-04: Person Report Adapter 구현
@@ -149,16 +149,13 @@ Mission "대기해."
 - VLA-07: 실제 Robot VLA End-to-End 통합 테스트
 - VLA-08: 실패·timeout·cancel 실물 안전성 검증
 
-## 9. 다음 작업: VLA-01
+## 9. VLA-01 완료 결과
 
 ```text
-Qwen ActionDecision → TargetResolver → ActionValidator
+Deterministic ActionDecision → TargetResolver → ActionValidator
 → TopicBridgeNavigationAdapter.submit() → /vla/navigation_goal JSON publish
 ```
 
-검증 항목은 person/fire ID의 WorldModel pose resolution, 정상 NAVIGATE_TO payload,
-invalid target 및 validation reject의 미발행, duplicate submission 방어다. 실제 Nav2와
-실물 로봇 실행은 VLA-01 범위 밖이다.
+person/fire ID의 WorldModel pose resolution, 정상 NAVIGATE_TO payload, invalid target과 stale robot pose validation reject의 미발행, Dispatcher/Adapter duplicate 방어를 테스트로 확인했다. Mock backend launch와 `ros2 topic echo --full-length`로 실제 `/vla/navigation_goal` 발행도 확인했다. 실제 Nav2/Robot과 Qwen smoke는 수행하지 않았다.
 
-현재 필수 blocker는 없다. `TopicBridgeNavigationAdapter` 직접 단위 테스트와 Qwen
-backend + `TOPIC_BRIDGE` 발행 검증이 다음 구현 대상이다.
+다음 계획 항목은 VLA-02이지만 아직 시작하지 않았다.
