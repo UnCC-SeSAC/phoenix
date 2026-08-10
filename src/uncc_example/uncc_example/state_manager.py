@@ -149,6 +149,16 @@ class StateManager(Node):
             10,
         )
 
+        # 발견 기록 전체 (원본 데이터만, 시각화는 별도 노드
+        # map_visualizer 가 담당). 같은 도메인의 서버가 구독해서
+        # MarkerArray 로 바꿔 RViz2 에 그린다. found_targets 가
+        # 바뀔 때마다(신규 발견/완료 처리) 전체 스냅샷을 다시 보낸다.
+        self.found_targets_pub = self.create_publisher(
+            String,
+            '/mission/found_targets',
+            10,
+        )
+
         # 행동을 담당하는 노드가 현재 목적지를 다 처리했을 때 호출
         self.create_service(
             Trigger,
@@ -224,6 +234,8 @@ class StateManager(Node):
         self.found_targets.append(entry)
         self.target_queue.append(entry)
 
+        self._publish_found_targets()
+
     def _find_unpaired_partner(self, partner_type, pose):
 
         for entry in self.target_queue:
@@ -253,6 +265,41 @@ class StateManager(Node):
                 return entry
 
         return None
+
+    def _publish_found_targets(self):
+
+        payload = {
+            'targets': [
+                {
+                    'type': self._target_category(entry),
+                    'x': entry['pose'].pose.position.x,
+                    'y': entry['pose'].pose.position.y,
+                }
+                for entry in self.found_targets
+            ],
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload)
+
+        self.found_targets_pub.publish(msg)
+
+    def _target_category(self, entry):
+        """
+        지도 표시용 3분류: person / fire_extinguished /
+        fire_unextinguished. 내부 로직(우선순위 판단 등)에 쓰는
+        type/status 는 그대로 두고, publish 할 때만 하나로 합친다
+        — 구독하는 쪽(map_visualizer)이 내부 상태 의미를 몰라도
+        되게 하기 위함.
+        """
+
+        if entry['type'] == 'person':
+            return 'person'
+
+        if entry['status'] == 'done':
+            return 'fire_extinguished'
+
+        return 'fire_unextinguished'
 
     # =========================================================
     # Battery
@@ -289,6 +336,7 @@ class StateManager(Node):
         ):
             self.active_target['status'] = 'done'
             self.target_queue.remove(self.active_target)
+            self._publish_found_targets()
 
         self.active_target = None
 
