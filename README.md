@@ -209,6 +209,7 @@ JSON:
 ```json
 {
   "timestamp": "2026-08-06T01:00:00+00:00",
+  "frame_id": "map",
   "frame_valid": true,
   "detector_healthy": true,
   "detections": [
@@ -222,7 +223,7 @@ JSON:
 }
 ```
 
-중요: `map_position`은 이미 `map` 좌표로 변환된 값이어야 합니다. bbox만 있는 YOLO 결과는 아직 연결되지 않습니다.
+중요: `frame_id="map"`과 유한한 2D `map_position`이 필수입니다. `entity_id`는 optional이며, non-empty upstream ID는 보존하고 ID가 없으면 VLA boundary가 같은 class의 최근 2D 위치를 기준으로 MVP stable ID를 연결합니다. bbox/depth/camera-frame 3D/TF는 Perception 책임이며 bbox만 있는 YOLO 결과는 아직 연결되지 않습니다. 실제 팀 topic/message Adapter는 VLA-03B 범위입니다.
 
 ## 안전한 Demo Input
 
@@ -275,7 +276,7 @@ ros2 topic echo /vla/navigation_result
 현재 checkout에서 재검증한 결과:
 
 ```text
-python3 -m pytest -q: 75 passed
+python3 -m pytest -q: 100 passed
 colcon build --packages-select fire_vla_core fire_vla_bringup: PASS
 코드 및 launch wiring 확인
 Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
@@ -290,6 +291,10 @@ Mock ActionDecision → `/vla/navigation_goal` ROS2 topic boundary publish: PASS
 - TF `map → base_footprint`
 - 실제 로봇 주행
 
-VLA-01에서 실제 Nav2/Robot 없이 person/fire pose resolve와 `/vla/navigation_goal` 발행을 검증했습니다. VLA-02에서는 deterministic `/vla/navigation_result`를 ROS2 topic boundary에 publish하여 `ActionResult → VLAOrchestrator → WorldModel` lifecycle, terminal status, cancel correlation, stale/duplicate 방어 및 다음 판단 가능 여부를 검증했습니다. 실제 `/navigate_to_pose` Action Server와 Robot은 사용하지 않았습니다.
+VLA-01에서 실제 Nav2/Robot 없이 person/fire pose resolve와 `/vla/navigation_goal` 발행을 검증했습니다.
+
+VLA-02에서는 deterministic `/vla/navigation_result`를 ROS2 topic boundary에 publish하여 `ActionResult → VLAOrchestrator → WorldModel` lifecycle, terminal status, cancel correlation, stale/duplicate 방어 및 다음 판단 가능 여부를 검증했습니다. 실제 `/navigate_to_pose` Action Server와 Robot은 사용하지 않았습니다.
+
+VLA-03A에서 canonical `/vla/perception_observation`의 `frame_id=map`, timestamp, class, confidence, finite 2D position을 검증하고, upstream ID 우선 및 ID 없는 detection의 map-distance stable ID fallback을 구현했습니다. association radius는 0.5 m, recent candidate TTL은 2.0초이며 빠른 이동/교차/긴 occlusion/process restart에서는 ID switch가 가능한 MVP association입니다. 실제 YOLO/Depth/TF topic Adapter는 VLA-03B로 남아 있습니다.
 
 Qwen2.5 XPU 및 ROS2 runtime smoke 이력은 `INTEGRATION_REPORT.md`와 `HANDOFF_2026-08-07_VLA_BRAIN.md`에 현재 재검증 결과와 구분하여 기록합니다.

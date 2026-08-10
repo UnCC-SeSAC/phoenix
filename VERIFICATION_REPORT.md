@@ -6,14 +6,14 @@
 
 ```text
 feature/vla-brain
-2da88d58f710d110860a8f397278f161cd641946
+102852e17365424dc9c6359df9d551b5c8312bdc
 ```
 
 현재 세션에서 다음 항목을 재검증했습니다.
 
 ```text
 python3 -m pytest -q
-75 passed
+100 passed
 
 colcon build --packages-select fire_vla_core fire_vla_bringup
 fire_vla_core PASS
@@ -62,3 +62,19 @@ SUCCEEDED, ABORTED, FAILED, CANCELED 반영과 current action 해제, last actio
 ROS2 Jazzy topic smoke에서 deterministic `/vla/navigation_result` SUCCEEDED를 publish한 뒤 `/vla/world_model`의 `current_action=null`, `last_action.status=SUCCEEDED`를 관측했습니다. 실제 Nav2 server, `/navigate_to_pose` goal, SLAM, Robot은 실행하지 않았습니다.
 
 Navigation ownership은 DETERMINISTIC mode와 VLA mode에서 goal sender를 하나만 켜는 launch composition 계약입니다. 동시에 여러 sender를 활성화하는 구성과 별도 arbitration manager는 지원하지 않습니다.
+
+## VLA-03A Canonical Perception / Stable ID 검증
+
+```text
+/vla/perception_observation
+→ canonical map-frame validation
+→ upstream ID preservation or fallback association
+→ SemanticObservation
+→ WorldModel snapshot
+```
+
+`frame_id=map`, timezone-aware timestamp, person/fire class, finite `[0,1]` confidence와 finite 2D map position을 검증합니다. ID 없는 detection은 같은 class, 0.5 m 이내, last_seen 2.0초 이내의 nearest entity와 연결하며 batch one-to-one과 entity ID tie-break를 적용합니다. upstream non-empty ID는 그대로 보존합니다.
+
+25개 추가 test로 최초/근접/원거리/class 분리/upstream ID/one-to-one/TTL/tie-break/non-map/NaN·Inf/timestamp/confidence/snapshot 시나리오를 확인했습니다. ROS2 Jazzy smoke에서 ID 없는 person `(2.0,1.0)`과 `(2.05,1.03)` 연속 입력 후 `people=1`, `person_0001` 유지, 최신 위치 갱신을 관측했습니다.
+
+실제 YOLO, Depth, object TF, SLAM, Nav2, Robot, Qwen은 이 검증에 사용하지 않았습니다. 실제 팀 Perception final topic/message Adapter는 VLA-03B pending입니다.

@@ -61,6 +61,12 @@ Navigation goal owner는 system mode로 분리합니다. DETERMINISTIC mode에�
 
 VLA-02에서 Humble bridge의 Nav2 `GoalStatus` 정규화, action ID cancel correlation, Jazzy `TopicBridgeNavigationAdapter` result parsing, WorldModel terminal lifecycle을 unit/integration test로 확인했습니다. 미등록 action ID 결과는 `UNRELATED_RESULT_IGNORED`로 차단하고, 동일 terminal result는 한 번만 적용합니다. ROS2 Jazzy smoke에서 deterministic `/vla/navigation_result`의 SUCCEEDED가 `current_action`을 해제하고 `last_action`을 갱신하는 것을 확인했습니다. 실제 Nav2 Action Server와 Robot은 사용하지 않았습니다.
 
+## VLA-03A canonical perception 및 stable ID
+
+Canonical boundary는 `/vla/perception_observation` `std_msgs/String` JSON을 유지합니다. `frame_id="map"`, timezone-aware timestamp, person/fire class, `[0,1]` confidence와 finite 2D map `(x,y)`를 요구합니다. non-empty upstream `entity_id`는 그대로 보존하고, ID가 없을 때만 같은 class의 최근 WorldModel entity를 0.5 m radius/2.0초 TTL로 nearest association합니다. 한 batch에서 ID는 한 번만 사용하며 거리 동률은 entity ID 순서로 결정합니다.
+
+이는 tracker가 아닌 MVP fallback입니다. 빠른 이동, 근접 교차, 긴 occlusion, process restart에서는 ID switch가 가능하며 전역 영구 ID를 보장하지 않습니다. Depth 기반 camera-frame 3D point는 최종 2D map 위치를 얻기 위한 Perception 내부 중간 계산일 뿐 3D map이 아닙니다. 실제 팀 Perception topic/message wiring은 VLA-03B로 남아 있습니다. obstacle은 VLA semantic entity가 아니며 Nav2 costmap/local planner 책임입니다.
+
 ## Qwen/XPU 통합 상태
 
 현재 코드에는 `TransformersQwenAdapter`와 `mock`/`ollama`/`transformers` backend 선택, 그리고 VLA Node에만 XPU Python을 적용하는 `vla_python_executable` launch wiring이 구현되어 있습니다. 현재 선택 모델은 `Qwen/Qwen2.5-1.5B-Instruct`이며 기본 device는 Intel XPU `xpu:0`입니다.

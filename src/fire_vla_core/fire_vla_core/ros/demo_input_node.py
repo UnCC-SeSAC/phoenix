@@ -50,6 +50,7 @@ class VLADemoInputNode(Node):
         observation.data = json.dumps(
             {
                 "timestamp": observed_at,
+                "frame_id": "map",
                 "frame_valid": True,
                 "detector_healthy": True,
                 "detections": [

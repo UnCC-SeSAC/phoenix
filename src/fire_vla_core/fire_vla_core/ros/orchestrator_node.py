@@ -19,12 +19,13 @@ from ..adapters.mock_adapters import (
     MockWaitAdapter,
 )
 from ..dispatcher import ActionDispatcher
-from ..domain import ObservationBatch, Pose2D, SemanticObservation
+from ..domain import Pose2D
 from ..llm import MockVLABrain, OllamaLLMClient, TransformersQwenAdapter
 from ..orchestrator import VLAOrchestrator
 from ..resolver import TargetResolver
 from ..validator import ActionValidator
 from ..world_model import WorldModel, WorldModelConfig
+from .perception_normalizer import CanonicalPerceptionNormalizer
 from .topic_bridge_navigation_adapter import TopicBridgeNavigationAdapter
 
 
@@ -106,6 +107,7 @@ class VLAOrchestratorNode(Node):
         )
 
         self.world = WorldModel(WorldModelConfig())
+        self.perception_normalizer = CanonicalPerceptionNormalizer(self.world)
         self.mock_results = MockResultQueue()
 
         llm_backend = str(self.get_parameter("llm_backend").value)
@@ -213,30 +215,8 @@ class VLAOrchestratorNode(Node):
     def _observation_cb(self, msg: String) -> None:
         try:
             data = json.loads(msg.data)
-            observed_at = str(data["timestamp"])
-            observations = tuple(
-                SemanticObservation(
-                    entity_id=str(item["entity_id"]),
-                    class_name=str(item["class_name"]),
-                    confidence=float(item["confidence"]),
-                    position=Pose2D(
-                        float(item["map_position"]["x"]),
-                        float(item["map_position"]["y"]),
-                        float(item["map_position"].get("yaw", 0.0)),
-                    ),
-                    observed_at=observed_at,
-                    size=item.get("size"),
-                    blocks_route_to=item.get("blocks_route_to"),
-                )
-                for item in data.get("detections", [])
-            )
             self.world.update_observation_batch(
-                ObservationBatch(
-                    observed_at,
-                    observations,
-                    bool(data.get("frame_valid", True)),
-                    bool(data.get("detector_healthy", True)),
-                )
+                self.perception_normalizer.normalize(data)
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Observation parsing failed: {exc}")
