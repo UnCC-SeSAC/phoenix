@@ -20,12 +20,11 @@
        안꺼짐 & 횟수 소진 -> ⑤ FAIL 반환
 """
 
-import asyncio
-
 import rclpy
-from rclpy.action import ActionServer
+from rclpy.action import ActionServer, CancelResponse
 from rclpy.node import Node
 from rclpy.action.server import ServerGoalHandle
+from rclpy.task import Future
 
 from interfaces.action import SuppressFire
 from interfaces.srv import CheckFireStatus
@@ -41,7 +40,9 @@ PUMP_PIN = 13
 SERVO_PIN = 18
 PWM_FREQUENCY = 1000
 
-SPRAY_SECONDS = 3.0
+SPRAY_SECONDS = 4.0          # 한 번 진압 시도(1회)에서 분사하는 시간
+SERVO_CENTER_ANGLE = 90.0    # 노즐 중앙 각도
+SERVO_SWEEP_RANGE_DEG = 20.0  # 중앙 기준 좌우로 움직이는 폭 (총 스윙 = 이 값의 2배)
 RETRY_WAIT_SECONDS = 2.0
 DEFAULT_MAX_ATTEMPTS = 3
 STATUS_CHECK_SECONDS = 2.0
@@ -73,9 +74,16 @@ class FireSuppressionNode(Node):
             SuppressFire,
             'suppress_fire',
             execute_callback=self.execute_callback,
+            cancel_callback=self.cancel_callback,
         )
 
         self.get_logger().info('🔥 화재진압 노드 준비 완료 (Action: suppress_fire)')
+
+    def cancel_callback(self, goal_handle):
+        """취소 요청을 받아들일지 결정. rclpy 기본값은 REJECT라서
+        명시적으로 ACCEPT 해주지 않으면 취소 요청이 계속 씹힌다."""
+        self.get_logger().info('취소 요청 수신, 다음 안전 시점에 정지합니다.')
+        return CancelResponse.ACCEPT
 
     # ---------------- 탐사 제어 (기존 서비스 재사용) ----------------
     async def set_exploration_running(self, running: bool):
@@ -101,20 +109,59 @@ class FireSuppressionNode(Node):
             f'message={response.message}'
         )
 
+    # ---------------- 취소 지원 ----------------
+    async def _rclpy_sleep(self, seconds: float):
+        """asyncio.sleep 대체용. rclpy 액션 콜백 안에는 진짜 asyncio
+        이벤트루프가 없어서 asyncio.sleep()이 'no running event loop'로
+        터진다. rclpy.task.Future + Timer 조합은 rclpy 실행기가 직접
+        지원하는 방식이라 안전하게 await 할 수 있다."""
+        future = Future()
+
+        def _on_timer():
+            if not future.done():
+                future.set_result(None)
+
+        timer = self.create_timer(seconds, _on_timer)
+        try:
+            await future
+        finally:
+            timer.cancel()
+            self.destroy_timer(timer)
+
+    async def interruptible_sleep(self, goal_handle, seconds: float, poll_interval: float = 0.1):
+        """일반 sleep과 달리 취소 요청이 오면 즉시 빠져나온다.
+        반환값 True면 도중에 취소된 것."""
+        elapsed = 0.0
+        while elapsed < seconds:
+            if goal_handle.is_cancel_requested:
+                return True
+            step = min(poll_interval, seconds - elapsed)
+            await self._rclpy_sleep(step)
+            elapsed += step
+        return goal_handle.is_cancel_requested
+
     # ---------------- 하드웨어 제어 ----------------
-    async def run_suppression_routine(self):
-        """펌프 ON + 서보 스윕을 SPRAY_SECONDS 동안 수행 후 정지.
-        asyncio.sleep을 써서 대기 중에도 다른 콜백(서비스 응답 등)이 돌 수 있게 함."""
-        angles = [30, 90, 150, 90]
+    async def run_suppression_routine(self, goal_handle):
+        """펌프 ON + 서보를 중앙 기준 좌우 SERVO_SWEEP_RANGE_DEG도로 왕복
+        스윕하며 SPRAY_SECONDS 동안 분사 후 정지 (= 1회 진압 시도).
+        도중에 취소 요청이 오면 스윕을 중단하고 즉시 펌프를 끈다.
+        반환값 True면 스프레이 도중 취소된 것."""
+        left = SERVO_CENTER_ANGLE - SERVO_SWEEP_RANGE_DEG
+        right = SERVO_CENTER_ANGLE + SERVO_SWEEP_RANGE_DEG
+        angles = [left, right, left, right]  # 4초 동안 좌우 왕복 2회
         step = SPRAY_SECONDS / len(angles)
 
         self.pump.value = 1.0
+        cancelled = False
         for a in angles:
             self.servo.angle = a
-            await asyncio.sleep(step)
+            cancelled = await self.interruptible_sleep(goal_handle, step)
+            if cancelled:
+                break
 
         self.pump.value = 0.0
-        self.servo.angle = 90
+        self.servo.angle = SERVO_CENTER_ANGLE
+        return cancelled
 
     # ---------------- YOLO 상태 확인 ----------------
     async def check_fire_status_async(self, observation_seconds: float):
@@ -140,11 +187,16 @@ class FireSuppressionNode(Node):
 
         try:
             for attempt in range(1, max_attempts + 1):
+                if goal_handle.is_cancel_requested:
+                    return self._handle_cancel(goal_handle, attempt - 1)
+
                 feedback_msg.current_attempt = attempt
                 feedback_msg.status = f'{attempt}차 진압 로직 수행 중'
                 goal_handle.publish_feedback(feedback_msg)
 
-                await self.run_suppression_routine()
+                cancelled = await self.run_suppression_routine(goal_handle)
+                if cancelled:
+                    return self._handle_cancel(goal_handle, attempt)
 
                 feedback_msg.status = f'{attempt}차 상태 확인 중'
                 goal_handle.publish_feedback(feedback_msg)
@@ -169,7 +221,9 @@ class FireSuppressionNode(Node):
                     return result
 
                 if attempt < max_attempts:
-                    await asyncio.sleep(RETRY_WAIT_SECONDS)
+                    cancelled = await self.interruptible_sleep(goal_handle, RETRY_WAIT_SECONDS)
+                    if cancelled:
+                        return self._handle_cancel(goal_handle, attempt)
 
             goal_handle.succeed()
             result.success = False
@@ -179,6 +233,20 @@ class FireSuppressionNode(Node):
 
         finally:
             await self.set_exploration_running(True)
+
+    def _handle_cancel(self, goal_handle, attempts_done: int):
+        """취소 확정 처리: 펌프 즉시 정지, 서보 중앙 복귀, 취소 결과 반환.
+        set_exploration_running(True)는 execute_callback의 finally에서 처리됨."""
+        self.pump.value = 0.0
+        self.servo.angle = SERVO_CENTER_ANGLE
+        goal_handle.canceled()
+
+        result = SuppressFire.Result()
+        result.success = False
+        result.attempts = attempts_done
+        result.message = '진압 취소됨 (사용자 요청)'
+        self.get_logger().info(f'진압 작업이 취소되었습니다 ({attempts_done}회 시도 후). 펌프 정지.')
+        return result
 
 
 def main(args=None):
