@@ -86,6 +86,7 @@ class ActiveAnomaly:
     last_seen_ns: int
     last_report_ns: int
     detail: str
+    report_count: int = 1
 
 
 class FrontierDiagnostics(Node):
@@ -173,12 +174,18 @@ class FrontierDiagnostics(Node):
         self.nav2_path_summary = 'not requested'
         self.dwb_summary = 'not received'
         self.dwb_valid_count: Optional[int] = None
+        self.dwb_details: Dict[str, object] = {
+            'state': 'NOT_RECEIVED',
+        }
         self.passage_details: Dict[str, str] = {}
         self.frontier_details: Dict[str, str] = {}
         self.tf_issue: Optional[str] = None
         self.history: deque[RuntimeSample] = deque()
         self.active_anomalies: Dict[str, ActiveAnomaly] = {}
         self.event_last_report_ns: Dict[str, int] = {}
+        self.event_report_count: Dict[str, int] = {}
+        self.snapshot_sequence = 0
+        self.last_snapshot_distance: Dict[str, Tuple[str, float]] = {}
 
         self._subscriptions = []
         self._create_subscriptions()
@@ -636,6 +643,9 @@ class FrontierDiagnostics(Node):
         if now_ns - last_ns < int(self.event_cooldown_s * 1e9):
             return
         self.event_last_report_ns[key] = now_ns
+        self.event_report_count[key] = (
+            self.event_report_count.get(key, 0) + 1
+        )
         self._emit_snapshot('ANOMALY', key, severity, detail, now_ns)
 
     def _set_condition(
@@ -658,6 +668,7 @@ class FrontierDiagnostics(Node):
                     )
                 )
                 del self.active_anomalies[key]
+                self.last_snapshot_distance.pop(key, None)
             return
 
         if state is None:
@@ -674,6 +685,7 @@ class FrontierDiagnostics(Node):
         state.detail = detail
         if now_ns - state.last_report_ns >= int(self.event_cooldown_s * 1e9):
             state.last_report_ns = now_ns
+            state.report_count += 1
             self._emit_snapshot(
                 'ANOMALY_REPEAT',
                 key,
@@ -753,27 +765,85 @@ class FrontierDiagnostics(Node):
         detail: str,
         now_ns: int,
     ):
-        goal_text = 'none'
+        self.snapshot_sequence += 1
+        separator = '=' * 80
+        anomaly_state = self.active_anomalies.get(key)
+        if anomaly_state is None:
+            occurrence = self.event_report_count.get(key, 1)
+            active_for_s = 0.0
+        else:
+            occurrence = anomaly_state.report_count
+            active_for_s = (
+                now_ns - anomaly_state.first_seen_ns
+            ) * 1e-9
+
+        goal_position = 'N/A'
+        goal_frame = 'N/A'
+        goal_source = 'N/A'
         if self.goal is not None:
             pose = self.goal.pose.pose.position
-            goal_text = '(%.3f,%.3f) frame=%s source=%s' % (
+            goal_position = 'x=%.3f m, y=%.3f m' % (
                 pose.x,
                 pose.y,
-                self.goal.pose.header.frame_id,
-                self.goal.source,
             )
+            goal_frame = self.goal.pose.header.frame_id
+            goal_source = self.goal.source
         robot = self._robot_pose(self.map_frame)
-        robot_text = 'TF unavailable' if robot is None else (
-            '(%.3f,%.3f,%.1fdeg)' % (
+        robot_text = 'UNAVAILABLE' if robot is None else (
+            'x=%.3f m, y=%.3f m, yaw=%.1f deg' % (
                 robot[0],
                 robot[1],
                 math.degrees(robot[2]),
             )
         )
+        geometric_distance: Optional[float] = None
+        if robot is not None and self.goal is not None:
+            transformed_goal = self._transform_point(
+                (
+                    float(self.goal.pose.pose.position.x),
+                    float(self.goal.pose.pose.position.y),
+                ),
+                self.goal.pose.header.frame_id,
+                self.map_frame,
+            )
+            if transformed_goal is not None:
+                geometric_distance = math.hypot(
+                    transformed_goal[0] - robot[0],
+                    transformed_goal[1] - robot[1],
+                )
+        if geometric_distance is not None:
+            tracking_distance = geometric_distance
+            distance_source = 'GEOMETRIC'
+        elif self.last_feedback_distance is not None:
+            tracking_distance = self.last_feedback_distance
+            distance_source = 'NAV2_FEEDBACK'
+        else:
+            tracking_distance = None
+            distance_source = 'UNAVAILABLE'
+        previous_distance = self.last_snapshot_distance.get(key)
+        distance_change: Optional[float] = None
+        if tracking_distance is not None:
+            if (
+                previous_distance is not None and
+                previous_distance[0] == distance_source
+            ):
+                distance_change = tracking_distance - previous_distance[1]
+            self.last_snapshot_distance[key] = (
+                distance_source,
+                tracking_distance,
+            )
+
         controller_cmd = self.last_cmd.get('controller')
         smoothed_cmd = self.last_cmd.get('smoothed')
         controller_values = self._twist_values(controller_cmd)
         smoothed_values = self._twist_values(smoothed_cmd)
+        if controller_values[0] < 0.001:
+            if controller_values[1] < 0.001:
+                motion_state = 'STOPPED'
+            else:
+                motion_state = 'ROTATION_ONLY'
+        else:
+            motion_state = 'TRANSLATING'
         odom_linear = 0.0
         odom_angular = 0.0
         if self.last_odom is not None:
@@ -781,79 +851,223 @@ class FrontierDiagnostics(Node):
             odom_linear = math.hypot(twist.linear.x, twist.linear.y)
             odom_angular = abs(float(twist.angular.z))
         metrics = self._active_footprint_metrics()
-        path_text = '; '.join(
-            '%s poses=%d length=%.3fm age=%s' % (
-                name,
-                value[0],
-                value[1],
-                self._message_age(value[2], now_ns),
-            )
-            for name, value in sorted(self.path_summaries.items())
-        ) or 'not received'
-        frontier_text = '; '.join(
-            f'{name}={value}'
-            for name, value in sorted(self.frontier_details.items())
-        ) or 'not evaluated'
-        passage_text = '; '.join(
-            f'{name}={value}'
-            for name, value in sorted(self.passage_details.items())
-        ) or 'not evaluated'
-        snapshot = (
-            '[%s] type=%s severity=%s\n'
-            '  trigger=%s\n'
-            '  goal_status=%s active=%s goal=%s\n'
-            '  robot=%s %s\n'
-            '  feedback_distance=%s recoveries=%d feedback_age=%s\n'
-            '  cmd_controller=(linear=%.3f,angular=%.3f) '
-            'cmd_smoothed=(linear=%.3f,angular=%.3f)\n'
-            '  odom=(linear=%.3f,angular=%.3f) odom_age=%s scan_age=%s\n'
-            '  data_age=(map=%s global=%s local=%s)\n'
-            '  footprint=(inscribed=%.3f circumscribed=%.3f span=%.3f)\n'
-            '  frontier_checks=%s\n'
-            '  robot_passage=%s\n'
-            '  grid_path=%s nav2_path=%s\n'
-            '  local_paths=%s\n'
-            '  dwb=%s' % (
+
+        lines = [
+            '[%s] type=%s severity=%s snapshot_id=%04d' % (
                 tag,
                 key,
                 severity,
-                detail,
-                self._status_name(self.goal_status),
-                self.goal_active,
-                goal_text,
-                robot_text,
-                self._history_summary(),
-                self.last_feedback_distance,
-                self.last_feedback_recoveries,
-                self._message_age(self.last_feedback_ns, now_ns),
-                controller_values[0],
-                controller_values[1],
-                smoothed_values[0],
-                smoothed_values[1],
+                self.snapshot_sequence,
+            ),
+            separator,
+            'FRONTIER DIAGNOSTICS SNAPSHOT',
+        ]
+
+        def section(name: str):
+            lines.extend(('', f'[{name}]'))
+
+        def field(name: str, value, indent: int = 2):
+            lines.append(
+                '%s%-22s: %s' % (' ' * indent, name, value)
+            )
+
+        field('id', '%04d' % self.snapshot_sequence)
+        field('event', tag)
+        field('type', key)
+        field('severity', severity)
+        field('occurrence', occurrence)
+        field('active_for', '%.2f s' % active_for_s)
+        field('trigger', detail)
+
+        section('GOAL')
+        field('position', goal_position)
+        field('frame', goal_frame)
+        field('source', goal_source)
+        field('action_status', self._status_name(self.goal_status))
+        field('active', 'YES' if self.goal_active else 'NO')
+        field(
+            'reached',
+            'YES' if self.goal_status == GoalStatus.STATUS_SUCCEEDED else 'NO',
+        )
+        field(
+            'reached_reason',
+            'action status SUCCEEDED' if (
+                self.goal_status == GoalStatus.STATUS_SUCCEEDED
+            ) else 'action has not succeeded',
+        )
+        field(
+            'geometric_distance',
+            'N/A' if geometric_distance is None else (
+                '%.3f m' % geometric_distance
+            ),
+        )
+        field(
+            'feedback_distance',
+            'N/A' if self.last_feedback_distance is None else (
+                '%.3f m' % self.last_feedback_distance
+            ),
+        )
+        field('distance_source', distance_source)
+        field(
+            'distance_change',
+            'N/A' if distance_change is None else (
+                '%+.3f m since previous %s snapshot' % (
+                    distance_change,
+                    key,
+                )
+            ),
+        )
+        field('recoveries', self.last_feedback_recoveries)
+        field(
+            'feedback_age',
+            self._message_age(self.last_feedback_ns, now_ns),
+        )
+
+        section('ROBOT / HISTORY')
+        field('pose', robot_text)
+        field('map_frame', self.map_frame)
+        field('base_frame', self.base_frame)
+        field('tf_error', self.tf_issue or 'none')
+        field('history', self._history_summary())
+
+        section('VELOCITY')
+        field(
+            'controller_cmd',
+            'linear=%.3f m/s, angular=%.3f rad/s' % controller_values,
+        )
+        field(
+            'smoothed_cmd',
+            'linear=%.3f m/s, angular=%.3f rad/s' % smoothed_values,
+        )
+        field(
+            'odometry',
+            'linear=%.3f m/s, angular=%.3f rad/s' % (
                 odom_linear,
                 odom_angular,
-                self._message_age(self.last_odom_ns, now_ns),
-                self._message_age(self.last_scan_ns, now_ns),
-                self._message_age(self.grid_receive_ns.get('map', 0), now_ns),
-                self._message_age(
-                    self.grid_receive_ns.get('global', 0),
-                    now_ns,
-                ),
-                self._message_age(
-                    self.grid_receive_ns.get('local', 0),
-                    now_ns,
-                ),
-                metrics.inscribed_radius,
-                metrics.circumscribed_radius,
-                metrics.maximum_span,
-                frontier_text,
-                passage_text,
-                self.grid_connectivity_failure or 'connected/not checked',
-                self.nav2_path_summary,
-                path_text,
-                self.dwb_summary,
-            )
+            ),
         )
+        field('motion_state', motion_state)
+
+        section('DATA AGE')
+        field('odom', self._message_age(self.last_odom_ns, now_ns))
+        field('scan', self._message_age(self.last_scan_ns, now_ns))
+        field(
+            'map',
+            self._message_age(self.grid_receive_ns.get('map', 0), now_ns),
+        )
+        field(
+            'global_costmap',
+            self._message_age(
+                self.grid_receive_ns.get('global', 0),
+                now_ns,
+            ),
+        )
+        field(
+            'local_costmap',
+            self._message_age(
+                self.grid_receive_ns.get('local', 0),
+                now_ns,
+            ),
+        )
+
+        section('FOOTPRINT')
+        field('inscribed_radius', '%.3f m' % metrics.inscribed_radius)
+        field(
+            'circumscribed_radius',
+            '%.3f m' % metrics.circumscribed_radius,
+        )
+        field('maximum_span', '%.3f m' % metrics.maximum_span)
+        field('point_count', metrics.point_count)
+
+        section('FRONTIER / MAP')
+        if self.frontier_details:
+            for name, value in sorted(self.frontier_details.items()):
+                field(name, value)
+        else:
+            field('state', 'NOT_EVALUATED')
+
+        section('ROBOT PASSAGE')
+        if self.passage_details:
+            for name, value in sorted(self.passage_details.items()):
+                field(name, value)
+        else:
+            field('state', 'NOT_EVALUATED')
+
+        section('GLOBAL PATH')
+        field(
+            'grid_connectivity',
+            self.grid_connectivity_failure or 'CONNECTED_OR_NOT_CHECKED',
+        )
+        field('nav2_compute_path', self.nav2_path_summary)
+
+        section('LOCAL PATH')
+        if self.path_summaries:
+            for name, value in sorted(self.path_summaries.items()):
+                field(
+                    name,
+                    'poses=%d, length=%.3f m, age=%s' % (
+                        value[0],
+                        value[1],
+                        self._message_age(value[2], now_ns),
+                    ),
+                )
+        else:
+            field('state', 'NOT_RECEIVED')
+
+        section('DWB')
+        field('state', self.dwb_details.get('state', 'UNKNOWN'))
+        for name in (
+            'total',
+            'valid',
+            'invalid',
+            'best_index',
+            'worst_index',
+        ):
+            if name in self.dwb_details:
+                field(name, self.dwb_details[name])
+        if self.dwb_details.get('state') == 'SELECTED':
+            field(
+                'selected_velocity',
+                'vx=%.3f m/s, vy=%.3f m/s, wz=%.3f rad/s' % (
+                    self.dwb_details['vx'],
+                    self.dwb_details['vy'],
+                    self.dwb_details['wz'],
+                ),
+            )
+            field(
+                'selected_total_score',
+                '%.3f' % self.dwb_details['total_score'],
+            )
+        field('first_reject_critic', '')
+        for rejection in self.dwb_details.get('rejections', []):
+            field('-', rejection, indent=4)
+        if not self.dwb_details.get('rejections'):
+            field('-', 'none', indent=4)
+        field('selected_critics', '')
+        for critic in self.dwb_details.get('selected_critics', []):
+            field(
+                critic[0],
+                'raw=%.3f, scale=%.3f, contribution=%.3f' % (
+                    critic[1],
+                    critic[2],
+                    critic[3],
+                ),
+                indent=4,
+            )
+        if not self.dwb_details.get('selected_critics'):
+            field('-', 'none', indent=4)
+
+        section('ACTIVE ANOMALIES')
+        active_keys = sorted(self.active_anomalies)
+        if key not in active_keys:
+            active_keys.append(key)
+        for active_key in active_keys:
+            field('-', active_key, indent=4)
+
+        lines.extend(('', separator, 'END SNAPSHOT id=%04d' % (
+            self.snapshot_sequence,
+        ), separator))
+        snapshot = '\n'.join(lines)
         if severity == 'ERROR':
             self.get_logger().error(snapshot)
         else:
@@ -1533,6 +1747,13 @@ class FrontierDiagnostics(Node):
         if not msg.twists:
             self.dwb_summary = 'evaluation contains no trajectories'
             self.dwb_valid_count = 0
+            self.dwb_details = {
+                'state': 'NO_TRAJECTORIES',
+                'total': 0,
+                'valid': 0,
+                'invalid': 0,
+                'raw_summary': self.dwb_summary,
+            }
             self._set_condition(
                 'DWB_NO_VALID_TRAJECTORY',
                 self.goal_active,
@@ -1554,6 +1775,16 @@ class FrontierDiagnostics(Node):
                     rejection_text,
                 )
             )
+            self.dwb_details = {
+                'state': 'INVALID_SELECTION',
+                'total': len(msg.twists),
+                'valid': self.dwb_valid_count,
+                'invalid': invalid_count,
+                'best_index': best_index,
+                'worst_index': int(msg.worst_index),
+                'rejections': rejection_text.split(', '),
+                'raw_summary': self.dwb_summary,
+            }
             self._set_condition(
                 'DWB_INVALID_SELECTION',
                 True,
@@ -1594,6 +1825,21 @@ class FrontierDiagnostics(Node):
                 critic_text,
             )
         )
+        self.dwb_details = {
+            'state': 'SELECTED',
+            'total': len(msg.twists),
+            'valid': self.dwb_valid_count,
+            'invalid': invalid_count,
+            'best_index': best_index,
+            'worst_index': int(msg.worst_index),
+            'vx': float(velocity.x),
+            'vy': float(velocity.y),
+            'wz': float(velocity.theta),
+            'total_score': float(best.total),
+            'rejections': rejection_text.split(', '),
+            'selected_critics': critics,
+            'raw_summary': self.dwb_summary,
+        }
         self._set_condition(
             'DWB_NO_VALID_TRAJECTORY',
             self.goal_active and self.dwb_valid_count <= 0,
@@ -1942,8 +2188,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # A launch SIGINT may already have shut down the context.  Destroying
+        # subscriptions again on some rclpy versions raises during clean exit.
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

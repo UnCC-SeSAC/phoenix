@@ -280,45 +280,103 @@ DWB가 아닌 local planner를 사용하면 `/evaluation`이 없으므로 `DWB_E
 
 ## 이상 스냅샷 읽는 방법
 
-ERROR 이상은 ROS ERROR로, WARN 이상은 ROS WARN으로 아래 형식의 여러 줄 스냅샷을 출력한다.
+ERROR 이상은 ROS ERROR로, WARN 이상은 ROS WARN으로 고정된 섹션 순서의
+전체 스냅샷을 출력한다. 이상이 반복되어도 정보를 생략하지 않으며,
+`snapshot_id`, `occurrence`, `active_for`, 이전 같은 이상 스냅샷 대비
+`distance_change`를 이용해 시간 흐름을 비교할 수 있다.
 
 ```text
-[ANOMALY] type=NO_PROGRESS severity=ERROR
-  trigger=goal progress 0.012m over 8.0s; minimum 0.050m
-  goal_status=EXECUTING active=True goal=(1.230,0.450) frame=map source=selected_frontier_topic
-  robot=(0.800,0.200,15.0deg) window=8.00s samples=9 pose_delta=0.010m yaw_delta=0.002rad goal_progress=0.012m
-  feedback_distance=0.48 recoveries=0 feedback_age=0.20s
-  cmd_controller=(linear=0.100,angular=0.000) cmd_smoothed=(linear=0.090,angular=0.000)
-  odom=(linear=0.005,angular=0.000) odom_age=0.05s scan_age=0.03s
-  data_age=(map=0.10s global=0.05s local=0.05s)
-  footprint=(inscribed=0.095 circumscribed=0.153 span=0.306)
-  frontier_checks=...
-  robot_passage=...
-  grid_path=... nav2_path=...
-  local_paths=...
-  dwb=...
+[ANOMALY] type=NO_PROGRESS severity=ERROR snapshot_id=0012
+================================================================================
+FRONTIER DIAGNOSTICS SNAPSHOT
+  id                    : 0012
+  event                 : ANOMALY
+  occurrence            : 1
+  active_for            : 0.00 s
+  trigger               : goal progress 0.012 m over 8.0 s
+
+[GOAL]
+  position              : x=1.230 m, y=0.450 m
+  action_status         : EXECUTING
+  reached               : NO
+  geometric_distance    : 0.480 m
+  feedback_distance     : 0.481 m
+  distance_source       : GEOMETRIC
+  distance_change       : N/A
+
+[ROBOT / HISTORY]
+  pose                  : x=0.800 m, y=0.200 m, yaw=15.0 deg
+  history               : window=8.00s samples=9 ...
+
+[VELOCITY]
+  controller_cmd        : linear=0.100 m/s, angular=0.000 rad/s
+  smoothed_cmd          : linear=0.090 m/s, angular=0.000 rad/s
+  odometry              : linear=0.005 m/s, angular=0.000 rad/s
+  motion_state          : TRANSLATING
+
+[DATA AGE]
+  odom                  : 0.05 s
+  scan                  : 0.03 s
+  map                   : 0.10 s
+  global_costmap        : 0.05 s
+  local_costmap         : 0.05 s
+
+[FOOTPRINT]
+  inscribed_radius      : 0.095 m
+  circumscribed_radius  : 0.153 m
+  maximum_span          : 0.306 m
+
+[FRONTIER / MAP]
+  MAP                   : cell=(...) occupancy=... nearest_wall=...
+  GLOBAL_COSTMAP        : cell=(...) cost=... inside_inflation=...
+
+[ROBOT PASSAGE]
+  global                : ... passage=PASS
+  local                 : ... passage=PASS
+
+[GLOBAL PATH]
+  grid_connectivity     : ...
+  nav2_compute_path     : valid=True ...
+
+[LOCAL PATH]
+  DWB local_plan        : poses=..., length=..., age=...
+  DWB transformed_global_plan: poses=..., length=..., age=...
+
+[DWB]
+  total                 : 2204
+  valid                 : 1048
+  invalid               : 1156
+  selected_velocity     : vx=..., vy=..., wz=...
+  first_reject_critic   :
+    -                   : BaseObstacle=700(...)
+  selected_critics      :
+    GoalAlign           : raw=..., scale=..., contribution=...
+
+[ACTIVE ANOMALIES]
+    -                   : NO_PROGRESS
+    -                   : TF_UNAVAILABLE
+================================================================================
+END SNAPSHOT id=0012
+================================================================================
 ```
 
-각 줄의 의미는 다음과 같다.
+섹션은 항상 같은 순서로 출력되며 현재 수집된 정보는 생략하지 않는다.
 
-| 필드 | 의미 |
+| 섹션/필드 | 의미 |
 |---|---|
-| `type` | 이상 원인을 구분하는 고정 식별자 |
+| header | snapshot ID, 이상 종류, 심각도, 반복 횟수와 지속 시간 |
 | `trigger` | 해당 판정을 발생시킨 실제 값 또는 원본 ROS 로그 |
-| `goal_status`, `active`, `goal` | 현재 action 상태와 frontier 좌표 |
-| `robot`, `window` | 현재 pose와 이상 직전 이력 구간의 이동량·목표 접근량 |
-| `feedback_distance`, `recoveries` | NavigateToPose feedback 값과 수신 age |
-| `cmd_controller` | local controller가 선택한 원본 속도 명령 |
-| `cmd_smoothed` | velocity smoother 등을 지난 최종 속도 명령 |
-| `odom` | 실제 측정 속도와 데이터 age |
-| `data_age` | map과 costmap 데이터가 마지막으로 수신된 뒤 지난 시간 |
-| `footprint` | inscribed radius, circumscribed radius, 최대 폭 |
-| `frontier_checks` | map/costmap별 frontier cell, cost, 벽 거리, inflation 상태 |
-| `robot_passage` | 로봇 주변 cost, 이웃 free cell, 연결 범위와 PASS/BLOCKED |
-| `grid_path` | 내부 grid 연결성 결과 |
-| `nav2_path` | ComputePathToPose 결과, error code, pose 수와 길이 |
-| `local_paths` | local/transformed global plan pose 수, 길이, age |
-| `dwb` | DWB 선택 속도와 critic 점수 |
+| `GOAL` | frontier 좌표, action 상태, 도달 여부, 실제/feedback 거리, 사용한 거리 source와 변화량 |
+| `ROBOT / HISTORY` | 현재 pose, TF 오류, 이상 직전 이동량과 목표 접근량 |
+| `VELOCITY` | controller/smoother 명령, odometry와 동작 유형 |
+| `DATA AGE` | 센서, map과 costmap 마지막 수신 이후 시간 |
+| `FOOTPRINT` | inscribed/circumscribed radius, 최대 폭과 point 수 |
+| `FRONTIER / MAP` | map/costmap별 cell, cost, 벽 거리와 inflation 상태 |
+| `ROBOT PASSAGE` | 로봇 주변 cost, 이웃 free cell, 연결 범위와 PASS/BLOCKED |
+| `GLOBAL PATH` | 내부 grid 연결성 및 ComputePathToPose 결과 |
+| `LOCAL PATH` | local/transformed global plan pose 수, 길이와 age |
+| `DWB` | trajectory 수, 선택 속도, 첫 탈락 critic과 선택 critic 점수 |
+| `ACTIVE ANOMALIES` | 스냅샷 시점에 동시에 활성화된 모든 이상 |
 
 ## 주요 설정값
 
