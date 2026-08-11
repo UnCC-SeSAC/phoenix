@@ -1,0 +1,11 @@
+string entity_id
+string class_name
+float32 confidence
+float32 bbox_x_min
+float32 bbox_y_min
+float32 bbox_x_max
+float32 bbox_y_max
+bool has_map_position
+geometry_msgs/Point map_position
+string size
+string blocks_route_to

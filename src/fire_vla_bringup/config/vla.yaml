@@ -1,0 +1,20 @@
+vla:
+  ros__parameters:
+    llm_model: "Qwen2-1.5B-Instruct-Function-Calling-v1"
+    llm_timeout_sec: 10.0
+    llm_invalid_output_retries: 2
+    navigation_integration_strategy: "MOCK"  # MOCK | DIRECT_ACTION | TOPIC_BRIDGE
+    person_confidence_threshold: 0.5
+    fire_confidence_threshold: 0.6
+    spray_range_m: 0.8
+    entity_merge_distance_m: 0.5
+    event_log_max_entries: 500
+    mission_topic: "/vla/mission"
+    perception_topic: "/vla/perception_observation"
+    robot_pose_topic: "/vla/robot_pose"
+    navigation_goal_topic: "/vla/navigation_goal"
+    navigation_result_topic: "/vla/navigation_result"
+    spray_command_topic: "/vla/spray_command"
+    spray_result_topic: "/vla/spray_result"
+    spray_cancel_topic: "/vla/spray_cancel"
+    report_topic: "/vla/person_report"

@@ -23,6 +23,7 @@ from launch.substitutions import (
 )
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def include_launch(
@@ -98,6 +99,14 @@ def generate_launch_description():
 
     start_vision = LaunchConfiguration(
         'start_vision'
+    )
+
+    return_to_start_on_complete = LaunchConfiguration(
+        'return_to_start_on_complete'
+    )
+
+    goal_preemption_enabled = LaunchConfiguration(
+        'goal_preemption_enabled'
     )
 
     # =========================================
@@ -200,9 +209,15 @@ def generate_launch_description():
                         'map_processing_rate_hz': 0.5,
 
                         # 처음에는 기능을 단순하게
-                        'goal_preemption_enabled': False,
+                        'goal_preemption_enabled': ParameterValue(
+                            goal_preemption_enabled,
+                            value_type=bool,
+                        ),
 
-                        'return_to_start_on_complete': False,
+                        'return_to_start_on_complete': ParameterValue(
+                            return_to_start_on_complete,
+                            value_type=bool,
+                        ),
                     },
                 ],
             )
@@ -231,11 +246,11 @@ def generate_launch_description():
 
                 parameters=[
                     {
-                        'trigger_distance': 0.50,
+                        'trigger_distance': 0.30,
 
-                        'clear_distance': 0.75,
+                        'clear_distance': 0.35,
 
-                        'front_angle_deg': 90.0,
+                        'front_angle_deg': 210.0,
 
                         'clear_hold_sec': 0.60,
 
@@ -323,7 +338,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'start_lidar_app',
-            default_value='true',
+            default_value='false',
         ),
 
         DeclareLaunchArgument(
@@ -343,16 +358,28 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'start_avoidance',
-            default_value='true',
+            default_value='false',
         ),
 
         DeclareLaunchArgument(
             'start_mission',
-            default_value='true',
+            # Frontier is the default deterministic goal owner. MissionExecutor
+            # must be enabled explicitly and never together with Frontier/VLA.
+            default_value='false',
         ),
 
         DeclareLaunchArgument(
             'start_vision',
+            default_value='false',
+        ),
+
+        DeclareLaunchArgument(
+            'return_to_start_on_complete',
+            default_value='true',
+        ),
+
+        DeclareLaunchArgument(
+            'goal_preemption_enabled',
             default_value='false',
         ),
 

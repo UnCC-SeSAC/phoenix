@@ -113,12 +113,15 @@ class YoloDetector(Node):
             out = String()
             out.data = json.dumps({
                 'class_name': detection['class_name'],
+                'score': detection['score'],
                 # x, y 는 depth 이미지 해상도 기준 픽셀 좌표로
                 # 통일해서 보낸다 — vision_detector 는 더 이상
                 # RGB/depth 해상도 비율을 몰라도 된다.
                 'x': u,
                 'y': v,
+                'frame_size': [depth_w, depth_h],
                 'depth': depth_m,
+                'depth_status': 'ok',
                 # depth 를 읽은 시각 — vision_detector 가 TF 변환할
                 # 때 그대로 사용한다. frame_id 는 카메라가 고정
                 # 장착이라 vision_detector 쪽 파라미터로 고정.

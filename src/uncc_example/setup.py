@@ -57,6 +57,7 @@ setup(
             'mission_test = uncc_example.mission_test_publisher:main',
             'fire_extinguisher = uncc_example.fire_extinguisher:main',
             'mission_manager = uncc_example.mission_manager:main',
+            'vla_navigation_bridge = uncc_example.vla_navigation_bridge_node:main',
         ],
     },
 )

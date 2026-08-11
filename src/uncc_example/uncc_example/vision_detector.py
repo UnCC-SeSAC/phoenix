@@ -1,4 +1,5 @@
 import json
+import math
 
 import rclpy
 
@@ -105,10 +106,19 @@ class VisionDetector(Node):
     def camera_info_callback(self, msg):
         # 카메라 내부 파라미터는 캘리브레이션 후 고정값이라, 감지마다
         # 다시 꺼내 쓰지 않고 CameraInfo 가 갱신될 때만 뽑아둔다.
-        self.fx = msg.k[0]
-        self.fy = msg.k[4]
-        self.cx = msg.k[2]
-        self.cy = msg.k[5]
+        try:
+            fx, fy, cx, cy = msg.k[0], msg.k[4], msg.k[2], msg.k[5]
+        except (AttributeError, IndexError, TypeError):
+            self.latest_camera_info = None
+            return
+        if (
+            not all(math.isfinite(value) for value in (fx, fy, cx, cy))
+            or fx <= 0.0
+            or fy <= 0.0
+        ):
+            self.latest_camera_info = None
+            return
+        self.fx, self.fy, self.cx, self.cy = fx, fy, cx, cy
         self.latest_camera_info = msg
 
     # =========================================================
@@ -123,10 +133,12 @@ class VisionDetector(Node):
 
         try:
             detection = json.loads(msg.data)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, TypeError) as e:
             self.get_logger().warn(
                 f'Invalid detection JSON: {e}'
             )
+            return
+        if not isinstance(detection, dict):
             return
 
         class_name = detection.get('class_name')
@@ -134,12 +146,54 @@ class VisionDetector(Node):
         if class_name not in self.target_classes:
             return
 
+        try:
+            # Production YOLO contract uses score in [0, 1]. Keep the VLA
+            # contract stable and perform the thin, non-scaling rename here.
+            confidence = detection['score']
+            u = detection['x']
+            v = detection['y']
+            depth_m = detection['depth']
+            stamp_sec = detection['stamp_sec']
+            stamp_nanosec = detection['stamp_nanosec']
+        except (KeyError, TypeError):
+            return
+
+        numeric_values = (confidence, u, v, depth_m)
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in numeric_values
+        ):
+            return
+        if not 0.0 <= confidence <= 1.0 or depth_m <= 0.0:
+            return
+        depth_status = detection.get('depth_status')
+        if depth_status not in {
+            'ok',
+            'fallback_bottom',
+            'fallback_below',
+            'fallback_ring',
+        }:
+            return
+        if (
+            isinstance(stamp_sec, bool)
+            or not isinstance(stamp_sec, int)
+            or isinstance(stamp_nanosec, bool)
+            or not isinstance(stamp_nanosec, int)
+            or stamp_sec < 0
+            or not 0 <= stamp_nanosec < 1_000_000_000
+        ):
+            return
+
         map_point = self._compute_map_position(detection)
 
         if map_point is None:
             return
 
-        self._publish_detection(class_name, map_point)
+        self._publish_detection(
+            class_name, confidence, stamp_sec, stamp_nanosec, map_point
+        )
 
     def _compute_map_position(self, detection):
 
@@ -170,13 +224,23 @@ class VisionDetector(Node):
             )
             return None
 
-    def _publish_detection(self, class_name, map_point):
+    def _publish_detection(
+        self,
+        class_name,
+        confidence,
+        stamp_sec,
+        stamp_nanosec,
+        map_point,
+    ):
 
         payload = {
             'class': class_name,
+            'confidence': confidence,
             'x': map_point.point.x,
             'y': map_point.point.y,
             'frame_id': self.map_frame,
+            'stamp_sec': stamp_sec,
+            'stamp_nanosec': stamp_nanosec,
         }
 
         msg = String()

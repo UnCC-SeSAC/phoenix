@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Phoenix 소방관 VLA Console</title>
+  <style>
+    :root { color-scheme: dark; --bg:#111827; --card:#1f2937; --line:#374151; --text:#f3f4f6; --muted:#9ca3af; --accent:#f97316; --ok:#22c55e; --bad:#ef4444; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,sans-serif; }
+    header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+    h1,h2 { margin:0; } h1 { font-size:21px; } h2 { font-size:15px; margin-bottom:12px; }
+    main { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; padding:16px; max-width:1500px; margin:auto; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:15px; min-width:0; }
+    .span4 { grid-column:span 4; } .span6 { grid-column:span 6; } .span8 { grid-column:span 8; } .span12 { grid-column:span 12; }
+    label { color:var(--muted); } input,button { border-radius:6px; padding:9px 11px; border:1px solid var(--line); }
+    input { background:#111827; color:var(--text); width:calc(100% - 118px); } button { width:110px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
+    dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 12px; margin:0; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+    table { width:100%; border-collapse:collapse; font-size:13px; } th,td { text-align:left; padding:7px; border-bottom:1px solid var(--line); white-space:nowrap; } th { color:var(--muted); }
+    .scroll { overflow:auto; } .ok { color:var(--ok); } .bad { color:var(--bad); } .muted { color:var(--muted); }
+    #map { width:100%; height:340px; background:#111827; border:1px solid var(--line); border-radius:7px; }
+    .legend { display:flex; gap:15px; color:var(--muted); margin-top:8px; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; }
+    pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+    @media (max-width:900px) { .span4,.span6,.span8 { grid-column:span 12; } }
+  </style>
+</head>
+<body>
+<header><h1>Phoenix 소방관 VLA Console</h1><span id="updated" class="muted">status 대기 중</span></header>
+<main>
+  <section class="card span12"><h2>Mission</h2><form id="missionForm"><input id="missionInput" aria-label="Mission" placeholder="예: 인명을 우선 확인해." required><button type="submit">Mission 보내기</button></form><p id="missionResult" class="muted"></p></section>
+  <section class="card span4"><h2>현재 Mission</h2><dl id="mission"></dl></section>
+  <section class="card span4"><h2>Robot</h2><dl id="robot"></dl></section>
+  <section class="card span4"><h2>Decision</h2><dl id="decision"></dl></section>
+  <section class="card span8"><h2>2D Semantic Map</h2><svg id="map" viewBox="0 0 800 340" role="img" aria-label="Semantic map"></svg><div class="legend"><span><i class="dot" style="background:#60a5fa"></i>Robot/Home</span><span><i class="dot" style="background:#22c55e"></i>Person</span><span><i class="dot" style="background:#ef4444"></i>Fire</span><span><i class="dot" style="background:#facc15"></i>Target</span></div></section>
+  <section class="card span4"><h2>Safety / Execution</h2><dl id="execution"></dl></section>
+  <section class="card span6"><h2>People</h2><div class="scroll"><table><thead><tr><th>ID</th><th>Position</th><th>Confidence</th><th>State</th><th>Reported</th></tr></thead><tbody id="people"></tbody></table></div></section>
+  <section class="card span6"><h2>Fires</h2><div class="scroll"><table><thead><tr><th>ID</th><th>Position</th><th>Confidence</th><th>Size</th><th>State</th><th>In range</th><th>Sprays</th><th>Blocks</th></tr></thead><tbody id="fires"></tbody></table></div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id), dash=v=>(v===null||v===undefined||v==='')?'-':String(v);
+function dl(el, rows){ el.replaceChildren(...rows.flatMap(([k,v])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=dash(v);return[dt,dd]})); }
+function pose(p){return p?`${Number(p.x).toFixed(2)}, ${Number(p.y).toFixed(2)}, yaw ${Number(p.yaw||0).toFixed(2)}`:'-'}
+function cells(row, values){for(const value of values){const td=document.createElement('td');td.textContent=dash(value);row.append(td)}}
+function renderTable(id, items, mapper){const body=$(id);body.replaceChildren();for(const item of items||[]){const tr=document.createElement('tr');cells(tr,mapper(item));body.append(tr)}}
+function renderMap(w){const svg=$('map');svg.replaceChildren();const points=[];const add=(kind,id,p,color)=>{if(p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)))points.push({kind,id,x:Number(p.x),y:Number(p.y),color})};
+ add('R','robot',w.robot?.pose,'#60a5fa');add('H','home',w.robot?.home_pose,'#a78bfa');for(const p of w.people||[])add('P',p.id,p.position,'#22c55e');for(const f of w.fires||[])add('F',f.id,f.position,'#ef4444');add('T',w.current_action?.target||'target',w.current_action?.target_pose,'#facc15');
+ if(!points.length){const t=document.createElementNS('http://www.w3.org/2000/svg','text');t.setAttribute('x','400');t.setAttribute('y','170');t.setAttribute('text-anchor','middle');t.setAttribute('fill','#9ca3af');t.textContent='표시할 map 좌표가 없습니다.';svg.append(t);return}
+ const xs=points.map(p=>p.x),ys=points.map(p=>p.y),minX=Math.min(...xs)-.5,maxX=Math.max(...xs)+.5,minY=Math.min(...ys)-.5,maxY=Math.max(...ys)+.5;for(const p of points){const x=40+(p.x-minX)/(maxX-minX)*720,y=300-(p.y-minY)/(maxY-minY)*260,g=document.createElementNS('http://www.w3.org/2000/svg','g'),c=document.createElementNS('http://www.w3.org/2000/svg','circle'),t=document.createElementNS('http://www.w3.org/2000/svg','text');c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r','7');c.setAttribute('fill',p.color);t.setAttribute('x',x+10);t.setAttribute('y',y+4);t.setAttribute('fill','#f3f4f6');t.textContent=`${p.kind} ${p.id}`;g.append(c,t);svg.append(g)}}
+function render(s){const w=s.world_model||{},m=w.mission||{},r=w.robot||{},d=s.decision||{},v=s.validation||{},sub=s.submission||{};$('updated').textContent=s.timestamp?`updated ${s.timestamp}`:'status 대기 중';dl($('mission'),[['ID',m.id],['Text',m.text],['Status',m.status]]);dl($('robot'),[['Pose',pose(r.pose)],['Navigation',r.navigation_status],['Perception ready',w.perception_ready]]);dl($('decision'),[['Action',d.action],['Target',d.target],['LLM reason',d.reason],['Validation',v.approved],['Validation reason',v.reason]]);dl($('execution'),[['Blocked reason',s.blocked_reason||'정상'],['Submission',sub.status],['Submission detail',sub.detail],['Navigation',r.navigation_status],['Current action',w.current_action?.action],['Last action',w.last_action?.action],['Pending',(w.pending_action_ids||[]).join(', ')]]);renderTable('people',w.people,p=>[p.id,pose(p.position),p.confidence,p.state,p.reported]);renderTable('fires',w.fires,f=>[f.id,pose(f.position),f.confidence,f.size,f.state,f.robot_within_spray_range,f.spray_count,f.blocks_route_to]);renderMap(w)}
+async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});render(await r.json())}catch(e){$('updated').textContent='status 연결 실패'}}
+$('missionForm').addEventListener('submit',async e=>{e.preventDefault();const text=$('missionInput').value.trim();if(!text)return;const r=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});const data=await r.json();$('missionResult').textContent=r.ok?`전송됨: ${data.mission_id}`:`오류: ${data.error}`;if(r.ok)$('missionInput').value=''});
+refresh();setInterval(refresh,1000);
+</script>
+</body>
+</html>

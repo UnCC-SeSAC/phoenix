@@ -20,40 +20,38 @@ from frontier_exploration_ros2.srv import ControlExploration
 
 class AvoidanceManager(Node):
 
-    NORMAL = 'NORMAL' # Frontier Exploration 이 정상 동작
-    STOPPING_FRONTIER = 'STOPPING_FRONTIER'
-    STARTING_AVOIDANCE = 'STARTING_AVOIDANCE'
-    AVOIDING = 'AVOIDING'
-    STOPPING_AVOIDANCE = 'STOPPING_AVOIDANCE'
-    STARTING_FRONTIER = 'STARTING_FRONTIER'
+    NORMAL = "NORMAL"  # Frontier Exploration 이 정상 동작
+    STOPPING_FRONTIER = "STOPPING_FRONTIER"
+    STARTING_AVOIDANCE = "STARTING_AVOIDANCE"
+    AVOIDING = "AVOIDING"
+    STOPPING_AVOIDANCE = "STOPPING_AVOIDANCE"
+    STARTING_FRONTIER = "STARTING_FRONTIER"
 
     def __init__(self):
-        super().__init__('avoidance_manager')
+        super().__init__("avoidance_manager")
 
         # -----------------------------
         # Parameters
         # -----------------------------
-        self.declare_parameter('trigger_distance', 0.50) # 이 거리안에 장애물이 들어오면 회피
-        self.declare_parameter('clear_distance', 0.75) # 이 거리 이상 확보되면 장애물이 없어졌다고 판단
-        self.declare_parameter('front_angle_deg', 90.0) # 로봇 전방 몇 도를 검사할지
-        self.declare_parameter('clear_hold_sec', 0.60) # 안전거리가 얼마나 지속돼야 회피를 끝낼 것인지
-        self.declare_parameter('avoidance_timeout_sec', 5.0) # 회피를 무한히 하지 않도록 최대 시간
+        self.declare_parameter(
+            "trigger_distance", 0.3
+        )  # 이 거리안에 장애물이 들어오면 회피
+        self.declare_parameter(
+            "clear_distance", 0.35
+        )  # 이 거리 이상 확보되면 장애물이 없어졌다고 판단
+        self.declare_parameter("front_angle_deg", 210.0)  # 로봇 전방 몇 도를 검사할지
+        self.declare_parameter(
+            "clear_hold_sec", 0.60
+        )  # 안전거리가 얼마나 지속돼야 회피를 끝낼 것인지
+        self.declare_parameter(
+            "avoidance_timeout_sec", 5.0
+        )  # 회피를 무한히 하지 않도록 최대 시간
 
-        self.trigger_distance = (
-            self.get_parameter('trigger_distance').value
-        )
-        self.clear_distance = (
-            self.get_parameter('clear_distance').value
-        )
-        self.front_angle_deg = (
-            self.get_parameter('front_angle_deg').value
-        )
-        self.clear_hold_sec = (
-            self.get_parameter('clear_hold_sec').value
-        )
-        self.avoidance_timeout_sec = (
-            self.get_parameter('avoidance_timeout_sec').value
-        )
+        self.trigger_distance = self.get_parameter("trigger_distance").value
+        self.clear_distance = self.get_parameter("clear_distance").value
+        self.front_angle_deg = self.get_parameter("front_angle_deg").value
+        self.clear_hold_sec = self.get_parameter("clear_hold_sec").value
+        self.avoidance_timeout_sec = self.get_parameter("avoidance_timeout_sec").value
 
         # -----------------------------
         # State
@@ -62,14 +60,14 @@ class AvoidanceManager(Node):
 
         self.front_distance = math.inf
 
-        self.nav_goal_active = False # 현재 Nav2 목적지를 향해 이동 중인가
+        self.nav_goal_active = False  # 현재 Nav2 목적지를 향해 이동 중인가
         self.last_nav_status_time = 0.0
 
         self.clear_start_time = None
         self.avoidance_start_time = None
 
-        self.lidar_entered = False # /lidar_app/enter 호출 성공 여부
-        self.enter_pending = False 
+        self.lidar_entered = False  # /lidar_app/enter 호출 성공 여부
+        self.enter_pending = False
 
         self.frontier_stop_state = None
         self.frontier_stop_response_time = 0.0
@@ -86,7 +84,7 @@ class AvoidanceManager(Node):
 
         self.create_subscription(
             LaserScan,
-            '/scan_raw',
+            "/scan_raw",
             self.scan_callback,
             scan_qos,
         )
@@ -96,7 +94,7 @@ class AvoidanceManager(Node):
         # -----------------------------
         self.create_subscription(
             GoalStatusArray,
-            '/navigate_to_pose/_action/status',
+            "/navigate_to_pose/_action/status",
             self.nav_status_callback,
             10,
         )
@@ -108,20 +106,19 @@ class AvoidanceManager(Node):
         # /control_exploration 토픽? 을 통해 탐색 멈춤 시작을 조절
         self.frontier_client = self.create_client(
             ControlExploration,
-            '/control_exploration',
+            "/control_exploration",
         )
-
 
         # 회피 기능 준비
         self.lidar_enter_client = self.create_client(
             Trigger,
-            '/lidar_app/enter',
+            "/lidar_app/enter",
         )
 
         # 회피 기능 Start/Stop
         self.lidar_running_client = self.create_client(
             SetInt64,
-            '/lidar_app/set_running',
+            "/lidar_app/set_running",
         )
 
         # State machine timer
@@ -134,7 +131,6 @@ class AvoidanceManager(Node):
     # LaserScan
     # =========================================================
 
-     
     def scan_callback(self, msg):
 
         distance = self.get_front_min_distance(msg)
@@ -150,12 +146,9 @@ class AvoidanceManager(Node):
             and self.lidar_entered
             and distance <= self.trigger_distance
         ):
-            self.get_logger().warn(
-                f'Obstacle detected: {distance:.2f} m'
-            )
+            self.get_logger().warn(f"Obstacle detected: {distance:.2f} m")
 
-            
-            # 
+            #
             self.state = self.STOPPING_FRONTIER
             self.stop_request_pending = False
             self.frontier_stop_state = None
@@ -163,9 +156,7 @@ class AvoidanceManager(Node):
     # 전방 -45 ~ 45 도 영역의  최소 거리 계산, 계산된 최소 거리 반환
     def get_front_min_distance(self, msg):
 
-        half_angle = math.radians(
-            self.front_angle_deg
-        ) / 2.0
+        half_angle = math.radians(self.front_angle_deg) / 2.0
 
         min_distance = math.inf
         found = False
@@ -184,11 +175,7 @@ class AvoidanceManager(Node):
             if distance > msg.range_max:
                 continue
 
-            
-            angle = (
-                msg.angle_min
-                + i * msg.angle_increment
-            )
+            angle = msg.angle_min + i * msg.angle_increment
 
             # -pi ~ +pi
             angle = math.atan2(
@@ -222,8 +209,7 @@ class AvoidanceManager(Node):
         }
 
         self.nav_goal_active = any(
-            status.status in active_states
-            for status in msg.status_list
+            status.status in active_states for status in msg.status_list
         )
 
         self.last_nav_status_time = time.monotonic()
@@ -260,13 +246,9 @@ class AvoidanceManager(Node):
 
         self.enter_pending = True
 
-        future = self.lidar_enter_client.call_async(
-            Trigger.Request()
-        )
+        future = self.lidar_enter_client.call_async(Trigger.Request())
 
-        future.add_done_callback(
-            self.enter_done
-        )
+        future.add_done_callback(self.enter_done)
 
     def enter_done(self, future):
 
@@ -275,16 +257,12 @@ class AvoidanceManager(Node):
         try:
             response = future.result()
         except Exception as e:
-            self.get_logger().error(
-                f'lidar enter failed: {e}'
-            )
+            self.get_logger().error(f"lidar enter failed: {e}")
             return
 
         if response.success:
             self.lidar_entered = True
-            self.get_logger().info(
-                'lidar_app entered'
-            )
+            self.get_logger().info("lidar_app entered")
 
     # =========================================================
     # Frontier STOP
@@ -299,20 +277,14 @@ class AvoidanceManager(Node):
 
             request = ControlExploration.Request()
 
-            request.action = (
-                ControlExploration.Request.ACTION_STOP
-            )
+            request.action = ControlExploration.Request.ACTION_STOP
 
             request.delay_seconds = 0.0
             request.quit_after_stop = False
 
-            future = self.frontier_client.call_async(
-                request
-            )
+            future = self.frontier_client.call_async(request)
 
-            future.add_done_callback(
-                self.frontier_stop_done
-            )
+            future.add_done_callback(self.frontier_stop_done)
 
             self.stop_request_pending = True
 
@@ -322,21 +294,14 @@ class AvoidanceManager(Node):
             return
 
         # 이미 완전히 정지
-        if (
-            self.frontier_stop_state
-            == ControlExploration.Request.STATE_IDLE
-        ):
+        if self.frontier_stop_state == ControlExploration.Request.STATE_IDLE:
             self.start_avoidance()
             return
 
         # Nav2 goal cancel 완료 확인
-        if (
-            self.frontier_stop_state
-            == ControlExploration.Request.STATE_STOPPING
-        ):
+        if self.frontier_stop_state == ControlExploration.Request.STATE_STOPPING:
             if (
-                self.last_nav_status_time
-                > self.frontier_stop_response_time
+                self.last_nav_status_time > self.frontier_stop_response_time
                 and not self.nav_goal_active
             ):
                 self.start_avoidance()
@@ -347,24 +312,16 @@ class AvoidanceManager(Node):
             response = future.result()
 
         except Exception as e:
-            self.get_logger().error(
-                f'Frontier stop failed: {e}'
-            )
+            self.get_logger().error(f"Frontier stop failed: {e}")
             return
 
         if not response.accepted:
-            self.get_logger().error(
-                response.message
-            )
+            self.get_logger().error(response.message)
             return
 
-        self.frontier_stop_state = (
-            response.state
-        )
+        self.frontier_stop_state = response.state
 
-        self.frontier_stop_response_time = (
-            time.monotonic()
-        )
+        self.frontier_stop_response_time = time.monotonic()
 
     # =========================================================
     # Hiwonder Avoidance START
@@ -383,35 +340,25 @@ class AvoidanceManager(Node):
         request = SetInt64.Request()
         request.data = 1
 
-        future = self.lidar_running_client.call_async(
-            request
-        )
+        future = self.lidar_running_client.call_async(request)
 
-        future.add_done_callback(
-            self.avoidance_start_done
-        )
+        future.add_done_callback(self.avoidance_start_done)
 
     def avoidance_start_done(self, future):
 
         response = future.result()
 
         if not response.success:
-            self.get_logger().error(
-                'Failed to start avoidance'
-            )
+            self.get_logger().error("Failed to start avoidance")
             return
 
         self.state = self.AVOIDING
 
-        self.avoidance_start_time = (
-            time.monotonic()
-        )
+        self.avoidance_start_time = time.monotonic()
 
         self.clear_start_time = None
 
-        self.get_logger().warn(
-            'LD19 avoidance owns motion'
-        )
+        self.get_logger().warn("LD19 avoidance owns motion")
 
     # =========================================================
     # AVOIDING
@@ -422,26 +369,17 @@ class AvoidanceManager(Node):
         now = time.monotonic()
 
         # 무한 회피 방지
-        if (
-            now - self.avoidance_start_time
-            >= self.avoidance_timeout_sec
-        ):
+        if now - self.avoidance_start_time >= self.avoidance_timeout_sec:
             self.stop_avoidance()
             return
 
         # hysteresis
-        if (
-            self.front_distance
-            >= self.clear_distance
-        ):
+        if self.front_distance >= self.clear_distance:
 
             if self.clear_start_time is None:
                 self.clear_start_time = now
 
-            elif (
-                now - self.clear_start_time
-                >= self.clear_hold_sec
-            ):
+            elif now - self.clear_start_time >= self.clear_hold_sec:
                 self.stop_avoidance()
 
         else:
@@ -461,22 +399,16 @@ class AvoidanceManager(Node):
         request = SetInt64.Request()
         request.data = 0
 
-        future = self.lidar_running_client.call_async(
-            request
-        )
+        future = self.lidar_running_client.call_async(request)
 
-        future.add_done_callback(
-            self.avoidance_stop_done
-        )
+        future.add_done_callback(self.avoidance_stop_done)
 
     def avoidance_stop_done(self, future):
 
         response = future.result()
 
         if not response.success:
-            self.get_logger().error(
-                'Failed to stop avoidance'
-            )
+            self.get_logger().error("Failed to stop avoidance")
             return
 
         self.start_frontier()
@@ -491,29 +423,21 @@ class AvoidanceManager(Node):
 
         request = ControlExploration.Request()
 
-        request.action = (
-            ControlExploration.Request.ACTION_START
-        )
+        request.action = ControlExploration.Request.ACTION_START
 
         request.delay_seconds = 0.0
         request.quit_after_stop = False
 
-        future = self.frontier_client.call_async(
-            request
-        )
+        future = self.frontier_client.call_async(request)
 
-        future.add_done_callback(
-            self.frontier_start_done
-        )
+        future.add_done_callback(self.frontier_start_done)
 
     def frontier_start_done(self, future):
 
         response = future.result()
 
         if not response.accepted:
-            self.get_logger().error(
-                response.message
-            )
+            self.get_logger().error(response.message)
             return
 
         self.stop_request_pending = False
@@ -522,9 +446,7 @@ class AvoidanceManager(Node):
 
         self.state = self.NORMAL
 
-        self.get_logger().info(
-            'Frontier exploration resumed'
-        )
+        self.get_logger().info("Frontier exploration resumed")
 
 
 def main(args=None):
@@ -544,5 +466,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
