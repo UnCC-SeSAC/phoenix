@@ -188,7 +188,11 @@ class FrontierDiagnostics(Node):
         self.snapshot_sequence = 0
         self.last_snapshot_distance: Dict[str, Tuple[str, float]] = {}
 
-        self._subscriptions = []
+        # Do not reuse rclpy.node.Node._subscriptions here.  TransformListener
+        # has already registered its /tf and /tf_static subscriptions in that
+        # internal list, and replacing it prevents the executor from servicing
+        # those callbacks.
+        self._diagnostic_subscriptions = []
         self._create_subscriptions()
 
         self.compute_path_client = ActionClient(
@@ -357,7 +361,7 @@ class FrontierDiagnostics(Node):
         )
 
     def _sub(self, msg_type, topic, callback, qos):
-        self._subscriptions.append(
+        self._diagnostic_subscriptions.append(
             self.create_subscription(msg_type, topic, callback, qos)
         )
 
