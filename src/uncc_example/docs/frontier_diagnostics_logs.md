@@ -253,9 +253,28 @@ global grid 연결성 검사는 기본적으로 cost 99 미만의 cell만 통과
 - 선택된 trajectory index와 전체 개수
 - 선택된 `vx`, `vy`, `wz`
 - total score
-- invalid trajectory 개수
+- valid/invalid trajectory 개수
+- invalid trajectory를 처음 탈락시킨 critic별 개수와 비율
 - worst index
 - critic별 raw score, scale, contribution
+
+`first_reject_critic`은 다음 형식으로 출력된다.
+
+```text
+first_reject_critic=[
+  BaseObstacle=1430(65.5% invalid,64.9% all),
+  PathDist=402(18.4% invalid,18.2% all),
+  Oscillation=210(9.6% invalid,9.5% all)
+]
+```
+
+첫 번째 비율은 모든 invalid trajectory 중 해당 critic이 처음 탈락시킨
+비율이고, 두 번째 비율은 valid를 포함한 전체 trajectory 대비 비율이다.
+DWB는 critic을 설정 순서대로 평가하고 처음 발생한
+`IllegalTrajectoryException`에서 평가를 중단하므로, 이 값은 해당
+trajectory를 탈락시킬 수 있는 모든 critic이 아니라 **첫 탈락 critic**을
+의미한다. `/evaluation` 메시지에는 상세 예외 문구가 없으므로 critic 이름은
+알 수 있지만 같은 critic 내부의 구체적인 탈락 사유까지는 구분하지 못한다.
 
 DWB가 아닌 local planner를 사용하면 `/evaluation`이 없으므로 `DWB_EVALUATION_MISSING`이 발생할 수 있다. 이 경우 topic 설정을 맞추거나 해당 로그를 DWB 미사용 확인용으로 해석해야 한다.
 

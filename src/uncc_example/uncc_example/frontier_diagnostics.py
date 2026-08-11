@@ -7,7 +7,7 @@ Nav2's ComputePathToPose server for a read-only global path check.
 import heapq
 import math
 import re
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -1486,6 +1486,48 @@ class FrontierDiagnostics(Node):
             )
         return total
 
+    @staticmethod
+    def _dwb_rejection_summary(trajectories: Sequence) -> Tuple[int, str]:
+        """Count the first critic that rejected each illegal trajectory."""
+        rejected_by_critic = Counter()
+        invalid_count = 0
+        total_count = len(trajectories)
+        for trajectory in trajectories:
+            if float(trajectory.total) >= 0.0:
+                continue
+            invalid_count += 1
+            failure_score = next(
+                (
+                    score for score in trajectory.scores
+                    if float(score.raw_score) < 0.0
+                ),
+                None,
+            )
+            # DWB normally publishes exactly one raw_score=-1 entry for an
+            # illegal trajectory.  Retain a useful name for implementations
+            # that only provide a single score without the sentinel value.
+            if failure_score is None and trajectory.scores:
+                failure_score = trajectory.scores[-1]
+            critic_name = (
+                str(failure_score.name) if failure_score is not None else ''
+            ) or 'UNKNOWN'
+            rejected_by_critic[critic_name] += 1
+
+        if invalid_count == 0:
+            return 0, 'none'
+        detail = ', '.join(
+            '%s=%d(%.1f%% invalid,%.1f%% all)' % (
+                name,
+                count,
+                100.0 * count / invalid_count,
+                100.0 * count / total_count,
+            )
+            for name, count in rejected_by_critic.most_common()
+        )
+        return invalid_count, detail or 'UNKNOWN=%d(100.0%% invalid)' % (
+            invalid_count,
+        )
+
     def _dwb_callback(self, msg: LocalPlanEvaluation):
         self.dwb_message_received = True
         if not msg.twists:
@@ -1498,12 +1540,18 @@ class FrontierDiagnostics(Node):
                 self.dwb_summary,
             )
             return
+        invalid_count, rejection_text = self._dwb_rejection_summary(msg.twists)
+        self.dwb_valid_count = len(msg.twists) - invalid_count
         best_index = int(msg.best_index)
         if best_index < 0 or best_index >= len(msg.twists):
             self.dwb_summary = (
-                'invalid best_index=%d trajectories=%d' % (
+                'invalid best_index=%d trajectories=%d valid=%d invalid=%d '
+                'first_reject_critic=[%s]' % (
                     best_index,
                     len(msg.twists),
+                    self.dwb_valid_count,
+                    invalid_count,
+                    rejection_text,
                 )
             )
             self._set_condition(
@@ -1529,19 +1577,20 @@ class FrontierDiagnostics(Node):
             for item in critics
         )
         velocity = best.traj.velocity
-        invalid_count = sum(1 for score in msg.twists if score.total < 0.0)
-        self.dwb_valid_count = len(msg.twists) - invalid_count
         self.dwb_summary = (
             'selected index=%d/%d velocity=(vx=%.3f,vy=%.3f,wz=%.3f) '
-            'total=%.3f invalid=%d worst_index=%d critics=[%s]' % (
+            'total=%.3f valid=%d invalid=%d worst_index=%d '
+            'first_reject_critic=[%s] selected_critics=[%s]' % (
                 best_index,
                 len(msg.twists),
                 velocity.x,
                 velocity.y,
                 velocity.theta,
                 best.total,
+                self.dwb_valid_count,
                 invalid_count,
                 int(msg.worst_index),
+                rejection_text,
                 critic_text,
             )
         )
