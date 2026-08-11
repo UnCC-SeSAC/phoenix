@@ -26,6 +26,7 @@ from rcl_interfaces.msg import Log
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -346,6 +347,15 @@ class FrontierDiagnostics(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
+    @staticmethod
+    def _latest_evaluation_qos() -> QoSProfile:
+        """Keep only the newest large DWB evaluation without a backlog."""
+        return QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
     def _sub(self, msg_type, topic, callback, qos):
         self._subscriptions.append(
             self.create_subscription(msg_type, topic, callback, qos)
@@ -398,7 +408,7 @@ class FrontierDiagnostics(Node):
             LocalPlanEvaluation,
             self.dwb_evaluation_topic,
             self._dwb_callback,
-            self._volatile_qos(),
+            self._latest_evaluation_qos(),
         )
         self._sub(
             Path,
@@ -1098,7 +1108,7 @@ class FrontierDiagnostics(Node):
                 target_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.15),
+                timeout=Duration(seconds=0.0),
             ).transform
         except TransformException as exc:
             self.tf_issue = f'{source_frame} -> {target_frame}: {exc}'
@@ -1119,7 +1129,7 @@ class FrontierDiagnostics(Node):
                 frame,
                 self.base_frame,
                 Time(),
-                timeout=Duration(seconds=0.15),
+                timeout=Duration(seconds=0.0),
             ).transform
         except TransformException as exc:
             self.tf_issue = f'{frame} <- {self.base_frame}: {exc}'
@@ -2183,14 +2193,18 @@ def main(args=None):
     """Run the diagnostics node until interrupted."""
     rclpy.init(args=args)
     node = FrontierDiagnostics()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         # A launch SIGINT may already have shut down the context.  Destroying
         # subscriptions again on some rclpy versions raises during clean exit.
         if rclpy.ok():
+            executor.remove_node(node)
             node.destroy_node()
             rclpy.shutdown()
 

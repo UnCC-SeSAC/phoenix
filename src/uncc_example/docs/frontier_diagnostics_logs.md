@@ -29,6 +29,21 @@ ros2 launch uncc_example frontier_diagnostics.launch.py
 
 기본 진단 주기는 1초이고, 기본 cooldown은 10초다.
 
+## Callback 및 TF 처리 방식
+
+진단 노드는 2-thread `MultiThreadedExecutor`를 사용한다. 일반 subscription과
+진단 timer는 노드의 기본 callback group에서 순차 처리되고, TF listener는
+별도 executor thread에서 `/tf`를 갱신할 수 있다. 따라서 큰 DWB evaluation을
+분석하는 동안에도 TF buffer 갱신이 막히지 않는다.
+
+`/evaluation`은 trajectory와 critic 정보가 큰 메시지이므로 Best Effort,
+depth 1 QoS로 최신 메시지만 유지한다. 진단에 불필요한 오래된 evaluation
+backlog를 순서대로 처리하지 않는다.
+
+timer 및 snapshot 내부의 TF lookup은 non-blocking이다. 현재 TF가 buffer에
+없으면 즉시 `TF_UNAVAILABLE` 상태로 기록하고 executor가 다음 `/tf` callback을
+처리할 수 있도록 반환한다.
+
 ## 항상 출력되는 정상 상태 로그
 
 ### 노드 시작
