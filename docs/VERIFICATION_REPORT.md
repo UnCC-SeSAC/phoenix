@@ -154,3 +154,30 @@ Persistent PC `124 + CycloneDDS`와 Pi `205 + Fast DDS`는 변경하지 않았�
 First short-nav preflight는 Mock person map (0.5,0.0), 인명을 우선 확인해 Mission을 사용했다. Expected는 `NAVIGATE_TO person_0001`, actual은 `RETURN_HOME`과 stale robot pose validation reject였다.
 
 결과는 **SAFE ABORT**이며 NavigateToPose goal 0, non-zero cmd_vel 0, Robot movement 0 m다.
+
+## VLA-07 Software-only short-nav preflight — 2026-08-11
+
+SAFE ABORT 증거를 분리 분석했다.
+
+- stale pose: actual pose는 PC WorldModel에 한 번 들어왔지만 hotspot/DDS pose
+  stream 중단 뒤 `pose_updated_at`이 0.5초 freshness 한계를 넘었다.
+  Validator reject는 정상이며 threshold는 변경하지 않았다.
+- `RETURN_HOME`: 현장 perception fixture가 고정 timestamp를 사용해
+  observation이 1.0초 freshness 한계를 넘고 `person_0001`이 생성되지 않았다.
+  또한 일반 MockVLABrain은 0.8 m 이내 person을 `REPORT_PERSON`으로 고르는
+  production mock semantics를 갖기 때문에 first-motion transport gate에 사용하지 않는다.
+
+`vla_short_nav_preflight`는 gate 전용 최소 decision stub과
+`MockNavigationAdapter`를 사용한다. fresh robot pose stream, 현재 timestamp의
+person map `(0.5,0.0)`, Mission `인명을 우선 확인해.`를 입력한 결과:
+
+- stable ID: `person_0001`
+- decision: `NAVIGATE_TO person_0001`
+- Resolver: map `(0.5,0.0, yaw=0.0)`
+- Validator: approved
+- Dispatcher: `ACCEPTED` by Mock Navigation
+- actual Nav2 goal: 0
+- cmd_vel: 0
+
+연속 pose update의 freshness 유지, stale pose reject, stable-ID/decision/
+Resolver/Validator/Mock dispatch E2E를 regression test로 고정했다.

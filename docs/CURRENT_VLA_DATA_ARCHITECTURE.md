@@ -28,10 +28,10 @@ VLA의 authoritative semantic target position은 `map` frame의 `(x, y)`이다. 
 RGB / Depth source frame
         ↓
 YOLO raw detection — /yolo/detections (std_msgs/String)
-class_name, confidence, representative pixel x/y, frame_size,
+class_name, score, representative pixel x/y, frame_size,
 depth, depth_status, shared source stamp_sec/nanosec
         ↓
-VisionDetector — CameraInfo + camera optical-frame point + TF
+thin score→confidence mapping → VisionDetector — CameraInfo + camera optical-frame point + TF
         ↓
 /vision/detections (std_msgs/String)
 class, confidence, map x/y, frame_id=map, source stamp
@@ -56,7 +56,7 @@ Topic/type: `/yolo/detections`, `std_msgs/msg/String` JSON
 ```json
 {
   "class_name": "person",
-  "confidence": 0.93,
+  "score": 0.93,
   "x": 320,
   "y": 240,
   "frame_size": [640, 480],
@@ -70,14 +70,14 @@ Topic/type: `/yolo/detections`, `std_msgs/msg/String` JSON
 | Field | 의미 | VLA WorldModel 전달 |
 |---|---|---|
 | `class_name` | `person`, `fire`, `smoke` | person/fire만 전달; smoke ignore |
-| `confidence` | YOLO confidence `[0,1]` | Yes |
+| `score` | YOLO score `[0,1]` | scaling 없이 `confidence`로 이름만 mapping |
 | `x`, `y` | representative image pixel | No |
 | `frame_size` | pixel 좌표 기준 `[width,height]` | No |
 | `depth` | representative pixel의 meter depth 또는 null | No |
 | `depth_status` | `ok`, `fallback_bottom`, `fallback_below`, `fallback_ring`, `unknown` | No |
 | `stamp_sec/nanosec` | 원본 RGB/depth source-frame timestamp | UTC ISO로 변환 후 Yes |
 
-`x/y`는 map 좌표가 아니다. `frame_size`, raw depth/status, camera-frame point는 Perception metadata이므로 WorldModel에 저장하지 않는다. 한 source frame에서 여러 객체가 검출되면 detection별 String message를 발행하더라도 모두 같은 `stamp_sec/nanosec`를 공유한다. 각 객체의 class/confidence/pixel/depth/status는 독립적이다.
+`x/y`는 map 좌표가 아니다. `frame_size`, raw depth/status, camera-frame point는 Perception metadata이므로 WorldModel에 저장하지 않는다. 한 source frame에서 여러 객체가 검출되면 detection별 String message를 발행하더라도 모두 같은 `stamp_sec/nanosec`를 공유한다. 각 객체의 class/score/pixel/depth/status는 독립적이다. Production YOLO는 아직 미구현이며 VLA Core 계약은 `confidence`로 유지한다.
 
 현재 upstream은 stable tracking ID를 제공하지 않는다. VLA-03A가 same-class nearest map position, radius 0.5 m, TTL 2.0초, batch one-to-one 방식으로 process-local ID를 연결한다. 이는 full MOT가 아니며 빠른 이동, 근접 교차, 긴 occlusion에서 ID switch가 가능하다.
 

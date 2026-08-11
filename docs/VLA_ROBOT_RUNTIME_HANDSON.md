@@ -89,3 +89,33 @@ ros2 topic pub --once /ros_robot_controller/set_motor \
 
 1. hotspot/route/SSH identity와 별도 zero-halt terminal을 확인한다.
 2. odom, scan, map, TF, Nav2 lifecycle/action server를 확인한다.
+3. Frontier와 MissionExecutor를 OFF로 두고 goal owner가 하나인지 확인한다.
+4. 실제 `/vla/robot_pose_json`이 연속 갱신되는지 확인한다.
+5. WorldModel의 robot pose freshness와 `person_0001`을 확인한다.
+6. expected decision이 `NAVIGATE_TO person_0001`인지 확인한다.
+7. Resolver target이 map `(0.5, 0.0)`, Validator가 PASS인지 확인한다.
+8. 그 다음에만 actual navigation backend를 enable한다.
+
+Hardware 없이 4~7번 계약을 먼저 확인할 수 있다.
+
+```bash
+ros2 run fire_vla_core vla_short_nav_preflight
+```
+
+PASS 출력에는 `robot_pose_fresh=true`, `person_0001`,
+`decision=NAVIGATE_TO`, target map `(0.5,0.0)`,
+`validator_approved=true`, `submission=ACCEPTED`,
+`navigation_adapter=MockNavigationAdapter`,
+`actual_nav2_goals=0`, `cmd_vel_messages=0`이 포함되어야 한다.
+
+## 금지 사항
+
+- persistent PC/Pi domain 또는 RMW 설정 변경
+- Pi team workspace 직접 수정
+- goal owner가 둘 이상인 상태에서 navigation 시작
+- pose stream이 끊겼거나 Validator가 stale을 반환한 상태에서 goal 전송
+- motor board subscriber와 explicit zero halt를 확인하지 않은 상태에서 이동
+- production YOLO가 준비됐다고 가정
+
+Production YOLO raw `score`는 실제 연결 boundary에서 scaling 없이 VLA
+`confidence`로 이름만 mapping한다.
