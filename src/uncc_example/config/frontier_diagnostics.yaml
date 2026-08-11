@@ -1,0 +1,64 @@
+frontier_diagnostics:
+  ros__parameters:
+    map_topic: /map
+    global_costmap_topic: /global_costmap/costmap
+    local_costmap_topic: /local_costmap/costmap
+    selected_frontier_topic: /explore/selected_frontier
+    global_footprint_topic: /global_costmap/published_footprint
+    local_footprint_topic: /local_costmap/published_footprint
+
+    map_frame: map
+    base_frame: base_footprint
+
+    # OccupancyGrid values are -1 for unknown and normally 0..100 otherwise.
+    map_occupied_threshold: 65
+    costmap_blocked_threshold: 65
+    # Nav2 may traverse non-lethal inflation even when the explorer rejects it.
+    path_blocked_threshold: 99
+    lethal_cost_threshold: 99
+    allow_unknown_path: false
+
+    # A frontier this close to a raw-map wall is reported as wall-adjacent.
+    frontier_wall_proximity_m: 0.10
+    wall_search_radius_m: 1.00
+
+    # Used until a published footprint is received.
+    robot_length_m: 0.24
+    robot_width_m: 0.19
+    footprint_padding_m: 0.01
+    passage_probe_distance_m: 0.60
+
+    diagnostic_period_s: 1.0
+
+    # Read-only Nav2 global planning check.
+    compute_path_enabled: true
+    compute_path_action: /compute_path_to_pose
+    planner_id: GridBased
+    max_grid_path_expansions: 250000
+
+    # DWB debug_trajectory_details must be true for /evaluation.
+    dwb_evaluation_topic: /evaluation
+    local_plan_topic: /local_plan
+    transformed_global_plan_topic: /transformed_global_plan
+    controller_cmd_vel_topic: /cmd_vel_nav
+    output_cmd_vel_topic: /cmd_vel
+    navigate_status_topic: /navigate_to_pose/_action/status
+    navigate_feedback_topic: /navigate_to_pose/_action/feedback
+    odom_topic: /odom
+    scan_topic: /scan_raw
+
+    # Normal state is retained in memory; detailed output is anomaly-driven.
+    anomaly_only_logging: true
+    history_window_s: 10.0
+    event_cooldown_s: 10.0
+    startup_grace_period_s: 15.0
+
+    no_progress_timeout_s: 8.0
+    min_goal_progress_m: 0.05
+    stuck_timeout_s: 3.0
+    min_pose_progress_m: 0.02
+    min_yaw_progress_rad: 0.05
+    linear_cmd_threshold: 0.03
+    angular_cmd_threshold: 0.10
+    zero_cmd_timeout_s: 3.0
+    data_stale_timeout_s: 3.0

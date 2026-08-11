@@ -50,6 +50,7 @@ setup(
             'hazard_map_node = uncc_example.hazard_map_node:main',
             'hazard_test = uncc_example.hazard_test_publisher:main',
             'avoidance_manager = uncc_example.avoidance_manager:main',
+            'frontier_diagnostics = uncc_example.frontier_diagnostics:main',
         ],
     },
 )
