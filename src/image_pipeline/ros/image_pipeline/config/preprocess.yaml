@@ -1,0 +1,53 @@
+rgb_preprocess_node:
+  ros__parameters:
+    # --- 토픽 (로봇 수령 후 `ros2 topic list`로 실제 이름 확인해 수정) ---
+    input_topic: /camera/color/image_raw
+    output_topic: /image_enhanced
+    camera_info_topic: /camera/color/camera_info
+    output_camera_info_topic: /image_enhanced/camera_info
+    publish_camera_info: true
+
+    # --- 단계 전환 ---
+    # passthrough(1단계) -> clahe(2단계) -> full(3단계)
+    # dehaze는 디헤이즈 단독 기여도 분리용
+    mode: full
+
+    # 처리 해상도. 0이면 원본(1080p) 유지 — RPi5에서는 20fps 불가.
+    # tools/tune_offline.py --bench 결과를 근거로 결정할 것.
+    process_width: 640
+
+    gamma: 1.0              # <1이면 밝아짐. 완전 암부에서만 0.7~0.8 시도
+    lowlight_dehaze: false  # 반전-디헤이즈-반전 저조도 보정(실험적)
+
+    # --- CLAHE ---
+    clahe_clip_limit: 2.0   # 높을수록 대비↑, 노이즈도 같이↑ (2~3 권장)
+    clahe_tile_grid: [8, 8] # 작을수록 국소적. 연기가 균일하면 8, 얼룩지면 16
+
+    # --- 디헤이즈 (DCP) ---
+    dehaze_omega: 0.95      # 헤이즈 제거 강도. 1.0은 원근감 상실
+    dehaze_t0: 0.1          # 투과율 하한. 낮출수록 진한 연기 복원↑, 노이즈↑
+    dehaze_patch: 15        # 원본 해상도 기준 다크채널 패치
+    dehaze_scale: 0.25      # ★ 추정 단계 축소 배율 — 실시간성의 핵심 손잡이
+    dehaze_use_guided: true
+    dehaze_guided_radius: 8
+    dehaze_guided_eps: 0.001
+    dehaze_a_max: 0.92      # 대기광 상한. 불씨/화염에 끌리면 낮출 것
+    dehaze_sky_ratio: 1.0   # 대기광 후보를 화면 상단 비율로 제한 (1.0=제한없음)
+    # 대기광의 프레임 간 EMA (0=끔). A는 매 프레임 장면에서 추정되므로 로봇이
+    # 움직이면 같은 불씨가 프레임마다 다른 밝기로 복원됩니다. 실주행에서는
+    # 0.8~0.9 권장. 단, 켜면 출력이 이전 프레임에 의존해 결정론성이 깨지므로
+    # 정지영상 비교 실험에서는 0으로 두세요.
+    dehaze_a_smoothing: 0.85
+
+    stats_period_sec: 5.0   # 처리시간 로그 주기
+
+    # --- 자동 파라미터 적응 ---
+    # 임무 중 연기 농도가 변하므로(맑은 진입구 → 짙은 연기 → 다시 맑음)
+    # 고정값은 어느 한쪽에서 반드시 틀립니다. 켜면 omega/t0/clipLimit이
+    # 장면에서 측정한 연기농도·노이즈에 따라 자동 조정됩니다.
+    # ★ 조건 비교 실험·데이터셋 생성 중에는 꺼두세요(해석이 어려워집니다).
+    auto_tune: false
+    auto_tune_smoothing: 0.9      # 값이 튀지 않게 EMA
+    auto_tune_every: 10           # N프레임마다 갱신 (매 프레임 안 해도 충분)
+    auto_tune_haze_baseline: -1.0 # 음수면 관측 최솟값으로 자동 학습.
+                                  # 이미 연기 속에서 시작한다면 직접 지정할 것

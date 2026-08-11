@@ -1,0 +1,21 @@
+# colcon 산출물 (워크스페이스 루트에서 빌드할 때)
+build/
+install/
+log/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 로컬 검증 출력물
+out/
+local_check/
+
+# 학습 산출물 — 저장소에 넣지 않습니다 (용량)
+training/**/runs/
+training/**/datasets/
+training/**/data/
+*.pt
+
+**/*.md
+!README.md
