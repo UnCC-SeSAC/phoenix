@@ -1,21 +1,23 @@
-# colcon 산출물 (워크스페이스 루트에서 빌드할 때)
-build/
-install/
-log/
-
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# 로컬 검증 출력물
-out/
+# 로컬 검증 산출물 (재생성 가능)
 local_check/
+out/
+testdata/
+*.bag/
 
-# 학습 산출물 — 저장소에 넣지 않습니다 (용량)
-training/**/runs/
-training/**/datasets/
-training/**/data/
-*.pt
+# 데이터셋 — 용량이 크므로 저장소에 넣지 않습니다.
+# raw_frames(원본+라벨)는 마스터 자산이니 별도 백업하세요.
+dataset/
+raw_frames/
 
-**/*.md
-!/README.md
+# ROS2 빌드
+build/
+install/
+log/
+
+.vscode/
+.idea/
+.DS_Store
