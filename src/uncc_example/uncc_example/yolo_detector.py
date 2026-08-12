@@ -16,7 +16,9 @@ from std_msgs.msg import String
 class YoloDetector(Node):
     """
     RGB 프레임마다 객체 탐지를 수행하고, depth 이미지에서 해당
-    픽셀의 깊이값까지 읽어서 하나의 JSON 으로 묶어 publish 한다.
+    픽셀의 깊이값까지 읽어서, 그 프레임에서 나온 감지 전부를 JSON
+    메시지 하나에 리스트로 묶어 publish 한다 (감지별로 따로 안 보냄
+    — 뒤쪽에서 순서가 아니라 내용으로 비교/짝짓기할 수 있도록).
 
     self.detect() 는 지금은 파이프라인 테스트용 더미 구현이고,
     실제 YOLO 추론 코드(다른 사람이 작성)로 통째로 교체될 예정이다.
@@ -99,6 +101,12 @@ class YoloDetector(Node):
         scale_y = depth_h / msg.height
         depth_header = self.latest_depth.header
 
+        # 한 프레임의 감지 결과를 전부 모아서 메시지 하나로 묶어
+        # 보낸다 — 감지끼리 순서(도착 순)가 아니라 실제 내용(거리
+        # 등)으로 비교/짝짓기할 수 있도록, 프레임 단위로 한꺼번에
+        # 전달하기 위함.
+        results = []
+
         for detection in detections:
 
             result = self._read_depth(
@@ -110,8 +118,7 @@ class YoloDetector(Node):
 
             u, v, depth_m = result
 
-            out = String()
-            out.data = json.dumps({
+            results.append({
                 'class_name': detection['class_name'],
                 # x, y 는 depth 이미지 해상도 기준 픽셀 좌표로
                 # 통일해서 보낸다 — vision_detector 는 더 이상
@@ -119,13 +126,21 @@ class YoloDetector(Node):
                 'x': u,
                 'y': v,
                 'depth': depth_m,
-                # depth 를 읽은 시각 — vision_detector 가 TF 변환할
-                # 때 그대로 사용한다. frame_id 는 카메라가 고정
-                # 장착이라 vision_detector 쪽 파라미터로 고정.
-                'stamp_sec': depth_header.stamp.sec,
-                'stamp_nanosec': depth_header.stamp.nanosec,
             })
-            self.detection_pub.publish(out)
+
+        if not results:
+            return
+
+        out = String()
+        out.data = json.dumps({
+            # 이 프레임의 depth 를 읽은 시각 — vision_detector 가
+            # TF 변환할 때 그대로 사용한다. frame_id 는 카메라가
+            # 고정 장착이라 vision_detector 쪽 파라미터로 고정.
+            'stamp_sec': depth_header.stamp.sec,
+            'stamp_nanosec': depth_header.stamp.nanosec,
+            'detections': results,
+        })
+        self.detection_pub.publish(out)
 
     def _read_depth(
         self, detection, depth_image, depth_w, depth_h, scale_x, scale_y

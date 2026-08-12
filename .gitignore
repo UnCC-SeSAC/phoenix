@@ -5,5 +5,9 @@ install/
 build/
 log/
 
+build
+install
+log
+
 __pycache__
 *.pyc
