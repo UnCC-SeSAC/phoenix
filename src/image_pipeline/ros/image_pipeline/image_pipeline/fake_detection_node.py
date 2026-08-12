@@ -106,12 +106,22 @@ class FakeDetection(Node):
         self.box_enhanced = scale_box(self.scene.box_color,
                                       self.enh_scale, self.enh_scale)
 
+        # ★ 사슬 모드 — 태스크①의 **입력**까지 이 노드가 냅니다.
+        #   컬러를 여기서 내야 뎁스와 **같은 stamp**가 됩니다. 카메라를 따로
+        #   띄우면 stamp가 갈라져 StampMonitor가 가짜 경보를 냅니다.
+        self.publish_color = bool(p("publish_color").value)
+        # 사슬 모드에서는 전처리·YOLO가 각자 내므로 여기서 내면 충돌합니다.
+        self.publish_detections = bool(p("publish_detections").value)
+        self.publish_color_info = bool(p("publish_color_info").value)
+        self.haze = float(p("haze").value)
+
         self.bridge = CvBridge()
         # ★ 배열이 아니라 **Image 메시지**를 캐시합니다.
         #   cv2_to_imgmsg 는 0.61MB 를 매번 새로 담느라 파이썬에서 느립니다.
         #   배열만 캐시했을 때 뎁스가 10.6Hz 밖에 안 나가서, 태스크② 쪽
         #   동기화율이 낮은 것처럼 보였습니다(실제로는 더미가 병목).
         self._depth_msg = None if self.scene.noise_m else self._make_depth_msg()
+        self._color_msg = self._make_color_msg() if self.publish_color else None
 
         # --- 발행 ---
         self.det_pub = self.create_publisher(
@@ -122,6 +132,9 @@ class FakeDetection(Node):
             CameraInfo, str(p("depth_info_topic").value), qos_profile_sensor_data)
         self.color_info_pub = self.create_publisher(
             CameraInfo, str(p("color_info_topic").value), qos_profile_sensor_data)
+        self.color_pub = self.create_publisher(
+            Image, str(p("color_topic").value), qos_profile_sensor_data) \
+            if self.publish_color else None
         # ★ 원본 컬러 K. 메인이 역투영에 쓸 것과 같고, 태스크②가 발행할 x,y의
         #   기준입니다. 드라이버가 실제로 내는 토픽 이름을 씁니다.
         self.rgb0_info_pub = self.create_publisher(
@@ -146,6 +159,16 @@ class FakeDetection(Node):
         self.declare_parameter("color_info_topic", "/image_enhanced/camera_info")
         self.declare_parameter("rgb0_info_topic",
                                "/ascamera/camera_publisher/rgb0/camera_info")
+        # 사슬 모드용 — 태스크①이 구독하는 바로 그 토픽 (RGB는 "_raw"가 없습니다)
+        self.declare_parameter("color_topic", "/ascamera/camera_publisher/rgb0/image")
+        # ★ 기본 꺼짐. 켜면 이 노드가 태스크①의 입력까지 냅니다
+        #   (full_chain_check.launch.py). 뎁스와 **같은 stamp**를 씁니다.
+        self.declare_parameter("publish_color", False)
+        # 사슬 모드에서는 YOLO 노드와 전처리가 각자 내므로 여기서는 꺼야 합니다.
+        self.declare_parameter("publish_detections", True)
+        self.declare_parameter("publish_color_info", True)
+        # 합성 컬러에 걸 연기 농도 0~1. 태스크①의 디헤이즈가 걷어낼 대상입니다.
+        self.declare_parameter("haze", 0.0)
         # 0 = 축소 없음. 320 등으로 주면 태스크②의 '원본 좌표 되돌리기'가
         # 실제로 검증됩니다 (안 되돌려도 화면 중앙은 맞아 보입니다).
         self.declare_parameter("enhanced_width", 0)
@@ -245,6 +268,13 @@ class FakeDetection(Node):
         msg.header.frame_id = self.depth_frame
         return msg
 
+    def _make_color_msg(self) -> Image:
+        # 장면 조립은 depth.DummyScene.color_image() — 노드는 배선만.
+        msg = self.bridge.cv2_to_imgmsg(self.scene.color_image(self.haze),
+                                        encoding="bgr8")
+        msg.header.frame_id = self.color_frame
+        return msg
+
     # ------------------------------------------------------------------- publish
 
     def tick(self):
@@ -258,15 +288,25 @@ class FakeDetection(Node):
         depth_msg.header.stamp = stamp      # 내용은 같고 stamp만 갱신
         self.depth_pub.publish(depth_msg)
 
+        if self.color_pub is not None:
+            # ★ 뎁스와 **같은 stamp**. 카메라를 별도 노드로 띄우면 여기가
+            #   갈라져서 StampMonitor가 가짜 경보를 냅니다.
+            self._color_msg.header.stamp = stamp
+            self.color_pub.publish(self._color_msg)
+
         self.depth_info_pub.publish(
             self._camera_info(stamp, self.depth_frame, self.scene.k_depth,
                               *self.scene.depth_size))
-        self.color_info_pub.publish(
-            self._camera_info(stamp, self.color_frame, self.k_enhanced,
-                              *self.enh_size))
+        if self.publish_color_info:
+            self.color_info_pub.publish(
+                self._camera_info(stamp, self.color_frame, self.k_enhanced,
+                                  *self.enh_size))
         self.rgb0_info_pub.publish(
             self._camera_info(stamp, self.color_frame, self.scene.k_color,
                               *self.scene.color_size))
+
+        if not self.publish_detections:
+            return
 
         arr = Detection2DArray()
         det_stamp = stamp

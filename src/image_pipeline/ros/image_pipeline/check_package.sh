@@ -85,8 +85,13 @@ for f in image_pipeline/dehaze.py image_pipeline/pipeline.py \
          image_pipeline/preprocess_node.py image_pipeline/fake_camera_node.py \
          image_pipeline/depth.py image_pipeline/detection_msgs.py \
          image_pipeline/fake_detection_node.py image_pipeline/detection_3d_node.py \
-         image_pipeline/detection3d.py image_pipeline/aodnet.py \
+         image_pipeline/detection3d.py image_pipeline/detection_json.py \
+         image_pipeline/aodnet.py \
+         image_pipeline/yolo.py image_pipeline/yolo_node.py \
          tests/test_dehaze.py tests/test_depth.py tests/test_detection3d.py \
+         tests/test_detection_json.py tests/test_yolo.py \
+         tools/detect_offline.py tools/check_yolo_wiring.py \
+         launch/full_chain_check.launch.py launch/yolo.launch.py \
          config/preprocess.yaml launch/preprocess.launch.py; do
 	check "$f" "소스 파일" yes
 done

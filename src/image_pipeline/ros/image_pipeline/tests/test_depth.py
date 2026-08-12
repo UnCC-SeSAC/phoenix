@@ -747,6 +747,44 @@ class TestDummyScene:
     틀렸을 때 "더미가 틀렸는지 태스크②가 틀렸는지"를 구분할 수 없습니다.
     """
 
+    def test_color_image_flame_is_where_the_depth_target_is(self):
+        """★ 컬러의 불꽃과 뎁스의 대상이 **같은 자리**여야 합니다.
+
+        사슬 점검(`full_chain_check.launch.py`)에서 YOLO가 컬러를 보고 낸
+        박스로 뎁스를 샘플링합니다. 둘이 어긋나면 검증 장치 자체가
+        "배선은 맞는데 거리가 이상한" 거짓 신호를 냅니다.
+        """
+        sc = dummy_scene(distance_m=3.2)
+        img = sc.color_image()
+        assert img.shape == (sc.color_size[1], sc.color_size[0], 3)
+        assert img.dtype == np.uint8
+        # 밝은 영역의 무게중심이 박스 중심과 맞는지.
+        # (불꽃 중심은 포화돼 평평하므로 argmax는 동점 중 아무거나 고릅니다)
+        gray = img.max(axis=2).astype(np.float64)
+        hot = np.where(gray > 200, gray, 0.0)
+        assert hot.sum() > 0, "불꽃이 그려지지 않았습니다"
+        yy, xx = np.mgrid[0:gray.shape[0], 0:gray.shape[1]]
+        u = float((xx * hot).sum() / hot.sum())
+        v = float((yy * hot).sum() / hot.sum())
+        cu, cv = box_center(sc.box_color)
+        assert abs(u - cu) <= 2 and abs(v - cv) <= 2
+
+    def test_color_image_is_darker_than_the_flame(self):
+        """배경이 불꽃만큼 밝으면 태스크①·YOLO가 볼 게 없습니다."""
+        sc = dummy_scene()
+        img = sc.color_image()
+        cu, cv = box_center(sc.box_color)
+        flame = int(img[int(cv), int(cu)].max())
+        corner = int(img[2, 2].max())
+        assert flame > 200 and corner < 80
+
+    def test_haze_raises_the_floor(self):
+        """연기는 어두운 곳을 들어올립니다 — 디헤이즈가 되돌릴 대상."""
+        sc = dummy_scene()
+        clear = sc.color_image(haze=0.0)
+        hazy = sc.color_image(haze=0.4)
+        assert int(hazy[2, 2].max()) > int(clear[2, 2].max()) + 20
+
     def test_default_matches_driver_launch(self):
         """★ 기본값은 실제 드라이버 설정과 같아야 합니다.
 

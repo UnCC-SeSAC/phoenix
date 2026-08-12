@@ -28,6 +28,7 @@ setup(
             'preprocess_node = image_pipeline.preprocess_node:main',
             'fake_camera_node = image_pipeline.fake_camera_node:main',
             'fake_detection_node = image_pipeline.fake_detection_node:main',
+            'yolo_node = image_pipeline.yolo_node:main',
             'detection_3d_node = image_pipeline.detection_3d_node:main',
         ],
     },
