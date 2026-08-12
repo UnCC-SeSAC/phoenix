@@ -1,9 +1,0 @@
-# 최대 시도 횟수. 0(미지정)이면 서버가 자체 기본값을 사용한다.
-int32 max_attempts
----
-bool success
-int32 attempts
-string message
----
-int32 current_attempt
-string status

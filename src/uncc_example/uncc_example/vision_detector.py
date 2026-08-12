@@ -16,12 +16,9 @@ from geometry_msgs.msg import PointStamped
 
 class VisionDetector(Node):
     """
-    yolo_detector 가 프레임 단위로 묶어 publish 하는 JSON(감지
-    리스트: class_name + depth 이미지 기준 픽셀 좌표 + depth 값)을
-    camera_info/TF 로 map 좌표계 3D 위치로 변환하고, 마찬가지로
-    프레임 단위로 묶어서 JSON 으로 다시 publish 한다 — state_manager
-    가 감지 도착 순서가 아니라 한 프레임 안의 내용으로 짝짓기할 수
-    있도록 순서를 안 흐트러뜨린다.
+    yolo_detector 가 publish 하는 JSON(class_name + depth 이미지
+    기준 픽셀 좌표 + depth 값)을 camera_info/TF 로 map 좌표계 3D
+    위치로 변환하고 JSON 으로 다시 publish 한다.
 
     depth 이미지를 직접 읽는 건 yolo_detector 가 담당한다(감지
     시점에 바로 같은 프레임에서 depth 를 읽어야 프레임이 안 어긋남).
@@ -125,43 +122,26 @@ class VisionDetector(Node):
             return
 
         try:
-            payload = json.loads(msg.data)
+            detection = json.loads(msg.data)
         except json.JSONDecodeError as e:
             self.get_logger().warn(
                 f'Invalid detection JSON: {e}'
             )
             return
 
-        # 프레임 전체가 같은 시각을 공유하므로 한 번만 변환해둔다.
-        stamp = Time(
-            seconds=payload['stamp_sec'],
-            nanoseconds=payload['stamp_nanosec'],
-        ).to_msg()
+        class_name = detection.get('class_name')
 
-        results = []
+        if class_name not in self.target_classes:
+            return
 
-        for detection in payload.get('detections', []):
+        map_point = self._compute_map_position(detection)
 
-            class_name = detection.get('class_name')
+        if map_point is None:
+            return
 
-            if class_name not in self.target_classes:
-                continue
+        self._publish_detection(class_name, map_point)
 
-            map_point = self._compute_map_position(detection, stamp)
-
-            if map_point is None:
-                continue
-
-            results.append({
-                'class': class_name,
-                'x': map_point.point.x,
-                'y': map_point.point.y,
-            })
-
-        if results:
-            self._publish_detections(results)
-
-    def _compute_map_position(self, detection, stamp):
+    def _compute_map_position(self, detection):
 
         u = detection['x']
         v = detection['y']
@@ -169,7 +149,10 @@ class VisionDetector(Node):
 
         point = PointStamped()
         point.header.frame_id = self.depth_frame_id
-        point.header.stamp = stamp
+        point.header.stamp = Time(
+            seconds=detection['stamp_sec'],
+            nanoseconds=detection['stamp_nanosec'],
+        ).to_msg()
         point.point.x = (u - self.cx) * depth_m / self.fx
         point.point.y = (v - self.cy) * depth_m / self.fy
         point.point.z = depth_m
@@ -187,11 +170,13 @@ class VisionDetector(Node):
             )
             return None
 
-    def _publish_detections(self, results):
+    def _publish_detection(self, class_name, map_point):
 
         payload = {
+            'class': class_name,
+            'x': map_point.point.x,
+            'y': map_point.point.y,
             'frame_id': self.map_frame,
-            'detections': results,
         }
 
         msg = String()

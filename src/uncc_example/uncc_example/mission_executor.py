@@ -4,12 +4,10 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import String
-from std_srvs.srv import SetBool
+from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool, Trigger
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
-
-from interfaces.action import SuppressFire
 
 from .state_manager import StateManager
 
@@ -44,19 +42,22 @@ class MissionExecutor(Node):
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
 
         # -----------------------------
-        # 진압 동작 (fire_suppression_node)
+        # 진화 동작 (fire_extinguisher 노드)
         # -----------------------------
-        # fire_suppression_node 가 action 서버를 'suppress_fire' (상대
-        # 이름, 네임스페이스 없음) 로 등록하므로 클라이언트도 동일하게
-        # 맞춘다. 둘 중 하나라도 launch 시 네임스페이스가 붙으면
-        # 이름이 어긋나 서로 못 찾으니 주의.
-        self._fire_action_client = ActionClient(
-            self,
-            SuppressFire,
-            "suppress_fire",
+        self.fire_extinguisher_client = self.create_client(
+            Trigger,
+            "/fire_extinguisher/extinguish",
         )
 
-        self._fire_goal_handle = None
+        # ~/extinguish 는 "시작해라" 트리거일 뿐이고, 실제 성공/실패
+        # 결과는 이 토픽으로 비동기로 온다. 성공/실패 상관없이
+        # 결과가 오면 그냥 완료 처리하고 넘어간다 (재시도 안 함).
+        self.create_subscription(
+            Bool,
+            "/fire_extinguisher/result",
+            self.fire_extinguisher_result_callback,
+            10,
+        )
 
         # -----------------------------
         # Subscriptions
@@ -101,12 +102,6 @@ class MissionExecutor(Node):
     # =========================================================
 
     def state_callback(self, msg):
-
-        if msg.data == StateManager.RETURNING_TO_BASE:
-            # 배터리 부족 등으로 복귀가 최우선이 되면, 진행 중이던
-            # 진압 동작은 더 이상 의미가 없으니 취소한다.
-            self._cancel_fire_suppression()
-
         self.state = msg.data
 
     def target_type_callback(self, msg):
@@ -131,7 +126,7 @@ class MissionExecutor(Node):
         ):
             # 셋 다 "현재 목적지로 이동" 뿐이라 동일하게 처리한다.
             # 도착 후 동작(PERSON_DETECTED 는 TODO 인 구조 동작,
-            # FIRE_DETECTED 는 fire_suppression 호출, RETURNING_TO_
+            # FIRE_DETECTED 는 fire_extinguisher 호출, RETURNING_TO_
             # BASE 는 도착만으로 완료)이 서로 다른 부분은 도착 시점인
             # _nav_goal_result 에서 분기한다.
             self.get_logger().info(
@@ -242,9 +237,9 @@ class MissionExecutor(Node):
             # 보낼 때 따로 스냅샷을 떠둘 필요 없이 이 시점의 값을
             # 그대로 신뢰할 수 있다.
             if self.state == StateManager.FIRE_DETECTED:
-                # 도착만으론 완료가 아니다 — 진압 노드를 불러서 그
+                # 도착만으론 완료가 아니다 — 진화 노드를 불러서 그
                 # 응답이 와야 완료 처리한다.
-                self._call_fire_suppression()
+                self._call_fire_extinguisher()
             else:
                 # RETURNING_TO_BASE/EXPLORING 은 state_manager 쪽에
                 # active_target 이 없어서 호출해도 그냥 무시된다
@@ -254,79 +249,38 @@ class MissionExecutor(Node):
             self.get_logger().warn(f"Nav2 goal 이 완료되지 못함 (status={status})")
 
     # =========================================================
-    # 진압 동작 (fire_suppression_node 호출)
+    # 진화 동작 (fire_extinguisher 노드 호출)
     # =========================================================
 
-    def _call_fire_suppression(self):
+    def _call_fire_extinguisher(self):
         """
-        fire_suppression_node 의 suppress_fire 액션에 goal 을 보낸다.
-        완료 여부는 여기서 기다리지 않고 _suppress_goal_result 에서
-        처리한다.
+        ~/extinguish 는 동작을 "시작"만 시키는 트리거다. 완료
+        여부는 여기서 기다리지 않고 fire_extinguisher_result_callback
+        (토픽 구독)에서 처리한다.
         """
 
-        if not self._fire_action_client.server_is_ready():
+        if not self.fire_extinguisher_client.service_is_ready():
             self.get_logger().warn(
-                "fire_suppression 액션 서버가 아직 준비되지 않음",
-                throttle_duration_sec=2.0,
+                "fire_extinguisher 서비스가 아직 준비되지 않음"
             )
             return
 
-        goal_msg = SuppressFire.Goal()
-        # max_attempts 를 안 채우면(0) 서버가 자체 DEFAULT_MAX_ATTEMPTS 를 쓴다.
+        self.fire_extinguisher_client.call_async(Trigger.Request())
 
-        send_future = self._fire_action_client.send_goal_async(
-            goal_msg,
-            feedback_callback=self._suppress_feedback_callback,
-        )
-        send_future.add_done_callback(self._suppress_goal_response)
-
-    def _cancel_fire_suppression(self):
-
-        if self._fire_goal_handle is not None:
-            self._fire_goal_handle.cancel_goal_async()
-            self._fire_goal_handle = None
-
-    def _suppress_feedback_callback(self, feedback_msg):
-
-        fb = feedback_msg.feedback
-
-        self.get_logger().info(
-            f"fire_suppression {fb.current_attempt}차 — {fb.status}",
-            throttle_duration_sec=1.0,
-        )
-
-    def _suppress_goal_response(self, future):
-
-        goal_handle = future.result()
-
-        if not goal_handle.accepted:
-            self.get_logger().warn("fire_suppression goal 이 거부됨")
-            return
-
-        self._fire_goal_handle = goal_handle
-
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._suppress_goal_result)
-
-    def _suppress_goal_result(self, future):
+    def fire_extinguisher_result_callback(self, msg):
         """
-        불을 껐든 못 껐든(success 상관없이) 결과가 왔으면 그냥
+        불을 껐든 못 껐든(msg.data 상관없이) 결과가 왔으면 그냥
         완료 처리하고 다음 목적지로 넘어간다 — 재시도하지 않는다.
         실제 성공 여부는 state_manager 에 그대로 전달해서 지도
         표시(꺼짐/안꺼짐)에 반영되게 한다.
         """
 
-        self._fire_goal_handle = None
-
-        result = future.result().result
-
-        if not result.success:
+        if not msg.data:
             self.get_logger().warn(
-                f"fire_suppression 실패(attempts={result.attempts}): "
-                f"{result.message} — 그래도 넘어감"
+                "fire_extinguisher 가 실패를 report 함 — 그래도 넘어감"
             )
 
-        self.notify_target_complete(success=result.success)
+        self.notify_target_complete(success=msg.data)
 
     # =========================================================
     # state_manager 에게 완료 통보

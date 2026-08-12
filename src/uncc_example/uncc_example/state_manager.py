@@ -190,41 +190,20 @@ class StateManager(Node):
             )
             return
 
-        frame_id = payload.get('frame_id', self.map_frame)
-        new_entries = []
+        target_type = payload.get('class')
 
-        # 한 프레임의 감지를 전부 먼저 추가만 해두고(무리 묶기는
-        # 아직 안 함) — 도착 순서가 아니라 프레임 전체를 놓고 거리로
-        # 무리를 정해야 하므로, 다 추가한 뒤 한 번에 처리한다.
-        for detection in payload.get('detections', []):
+        if target_type not in ('fire', 'person'):
+            return
 
-            target_type = detection.get('class')
+        pose_stamped = self._make_pose_stamped(
+            payload.get('frame_id', self.map_frame),
+            payload['x'],
+            payload['y'],
+        )
 
-            if target_type not in ('fire', 'person'):
-                continue
-
-            pose_stamped = self._make_pose_stamped(
-                frame_id,
-                detection['x'],
-                detection['y'],
-            )
-
-            entry = self._add_detection(target_type, pose_stamped)
-
-            if entry is not None:
-                new_entries.append(entry)
-
-        if new_entries:
-            self._update_clusters()
-            self._publish_found_targets()
+        self._add_detection(target_type, pose_stamped)
 
     def _add_detection(self, target_type, pose_stamped):
-        """
-        중복(이미 기록된 대상)이면 아무것도 안 하고 None 반환.
-        새로 추가됐으면 그 entry 를 반환 — 무리 묶기는 여기서 안
-        하고 detection_callback 이 프레임 전체를 다 추가한 뒤
-        _update_clusters 에서 한꺼번에 처리한다.
-        """
 
         pose = pose_stamped.pose
 
@@ -232,74 +211,50 @@ class StateManager(Node):
             # 이미 기록된 대상 — pending/done 상관없이 재감지는
             # 위치 갱신도, 재방문 대상 추가도 하지 않고 무시한다.
             # 꺼졌는지 여부는 나중에 지도를 그릴 때 status 로만 확인한다.
-            return None
+            return
 
         entry = {
             'type': target_type,
             'pose': pose_stamped,
             'status': 'pending',
-            # 임계값 이내로 묶인 무리(리스트, 무리원끼리 같은 리스트
-            # 객체 공유). 대표 하나만 짝짓지 않고 무리 전체가 같은
-            # 우선순위를 공유하도록 하기 위함.
-            'cluster': None,
+            # 근처의 반대 타입 대기 항목과 짝지어지면 그 dict 를
+            # 가리킨다. 한 번 맺어지면 상대가 완료돼도 안 풀린다 —
+            # '이 사람은 원래 저 불과 한 세트였다'는 사실 자체가
+            # 우선순위 판단에 계속 쓰이기 때문.
+            'partner': None,
             # fire 만 의미 있음 — target_complete_callback 이
             # 실제 진화 성공 여부를 여기에 채운다 (지도 표시용).
             'extinguished': None,
         }
 
+        partner_type = 'person' if target_type == 'fire' else 'fire'
+        partner = self._find_unpaired_partner(partner_type, pose)
+
+        if partner is not None:
+            entry['partner'] = partner
+            partner['partner'] = entry
+
         self.found_targets.append(entry)
         self.target_queue.append(entry)
 
-        return entry
+        self._publish_found_targets()
 
-    def _update_clusters(self):
-        """
-        아직 무리가 없는 불/사람 중, 임계값 이내인 불-사람 쌍을
-        전부 하나의 무리로 묶는다(연쇄적으로도 합쳐짐).
-        """
+    def _find_unpaired_partner(self, partner_type, pose):
 
-        unclustered = [
-            entry for entry in self.target_queue
-            if entry['cluster'] is None
-        ]
+        for entry in self.target_queue:
 
-        fires = [entry for entry in unclustered if entry['type'] == 'fire']
-        persons = [
-            entry for entry in unclustered if entry['type'] == 'person'
-        ]
+            if entry['type'] != partner_type or entry['partner'] is not None:
+                continue
 
-        for fire in fires:
-            for person in persons:
-
-                distance = self._planar_distance_xy(
-                    fire['pose'].pose.position.x,
-                    fire['pose'].pose.position.y,
-                    person['pose'].pose,
+            if (
+                self._planar_distance_xy(
+                    pose.position.x, pose.position.y, entry['pose'].pose
                 )
+                <= self.fire_person_proximity_threshold
+            ):
+                return entry
 
-                if distance <= self.fire_person_proximity_threshold:
-                    self._merge_into_cluster(fire, person)
-
-    def _merge_into_cluster(self, a, b):
-
-        cluster_a = a['cluster']
-        cluster_b = b['cluster']
-
-        if cluster_a is None and cluster_b is None:
-            cluster = [a, b]
-            a['cluster'] = cluster
-            b['cluster'] = cluster
-        elif cluster_a is None:
-            cluster_b.append(a)
-            a['cluster'] = cluster_b
-        elif cluster_b is None:
-            cluster_a.append(b)
-            b['cluster'] = cluster_a
-        elif cluster_a is not cluster_b:
-            # 원래 다른 두 무리였는데 이번 연결로 하나가 됨
-            cluster_a.extend(cluster_b)
-            for entry in cluster_b:
-                entry['cluster'] = cluster_a
+        return None
 
     def _find_found_target(self, target_type, pose):
 
@@ -496,22 +451,17 @@ class StateManager(Node):
         지금 상황에서 가장 먼저 처리해야 할 목적지를 고른다.
 
         이미 active_target 으로 접근 중인 불/사람이 있으면 그대로
-        유지한다 — 유일한 예외는 지금 접근 중인 사람의 무리에 새로
-        불이 잡힌 경우(그 사람 근처에 불이 막 생긴 것)뿐이고,
+        유지한다 — 유일한 예외는 지금 접근 중인 사람의 partner 로
+        새로 불이 잡힌 경우(그 사람 바로 옆에 불이 막 생긴 것)뿐이고,
         이미 불을 끄러 가는 중이면 무슨 일이 있어도 안 바꾼다.
         """
 
         if self.active_target is not None:
             if self.active_target['type'] == 'person':
-                cluster = self.active_target['cluster'] or []
-                pending_fires = [
-                    entry for entry in cluster
-                    if entry['type'] == 'fire'
-                    and entry['status'] == 'pending'
-                ]
+                partner = self.active_target['partner']
 
-                if pending_fires:
-                    return self._nearest_to_robot(pending_fires)
+                if partner is not None and partner['status'] == 'pending':
+                    return partner
 
             return self.active_target
 
@@ -522,16 +472,15 @@ class StateManager(Node):
         active_target 이 없을 때(처음이거나 방금 완료됐을 때) 큐
         전체에서 새로 목적지를 고른다.
 
-        무리(cluster)는 감지 시점에 한 번 묶이면 무리원이 완료돼도
-        풀리지 않는다 — 그래서 "무리가 있고, 아직 처리할 차례인"
-        항목을 최우선으로 본다:
+        불-사람 짝(partner)은 감지 시점에 한 번 맺어지면 상대가
+        완료돼도 풀리지 않는다 — 그래서 "짝이 있고, 아직 처리할
+        차례인" 항목을 최우선으로 본다:
 
-          - 무리가 있는 불: 항상 우선 (사람이 위험하니 먼저 끈다)
-          - 무리가 있는 사람: 그 무리의 불이 전부 이미 꺼졌을
-            때만 (안 꺼진 불이 하나라도 있으면 그 불부터 처리할
-            차례라 후보에서 제외)
+          - 짝이 있는 불: 항상 우선 (사람이 위험하니 먼저 끈다)
+          - 짝이 있는 사람: 그 짝 불이 이미 꺼졌을 때만 (짝 불이
+            아직 안 꺼졌으면 그 불부터 처리할 차례라 후보에서 제외)
 
-        위 후보가 하나도 없으면(무리 없는 고립된 불/사람만 남음),
+        위 후보가 하나도 없으면(짝 없는 고립된 불/사람만 남음),
         로봇과 가장 가까운 것을 고른다.
         """
 
@@ -548,7 +497,7 @@ class StateManager(Node):
 
         isolated = [
             entry for entry in self.target_queue
-            if entry['cluster'] is None
+            if entry['partner'] is None
         ]
 
         if isolated:
@@ -558,17 +507,13 @@ class StateManager(Node):
 
     def _is_combo_ready(self, entry):
 
-        if entry['cluster'] is None:
+        if entry['partner'] is None:
             return False
 
         if entry['type'] == 'fire':
             return True
 
-        return all(
-            member['status'] == 'done'
-            for member in entry['cluster']
-            if member['type'] == 'fire'
-        )
+        return entry['partner']['status'] == 'done'
 
     def _nearest_to_robot(self, entries):
 

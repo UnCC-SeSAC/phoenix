@@ -52,23 +52,11 @@ class MissionTestPublisher(Node):
         if self.done:
             return
 
-        # vision_detector 가 실제로 보내는 형식(프레임 하나에 감지
-        # 여러 개를 묶은 배치)을 흉내내려고, fire/person 을 따로따로
-        # 안 보내고 이번 호출에서 지정된 것들을 한 메시지로 묶는다
-        # — state_manager 의 짝짓기(거리 기반)를 제대로 테스트하려면
-        # 같은 배치 안에 있어야 하기 때문.
-        detections = []
-
         if self.args.fire is not None:
-            detections.append(self._make_detection('fire', *self.args.fire))
+            self._publish_detection('fire', *self.args.fire)
 
         if self.args.person is not None:
-            detections.append(
-                self._make_detection('person', *self.args.person)
-            )
-
-        if detections:
-            self._publish_detections(detections)
+            self._publish_detection('person', *self.args.person)
 
         if self.args.battery is not None:
             self._publish_battery(self.args.battery)
@@ -78,23 +66,20 @@ class MissionTestPublisher(Node):
 
         self.done = True
 
-    def _make_detection(self, class_name, x, y):
-        return {'class': class_name, 'x': x, 'y': y}
-
-    def _publish_detections(self, detections):
+    def _publish_detection(self, class_name, x, y):
 
         msg = String()
         msg.data = json.dumps({
+            'class': class_name,
+            'x': x,
+            'y': y,
             'frame_id': 'map',
-            'detections': detections,
         })
         self.detection_pub.publish(msg)
 
-        for detection in detections:
-            self.get_logger().info(
-                f"Published {detection['class']} detection at "
-                f"({detection['x']:.2f}, {detection['y']:.2f})"
-            )
+        self.get_logger().info(
+            f'Published {class_name} detection at ({x:.2f}, {y:.2f})'
+        )
 
     def _publish_battery(self, value):
 
