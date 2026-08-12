@@ -20,6 +20,7 @@ from launch.launch_description_sources import (
 
 from launch.substitutions import (
     LaunchConfiguration,
+    PythonExpression,
 )
 
 from launch_ros.actions import Node
@@ -94,6 +95,13 @@ def generate_launch_description():
 
     start_fire_suppression = LaunchConfiguration(
         'start_fire_suppression'
+    )
+
+    # true 로 주면 fire_suppression_node 대신 로컬 테스트용 더미
+    # (fire_suppression_node_dummy_stub) 를 띄운다. GPIO/YOLO/frontier
+    # 의존성 없이 mission_executor 와의 액션 통신만 확인하고 싶을 때 사용.
+    use_dummy_fire_suppression = LaunchConfiguration(
+        'use_dummy_fire_suppression'
     )
 
     start_mission = LaunchConfiguration(
@@ -287,7 +295,27 @@ def generate_launch_description():
                 output='screen',
 
                 condition=IfCondition(
-                    start_fire_suppression
+                    PythonExpression([
+                        '"', start_fire_suppression, '" == "true" and "',
+                        use_dummy_fire_suppression, '" == "false"',
+                    ])
+                ),
+            ),
+
+            Node(
+                package='uncc_example',
+
+                executable='fire_suppression_node_dummy_stub',
+
+                name='fire_suppression_node',
+
+                output='screen',
+
+                condition=IfCondition(
+                    PythonExpression([
+                        '"', start_fire_suppression, '" == "true" and "',
+                        use_dummy_fire_suppression, '" == "true"',
+                    ])
                 ),
             ),
 
@@ -410,6 +438,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'start_fire_suppression',
             default_value='true',
+        ),
+
+        DeclareLaunchArgument(
+            'use_dummy_fire_suppression',
+            default_value='false',
         ),
 
         DeclareLaunchArgument(

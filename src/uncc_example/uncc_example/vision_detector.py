@@ -5,6 +5,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.time import Time
+from rclpy.qos import qos_profile_sensor_data
 
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401  PointStamped 변환 등록용
@@ -40,9 +41,10 @@ class VisionDetector(Node):
         # -----------------------------
         self.declare_parameter('map_frame', 'map')
 
-        # yolo_detector 가 publish 하는 2D 감지 결과 (JSON)
+        # image_pipeline(fire_suppression 팀 vision 파이프라인)이
+        # publish 하는 2D 감지 결과 (JSON, class_name/x/y/depth)
         self.declare_parameter(
-            'detections_topic', '/yolo/detections'
+            'detections_topic', '/fire/detections'
         )
         self.declare_parameter(
             'camera_info_topic', '/depth_cam/rgb/camera_info'
@@ -78,18 +80,21 @@ class VisionDetector(Node):
         # -----------------------------
         # Subscriptions
         # -----------------------------
+        # image_pipeline 쪽 publisher(camera_info/detections 둘 다)가
+        # qos_profile_sensor_data(BEST_EFFORT)로 발행하므로, 여기서
+        # 기본(RELIABLE) QoS로 구독하면 QoS 불일치로 아예 매칭이 안 된다.
         self.create_subscription(
             CameraInfo,
             self.get_parameter('camera_info_topic').value,
             self.camera_info_callback,
-            1,
+            qos_profile_sensor_data,
         )
 
         self.create_subscription(
             String,
             self.get_parameter('detections_topic').value,
             self.detections_callback,
-            5,
+            qos_profile_sensor_data,
         )
 
         # -----------------------------

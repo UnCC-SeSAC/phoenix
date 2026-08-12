@@ -39,7 +39,7 @@ class YoloDetector(Node):
         self.declare_parameter(
             'depth_image_topic', '/depth_cam/depth0/image_raw'
         )
-        self.declare_parameter('detections_topic', '/yolo/detections')
+        self.declare_parameter('detections_topic', '/fire/detections')
 
         # 이 점수 미만인 감지는 아예 publish 하지 않는다
         self.declare_parameter('min_score', 0.5)
