@@ -50,8 +50,8 @@ def generate_launch_description():
         'frontier_exploration_ros2'
     )
 
-    peripherals_share = get_package_share_directory(
-        'peripherals'
+    image_pipeline_share = get_package_share_directory(
+        'image_pipeline'
     )
 
     launch_dir = os.path.join(
@@ -336,37 +336,18 @@ def generate_launch_description():
     )
 
     # =========================================
-    # 7. Depth Camera + yolo_detector
-    #    (yolo_detector 는 실제 YOLO 모델 없이 파이프라인 테스트용
-    #    더미 감지만 발행하는 임시 노드 — 나중에 다른 사람이 작성한
-    #    코드로 교체될 예정이라 mission_manager 와 별도 프로세스로
-    #    유지한다)
+    # 7. Vision (image_pipeline)
+    #    실제 모델(.onnx) 준비 전까지 full_chain_check.launch.py(더미
+    #    체인)를 씀. depth_camera.launch.py 와 같이 켜면 토픽이
+    #    겹치니 지금은 빼둠 — 모델 준비되면 진짜 카메라+체인으로 교체.
     # =========================================
 
     vision = TimerAction(
         period=4.0,
         actions=[
             include_launch(
-                os.path.join(
-                    peripherals_share,
-                    'launch',
-                    'depth_camera.launch.py',
-                ),
+                image_pipeline_share + '/launch/full_chain_check.launch.py',
                 IfCondition(start_vision),
-            ),
-
-            Node(
-                package='uncc_example',
-
-                executable='yolo_detector',
-
-                name='yolo_detector',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_vision
-                ),
             ),
         ],
     )
@@ -450,6 +431,10 @@ def generate_launch_description():
             default_value='true',
         ),
 
+        # 기본 false. 켜지면 (지금은 image_pipeline 더미 체인이라)
+        # 가짜 감지로도 실제 Nav2 이동 + 실제 fire_suppression 펌프
+        # 분사까지 이어질 수 있어서, 의도적으로 켤 때만
+        # start_vision:=true 로 명시하게 한다.
         DeclareLaunchArgument(
             'start_vision',
             default_value='false',

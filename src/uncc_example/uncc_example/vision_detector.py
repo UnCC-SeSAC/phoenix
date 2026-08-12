@@ -46,8 +46,10 @@ class VisionDetector(Node):
         self.declare_parameter(
             'detections_topic', '/fire/detections'
         )
+        # full_chain_dummy_test.launch.py 와 동일한 값 — 카메라 관련
+        # 설정은 그 launch 파일 기준을 따른다.
         self.declare_parameter(
-            'camera_info_topic', '/depth_cam/rgb/camera_info'
+            'camera_info_topic', '/image_enhanced/camera_info'
         )
 
         # 카메라가 로봇에 고정 장착이라 프레임 이름이 항상 같음 —
