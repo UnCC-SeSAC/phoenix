@@ -57,6 +57,8 @@ setup(
             'mission_test = uncc_example.mission_test_publisher:main',
             'fire_suppression_node = uncc_example.fire_suppression_node:main',
             'mission_manager = uncc_example.mission_manager:main',
+            'fire_suppression_node = uncc_example.fire_suppression_node:main',
+            'fire_status_service_node = uncc_example.fire_status_service_node:main'
         ],
     },
 )

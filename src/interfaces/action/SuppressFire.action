@@ -1,9 +1,11 @@
-# 최대 시도 횟수. 0(미지정)이면 서버가 자체 기본값을 사용한다.
-int32 max_attempts
+# Goal: 화재 진압 시작 요청
+uint8 max_attempts   # 0이면 서버 기본값(3회) 사용
 ---
+# Result: 최종 결과
 bool success
-int32 attempts
+uint8 attempts
 string message
 ---
-int32 current_attempt
+# Feedback: 진행 상황
+uint8 current_attempt
 string status

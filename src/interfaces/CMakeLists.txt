@@ -46,6 +46,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     "srv/SetPose.srv"
     "srv/SetStringList.srv"
     "srv/SetString.srv"
+    "srv/CheckFireStatus.srv"
     "action/SuppressFire.action"
     DEPENDENCIES std_msgs std_srvs geometry_msgs builtin_interfaces action_msgs
  )

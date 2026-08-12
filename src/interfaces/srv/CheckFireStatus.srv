@@ -1,0 +1,6 @@
+# Request: 화재 상태 확인 요청
+float32 observation_seconds
+---
+# Response: 판별 결과
+bool is_extinguished
+float32 confidence
