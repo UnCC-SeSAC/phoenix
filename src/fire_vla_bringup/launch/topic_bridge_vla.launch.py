@@ -83,7 +83,19 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "start_perception_bridge",
             default_value="false",
-            description="Bridge /vision/detections into the canonical VLA topic",
+            description="Bridge /fire/detections into the canonical VLA topic",
+        ),
+        DeclareLaunchArgument(
+            "perception_input_topic",
+            default_value="/fire/detections",
+        ),
+        DeclareLaunchArgument(
+            "perception_status_topic",
+            default_value="/fire/detections/status",
+        ),
+        DeclareLaunchArgument(
+            "perception_camera_info_topic",
+            default_value="/ascamera/camera_publisher/rgb0/camera_info",
         ),
         Node(
             package="fire_vla_core",
@@ -91,6 +103,13 @@ def generate_launch_description():
             name="vla_perception_bridge",
             output="screen",
             condition=IfCondition(LaunchConfiguration("start_perception_bridge")),
+            parameters=[{
+                "input_topic": LaunchConfiguration("perception_input_topic"),
+                "status_topic": LaunchConfiguration("perception_status_topic"),
+                "camera_info_topic": LaunchConfiguration(
+                    "perception_camera_info_topic"
+                ),
+            }],
         ),
         OpaqueFunction(function=_create_vla_node),
     ])
