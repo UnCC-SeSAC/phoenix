@@ -129,6 +129,41 @@
 - **재발 시 확인:** 소음 발생 시각과 아래 host/container 자원 지표 및 kernel log를
   같은 타임라인으로 수집한다.
 
+### 10. Pi runtime 자원 및 DDS locator 진단
+
+- **증상:** Hardware → SLAM → Nav2 → VLA Bridge 순차 기동에서 Nav2 이후 network
+  latency가 증가했고 Pi ROS log에 `192.168.100.124` 방향 CycloneDDS UDP write
+  failure가 반복됐다.
+- **관측 증거:** Pi 최고 온도 약 `50.5°C`, `get_throttled=0x0`, swap 사용·OOM·
+  undervoltage·Docker restart는 모두 없었고 RAM도 충분했다. VLA Bridge 추가 시
+  Docker CPU는 증가했지만 thermal/power/RAM failure는 재현되지 않았다.
+- **원인 판정:** `192.168.100.124`는 PC 유선 NIC `enp130s0`이다. PC의 다중 NIC
+  locator 광고와 DDS 재시도가 latency에 영향을 줬을 가능성이 있으나, 반복되는
+  Robot runtime 소실의 전체 root cause는 아직 미확정이다.
+- **수행한 조치:** 이번 Hardware test에서 생성된 Jazzy/domain 205/Fast DDS
+  `ros2-daemon` 하나를 소유자·환경·시작 시각으로 식별해 종료했다. persistent PC
+  `124 + CycloneDDS` 설정은 변경하지 않았다.
+- **결과:** stale test ROS/DDS process 0, Robot Wi-Fi route 정상, ping 5/5와 SSH
+  응답을 확인했다. 이후 Hardware 재시도에서 pose stream 소실이 재발했으므로 stale
+  daemon 하나만을 전체 원인으로 보지 않는다.
+- **재발 시 확인:** test process에 Robot Wi-Fi NIC만 사용하도록 한정하고, Pi가
+  접근할 수 없는 locator 광고 여부와 actual payload continuity를 함께 확인한다.
+
+### 11. Production short-nav 재시도의 pre-dispatch continuity 소실
+
+- **증상:** production Orchestrator와 XPU/Qwen을 기동하고 actual Robot pose 및 fresh
+  `person_0001`을 WorldModel에 반영한 뒤 Pi ping·SSH·pose stream이 소실됐다.
+- **관측 증거:** 시작 pose는 약 `(0.000, 0.000, yaw 0.059)`, 승인된 목표는 약
+  `(0.400, 0.010, yaw 0.024)`였다. Mission 입력 전 중단했으며 navigation goal,
+  non-zero `cmd_vel`, Robot 이동은 모두 0이었다.
+- **원인 판정:** 실패 boundary는 production decision 이전 Robot runtime/DDS input
+  continuity다. Nav2, motor 또는 production navigation publisher 실행 실패가 아니다.
+- **수행한 조치:** production Orchestrator와 test monitor를 종료하고 Pi 응답 복구 후
+  test stack을 종료했다. production code와 Pi team workspace는 수정하지 않았다.
+- **결과:** `FIRST_SHORT_NAV_E2E_FAIL`. actual NavigateToPose는 아직 실행되지 않았다.
+- **재발 시 확인:** 이미 완료한 software/yaw/timestamp/resource 진단을 반복하지 말고
+  Pi host, container, ROS stack, DDS pose 중 최초 소실 계층만 최소 분리한다.
+
 ## 재발 시 최소 진단표
 
 “연결 끊김”을 하나의 원인으로 처리하지 말고 첫 FAIL 단계에서 실패 계층과 시각을

@@ -164,3 +164,15 @@ Board driver는 빠진 것이 아니다. `hardware.launch.py → controller.laun
 첫 actual short navigation은 **SAFE ABORT**다. 예상 NAVIGATE_TO 대신 RETURN_HOME이 생성되고 robot pose freshness validation이 실패했다. 실제 goal 0, non-zero cmd_vel 0, 이동 0 m다.
 
 Production YOLO와 camera stream은 pending이다. Parent VLA-07은 actual short navigation PASS 전까지 완료로 보지 않는다.
+
+### 2026-08-12 Hardware E2E checkpoint
+
+Software regression과 production `TopicBridgeNavigationAdapter` publish path는 PASS다.
+실제 production Orchestrator/XPU/Qwen 구성에서도 actual Robot pose와 fresh Mock
+`person_0001`이 WorldModel에 반영됐다. 그러나 이후 Robot/Pi pose stream이 소실되어
+Mission 입력 전에 중단했으므로 ActionDecision 이후 경로와 Nav2/motor는 실행되지
+않았다.
+
+현재 blocker는 production navigation publisher가 아니라 **production decision 이전
+Robot runtime/DDS input continuity 소실**이다. actual NavigateToPose goal, non-zero
+`cmd_vel`, Robot 이동은 역사상 모두 0이며 live Camera/YOLO perception E2E도 pending이다.

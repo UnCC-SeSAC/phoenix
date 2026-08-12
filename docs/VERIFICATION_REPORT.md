@@ -225,3 +225,27 @@ person map `(0.5,0.0)`, Mission `인명을 우선 확인해.`를 입력한 결�
 
 연속 pose update의 freshness 유지, stale pose reject, stable-ID/decision/
 Resolver/Validator/Mock dispatch E2E를 regression test로 고정했다.
+
+## VLA-07 Actual short-nav 현장 checkpoint — 2026-08-12
+
+현재 software regression과 production navigation publish path는 PASS다.
+`fire_vla_core/ros/topic_bridge_navigation_adapter.py`의 production 경로
+`Orchestrator → Dispatcher → TopicBridgeNavigationAdapter → /vla/navigation_goal`은
+격리 subscriber에서 payload 1건을 수신했다. 이전 publish 확인 실패는 production
+Adapter가 아니라 임시 Gate process의 `Pose2D.to_dict()` `AttributeError`였다.
+
+실제 Hardware 재시도에서는 Robot identity, 최초 runtime, VLA 단독 goal ownership,
+production Orchestrator/XPU/Qwen, actual Robot pose와 fresh `person_0001`의 WorldModel
+반영까지 PASS했다. 이후 Pi/pose stream continuity가 소실되어 Mission 입력 전에
+중단했다.
+
+- SOFTWARE: **PASS**
+- PRODUCTION NAVIGATION PUBLISH PATH: **PASS**
+- ROBOT POSE → WORLDMODEL: **PASS**
+- MOCK PERSON → WORLDMODEL: **PASS**
+- ACTUAL NAVIGATE_TO: **NOT EXECUTED**
+- CURRENT BLOCKER: production decision 이전 Robot runtime/DDS input continuity 소실
+- LIVE PERCEPTION: **PENDING**
+
+최종 현장 판정은 `FIRST_SHORT_NAV_E2E_FAIL`이며 actual NavigateToPose goal 0,
+non-zero `cmd_vel` 0, Robot movement 0 m다. 이는 Nav2/motor terminal failure가 아니다.
