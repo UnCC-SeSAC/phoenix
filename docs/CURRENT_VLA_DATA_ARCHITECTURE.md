@@ -2,7 +2,8 @@
 
 > 2026-08-12 최신 계약: 아래의 과거 VLA-03B 기록보다 이 절을 우선한다.
 > image_pipeline source는 `origin/albitro/image_pipeline` @
-> `31845b563fdec42d5d061853746365543e0dc8d2`이다.
+> `a8caf2c9b45f35e66b0e3660ecad0ce8e422d719`이다. ROS package root는
+> `src/image_pipeline`이며 구 `src/image_pipeline/ros/image_pipeline` 경로는 폐기됐다.
 
 ## VLA-07C 최신 image_pipeline 계약
 

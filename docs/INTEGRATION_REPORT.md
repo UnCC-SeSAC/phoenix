@@ -30,6 +30,18 @@ runtime contract는 `CURRENT_VLA_DATA_ARCHITECTURE.md`의 VLA-07C 절을 따른�
   production code 수정은 하지 않았다.
 - Production model 부재는 startup failure이며 stub으로 자동 fallback하지 않는다.
 
+## VLA-07E flattened ROS package layout sync — 2026-08-12
+
+- Previous imported upstream: `31845b563fdec42d5d061853746365543e0dc8d2`
+- Latest upstream: `a8caf2c9b45f35e66b0e3660ecad0ce8e422d719`
+- `src/image_pipeline/ros/image_pipeline`의 ROS package를
+  `src/image_pipeline` root로 semantic rename하고 upstream에서 제거한 training
+  subtree도 함께 제거했다.
+- Python import package명 `image_pipeline`, launch/config/resource 내용과 perception
+  topic/payload contract는 변경되지 않았다. 따라서 VLA production code는 수정하지
+  않았다.
+- colcon discovery에는 `image_pipeline` package가 정확히 한 번만 나타난다.
+
 ## 기준으로 사용한 코드
 
 - `src_0805/src/uncc_example/README.md`

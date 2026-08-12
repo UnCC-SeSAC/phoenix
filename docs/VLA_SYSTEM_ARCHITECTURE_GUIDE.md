@@ -153,10 +153,14 @@ scaling 없이 `confidence`로 mapping하며, `unknown` depth는 fail-closed하�
 `fallback_*` provenance는 보존합니다. 실제 YOLO/camera/depth/TF hardware smoke와
 Pump/MCU hardware bridge는 남아 있습니다.
 
-`image_pipeline@31845b5`부터 `/image_enhanced → yolo_node → /yolo_result`가
+`image_pipeline@a8caf2c` 기준 `/image_enhanced → yolo_node → /yolo_result`가
 구현되어 있다. ONNX/OpenCV DNN과 개발 PC용 Ultralytics를 지원하며 Hailo backend는
 실제 HEF 계약 대기 상태다. Wiring stub은 명시적으로 선택한 test mode에서만
 활성화되고 production model 부재 시 자동 fallback하지 않는다.
+
+ROS package root는 `src/image_pipeline`이다. 이전 nested
+`src/image_pipeline/ros/image_pipeline` layout은 더 이상 사용하지 않으며 colcon에서
+동일 package가 중복 discover되지 않게 유지한다.
 
 ---
 

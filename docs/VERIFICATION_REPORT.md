@@ -29,6 +29,21 @@ fake RGB/depth → preprocess → explicit YOLO stub → `/yolo_result` → dept
 `score=0.87`, `depth=3.2`, `depth_status=ok`와 source stamp를 보존했고 heartbeat
 state는 `ok`였다. 이는 wiring 검증이며 production model 정확도 검증은 아니다.
 
+## VLA-07E flattened package verification — 2026-08-12
+
+`image_pipeline@a8caf2c`의 package root를 `src/image_pipeline`로 동기화했다. 구 nested
+package는 제거했고 `colcon list`에서 package가 한 번만 discover되는지 확인했다.
+기능 source는 이전 snapshot과 blob-identical rename이므로 `/yolo_result`,
+`/fire/detections`, `/fire/detections/status` 및 VLA adapter contract는 유지된다.
+
+최신 root에서 image_pipeline pytest 341개, YOLO focused 51개,
+`run_local_check.sh`가 PASS했다. 격리 domain의 `full_chain_check.launch.py`는 explicit
+stub으로 15Hz 동작하며 fire `score=0.87`, 원본 pixel `(320,240)`, depth `3.2`,
+`depth_status=ok`, source stamp와 heartbeat `ok`를 실제 topic에서 확인했다. YOLO
+wiring check도 QoS/stamp/frame_id/bbox 왕복 PASS다. VLA 전체 189개와 perception/
+short-nav focused 58개가 PASS했고, short-nav는 Mock ACCEPTED, actual Nav2 goal 0,
+cmd_vel 0이다. image_pipeline/fire_vla_core/fire_vla_bringup isolated build도 PASS했다.
+
 ## 현재 checkout 재검증 결과
 
 기준 branch와 commit:
