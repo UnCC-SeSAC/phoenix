@@ -18,6 +18,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -45,7 +46,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     "srv/SetPose.srv"
     "srv/SetStringList.srv"
     "srv/SetString.srv"
-    DEPENDENCIES std_msgs std_srvs geometry_msgs builtin_interfaces
+    "srv/CheckFireStatus.srv"
+    "action/SuppressFire.action"
+    DEPENDENCIES std_msgs std_srvs geometry_msgs builtin_interfaces action_msgs
  )
 
 install(FILES mapping_rules.yaml
