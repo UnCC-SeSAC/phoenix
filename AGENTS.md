@@ -55,9 +55,21 @@ hardware. The authoritative navigation and semantic space is a 2D `map` frame.
 
 ## Safety
 
-- Before authorized motion, verify runtime state and preflight conditions.
-- Reject navigation on stale robot pose, invalid TF/depth, or invalid map pose.
-- Keep autonomous goal senders mutually exclusive.
+- Keep VLA Validator semantic checks, but do not add duplicate Hardware
+  preflight gates for decisions owned by Nav2.
+- Hard-block motion only when required navigation TF is unavailable, the
+  LiDAR/local-costmap stream needed for avoidance has stopped, another
+  autonomous goal sender controls the Robot, or the operator identifies a clear
+  physical hazard in the driving area.
+- Treat IMU yaw drift/jitter, partial LiDAR drops, TF/message-filter warnings,
+  occasional ping loss, rate jitter, non-lethal/inflation costs, minor
+  localization variation, and differences from earlier measurements as
+  warnings; none blocks motion by itself.
+- Never turn a one-time measurement into a safety threshold or require invented
+  conditions such as all-zero cells, a fixed free radius, or a yaw limit.
+- Leave path feasibility, inflation, obstacle avoidance, trajectory selection,
+  and replanning to Nav2. Preserve fail-safe stop handling without creating a
+  fail-paralyzed workflow.
 - Generate real motion only when the task explicitly authorizes it.
 - On unexpected motion: cancel the active goal, confirm velocity stop, then send
   explicit motor zero through the verified halt path.
