@@ -19,6 +19,17 @@
 이 아래 VLA-03B `/vision/detections` 설명은 과거 integration 이력이다. 현재
 runtime contract는 `CURRENT_VLA_DATA_ARCHITECTURE.md`의 VLA-07C 절을 따른다.
 
+## VLA-07D latest YOLO pipeline sync — 2026-08-12
+
+- Previous upstream: `ef592b5f756d87bff5dac0db1aeb0fbda05819ad`
+- Latest upstream: `31845b563fdec42d5d061853746365543e0dc8d2`
+- Branch 전체 merge 없이 변경된 `src/image_pipeline` 14개 파일만 갱신했다.
+- YOLO node/backend, letterbox inverse, NMS/layout parsing, explicit test stub,
+  offline/wiring tools와 `full_chain_check.launch.py`가 추가됐다.
+- `/fire/detections`와 `/fire/detections/status` 계약은 변경되지 않아 VLA Adapter
+  production code 수정은 하지 않았다.
+- Production model 부재는 startup failure이며 stub으로 자동 fallback하지 않는다.
+
 ## 기준으로 사용한 코드
 
 - `src_0805/src/uncc_example/README.md`

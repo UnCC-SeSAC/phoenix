@@ -809,6 +809,47 @@ class DummyScene:
             noise_m=self.noise_m, seed=seed,
         )
 
+    def color_image(self, haze: float = 0.0) -> np.ndarray:
+        """bgr8 합성 컬러. **뎁스와 같은 장면**의 박스 자리에 불꽃을 그립니다.
+
+        `fake_detection_node`가 태스크①의 입력으로 발행합니다. 전처리 →
+        YOLO → 태스크②를 **한 사슬로** 돌려보려면 컬러도 있어야 하고, 그
+        컬러의 불꽃 위치가 뎁스의 대상 위치와 **같아야** 결과를 검산할 수
+        있습니다. 그래서 노드가 아니라 여기서 만듭니다.
+
+        `haze`(0~1)는 태스크①이 걷어낼 연기입니다. 0이면 걸지 않습니다 —
+        디헤이즈가 실제로 뭔가를 하는지 보려면 0.3 근처를 주세요.
+
+        ⚠ 이건 **검출 성능 평가용이 아닙니다.** 합성 원반은 실제 성냥불의
+        분광·크기 분포와 다릅니다. 배선과 좌표를 보는 그림입니다.
+        """
+        w, h = self.color_size
+        img = np.full((h, w, 3), 28, np.uint8)          # 어두운 실내
+        # 바닥 쪽을 조금 밝게 — 완전 균일하면 CLAHE가 할 일이 없어 보입니다.
+        grad = np.linspace(0, 26, h, dtype=np.float32)[:, None]
+        img = np.clip(img.astype(np.float32) + grad[..., None], 0, 255).astype(np.uint8)
+
+        x1, y1, x2, y2 = self.box_color
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        radius = max(2.0, min(x2 - x1, y2 - y1) / 2.0)
+
+        yy, xx = np.mgrid[0:h, 0:w]
+        r = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / radius
+        core = np.clip(1.0 - r, 0.0, 1.0) ** 1.5        # 가운데가 흰 불꽃
+        halo = np.exp(-(r ** 2) * 1.2) * 0.55           # 주변 발광
+
+        out = img.astype(np.float32)
+        for ch, (core_v, halo_v) in enumerate(((215, 90), (245, 170), (255, 255))):
+            out[..., ch] += core * core_v + halo * halo_v   # BGR
+        out = np.clip(out, 0, 255)
+
+        if haze > 0.0:
+            # I = J·t + A·(1−t) — 태스크①의 디헤이즈가 되돌리려는 바로 그 모델
+            t = float(np.clip(1.0 - haze, 0.05, 1.0))
+            out = out * t + 235.0 * (1.0 - t)
+
+        return np.clip(out, 0, 255).astype(np.uint8)
+
     def expected_optical(self) -> Optional[tuple]:
         """태스크②가 내야 할 optical frame 좌표. 거리 불명이면 None."""
         if self.flame_hole:

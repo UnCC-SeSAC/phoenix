@@ -17,6 +17,18 @@ cmd_vel 0을 유지했다. 실제 camera/YOLO/live TF hardware 검증은 수행�
 
 이 아래 VLA-03B `/vision/detections` 결과는 과거 계약의 검증 이력이다.
 
+## VLA-07D YOLO pipeline software verification — 2026-08-12
+
+`image_pipeline@31845b5` 기준 전체 341 tests와 YOLO focused 51 tests가 PASS했다.
+Offline explicit stub은 420x315 image의 원본 중심 `(210,158)`을 복원했다.
+ROS wiring check는 QoS, source stamp, frame_id와 bbox 왕복을 확인했다.
+
+격리 localhost ROS domain의 `full_chain_check.launch.py enhanced_width:=320`에서
+fake RGB/depth → preprocess → explicit YOLO stub → `/yolo_result` → depth fusion
+경로가 15Hz로 동작했다. 최종 `/fire/detections`는 원본 pixel `(320,240)`,
+`score=0.87`, `depth=3.2`, `depth_status=ok`와 source stamp를 보존했고 heartbeat
+state는 `ok`였다. 이는 wiring 검증이며 production model 정확도 검증은 아니다.
+
 ## 현재 checkout 재검증 결과
 
 기준 branch와 commit:

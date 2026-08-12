@@ -2,7 +2,7 @@
 
 > 2026-08-12 최신 계약: 아래의 과거 VLA-03B 기록보다 이 절을 우선한다.
 > image_pipeline source는 `origin/albitro/image_pipeline` @
-> `ef592b5f756d87bff5dac0db1aeb0fbda05819ad`이다.
+> `31845b563fdec42d5d061853746365543e0dc8d2`이다.
 
 ## VLA-07C 최신 image_pipeline 계약
 
@@ -42,6 +42,20 @@ heartbeat `ok`면 detector는 정상이고, 나머지 state만 health problem으
 
 이 절 아래의 `/vision/detections` 및 `origin/state_manage` 설명은 이전 구현 이력이며
 현재 runtime contract가 아니다.
+
+### YOLO producer update
+
+최신 upstream은 `/image_enhanced`를 구독하고 `/yolo_result`
+`vision_msgs/Detection2DArray`를 발행하는 `yolo_node`를 제공한다. 원본 image
+header의 stamp/frame_id를 그대로 보존하고 sensor-data QoS를 사용한다. 모델 입력
+letterbox를 검출 후 되돌린 좌표는 enhanced image 기준이며, detection fusion이
+CameraInfo로 원본 rgb0 pixel을 복원한다.
+
+Production 기본은 모델 확장자에 따른 ONNX 또는 명시적 backend 선택이다. 모델이
+없거나 지원되지 않으면 startup이 실패하며 test stub으로 자동 fallback하지 않는다.
+`backend=stub`은 `full_chain_check.launch.py` 등 software wiring 검증에서만
+명시적으로 사용한다. 실제 model class order와 output layout은 hardware gate 전에
+학습 metadata 및 실제 tensor shape로 확정해야 한다.
 
 분석 기준:
 

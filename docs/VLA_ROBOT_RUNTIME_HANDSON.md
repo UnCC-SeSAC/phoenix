@@ -108,6 +108,10 @@ Production perception을 함께 사용할 때는 그 전에 다음도 확인한�
 7. `unknown`은 WorldModel 위치를 갱신하지 않고 `fallback_*` status는 보존되는지
    확인한다.
 
+Production YOLO는 model path와 학습 당시 class order를 명시해야 한다. 실제 output
+shape를 확인해 `layout`을 고정하며, model 없이 `backend=stub`을 production에서
+사용하지 않는다. Stub은 `full_chain_check.launch.py`의 software wiring 전용이다.
+
 Hardware 없이 4~7번 계약을 먼저 확인할 수 있다.
 
 ```bash

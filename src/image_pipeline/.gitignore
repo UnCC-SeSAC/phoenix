@@ -18,4 +18,4 @@ training/**/data/
 *.pt
 
 **/*.md
-!README.md
+!/README.md
