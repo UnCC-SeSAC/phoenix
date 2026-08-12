@@ -1,5 +1,24 @@
 # 통합 변경 보고서
 
+## VLA-07C image_pipeline integration — 2026-08-12
+
+- Upstream: `origin/albitro/image_pipeline` @
+  `ef592b5f756d87bff5dac0db1aeb0fbda05819ad`
+- Branch 전체에는 image_pipeline 외 과거 workflow 변경이 포함되어 전체 merge하지
+  않고 `src/image_pipeline`만 file-level import했다.
+- VLA bridge 입력을 구형 `/vision/detections` flat map JSON에서 최신
+  `/fire/detections` multi-detection pixel/depth envelope로 변경했다.
+- ROS Adapter가 rgb0 CameraInfo로 역투영하고 원본 sec/nanosec 기준 TF를 조회해
+  canonical 2D map 위치를 만든다.
+- `score → confidence`는 1:1 rename이며 scaling하지 않는다.
+- `unknown` depth는 fail-closed, `fallback_bottom/below/ring`은 status를 보존한다.
+- `/fire/detections/status`의 `ok/stalled/waiting_camera_info/no_input`을 detection
+  silence와 독립된 health signal로 mapping한다.
+- VLA Core, SemanticObservation, WorldModel, stable ID fallback은 변경하지 않았다.
+
+이 아래 VLA-03B `/vision/detections` 설명은 과거 integration 이력이다. 현재
+runtime contract는 `CURRENT_VLA_DATA_ARCHITECTURE.md`의 VLA-07C 절을 따른다.
+
 ## 기준으로 사용한 코드
 
 - `src_0805/src/uncc_example/README.md`

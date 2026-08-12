@@ -96,6 +96,18 @@ ros2 topic pub --once /ros_robot_controller/set_motor \
 7. Resolver target이 map `(0.5, 0.0)`, Validator가 PASS인지 확인한다.
 8. 그 다음에만 actual navigation backend를 enable한다.
 
+Production perception을 함께 사용할 때는 그 전에 다음도 확인한다.
+
+1. `/yolo_result`와 `/fire/detections/status`가 실제 publish되는지 확인한다.
+2. status가 `ok`인지 확인하고 detection silence만으로 failure로 판정하지 않는다.
+3. rgb0 CameraInfo의 해상도와 `/fire/detections.frame_size`가 같은지 확인한다.
+4. `/fire/detections`의 timestamp가 계속 원본 source stamp인지 확인한다.
+5. camera optical frame에서 source timestamp의 `map` TF가 가능한지 확인한다.
+6. `/vla/perception_observation`에 projected `map_position`과 scaling하지 않은
+   `confidence=score`가 나오는지 확인한다.
+7. `unknown`은 WorldModel 위치를 갱신하지 않고 `fallback_*` status는 보존되는지
+   확인한다.
+
 Hardware 없이 4~7번 계약을 먼저 확인할 수 있다.
 
 ```bash

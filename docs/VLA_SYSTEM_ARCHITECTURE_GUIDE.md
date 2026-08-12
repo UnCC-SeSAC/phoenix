@@ -133,7 +133,10 @@ target map pose
 | Producer | Consumer | ROS Boundary | 핵심 데이터 |
 |---|---|---|---|
 | RGB Camera | YOLO | `/ascamera/camera_publisher/rgb0/image` | RGB Image |
-| Perception + TF | VLA Bridge | `/vision/detections` | person/fire + map `(x,y)` + confidence/source stamp |
+| YOLO | image_pipeline | `/yolo_result` | `Detection2DArray` |
+| image_pipeline | VLA Bridge | `/fire/detections` | person/fire + pixel/depth/score/source stamp envelope |
+| image_pipeline | VLA Bridge | `/fire/detections/status` | health heartbeat |
+| VLA Bridge + CameraInfo/TF | VLA | `/vla/perception_observation` | canonical map `(x,y)` + confidence |
 | VLA Bridge | VLA | `/vla/perception_observation` | canonical person/fire batch |
 | Operator / UI | VLA | `/vla/mission` | 자연어 Mission |
 | TF / Localization | VLA | `/vla/robot_pose_json` | robot map `(x,y,yaw)` |
@@ -143,7 +146,12 @@ target map pose
 | Report Consumer | VLA | `/vla/person_report_result` | 보고 성공/실패 |
 | VLA | Future Pump bridge | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` | correlated 소화 명령/결과/취소 |
 
-Navigation, Person Report, Spray의 VLA-side ROS boundary와 `/vision/detections` → canonical Perception thin bridge는 구현/검증되어 있습니다. 실제 YOLO/camera/depth/TF hardware smoke와 Pump/MCU hardware bridge는 남아 있습니다.
+Navigation, Person Report, Spray의 VLA-side ROS boundary와 최신
+`/fire/detections` envelope → CameraInfo 역투영 → source-time TF → canonical
+Perception bridge는 software-only로 구현/검증되어 있습니다. Upstream `score`는
+scaling 없이 `confidence`로 mapping하며, `unknown` depth는 fail-closed하고
+`fallback_*` provenance는 보존합니다. 실제 YOLO/camera/depth/TF hardware smoke와
+Pump/MCU hardware bridge는 남아 있습니다.
 
 ---
 

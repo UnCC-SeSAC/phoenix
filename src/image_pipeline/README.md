@@ -1,12 +1,12 @@
 # image_pipeline
 
-화재 탐사 로봇의 영상 파이프라인 — **태스크① RGB 전처리 + 태스크② 검출 3D 좌표**
+화재 탐사 로봇의 영상 파이프라인 — **태스크① RGB 전처리 + 태스크② pixel/depth detection**
 (SeSAC Intel Physical AI 최종 프로젝트, 팀원4 담당).
 
 ```
 ① rgb0/image ──▶ [감마 → 디헤이즈 → CLAHE] ──▶ /image_enhanced ──▶ [YOLO] ─┐
-                                                                            ├─▶ ② ──▶ /fire/detections_3d
-   depth0/image_raw ────────────────────────────────────────────────────────┘         (base_link, 미터)
+                                                                            ├─▶ ② ──▶ /fire/detections
+   depth0/image_raw ────────────────────────────────────────────────────────┘         (JSON pixel/depth)
 ```
 
 **뎁스는 ①과 YOLO를 거치지 않습니다.** 두 갈래를 다시 잇는 것은 이미지가 아니라
@@ -19,7 +19,7 @@
 image_pipeline/
 ├── ros/image_pipeline/     ROS2 패키지. 로봇에 올라감
 │   ├── image_pipeline/     계산 모듈 + 노드
-│   ├── tests/              224개 (rclpy 없이 돌아감)
+│   ├── tests/              287개 (rclpy 없이 돌아감)
 │   ├── tools/              오프라인 튜닝·비교·미리보기
 │   └── launch/  config/  models/
 ├── training/               로봇에 안 올라감
@@ -34,7 +34,7 @@ image_pipeline/
 
 ```bash
 cd ros/image_pipeline
-python3 -m pytest tests/ -q      # 224개
+python3 -m pytest tests/ -q      # 287개
 bash run_local_check.sh          # 합성데이터 → 테스트 → 비교이미지 → 벤치 → ② 장면
 ```
 
@@ -57,18 +57,19 @@ ros2 launch image_pipeline dummy_check.launch.py
 ```bash
 # 다른 터미널
 source /opt/ros/jazzy/setup.bash && source install/setup.bash
-ros2 topic echo /fire/detections_3d --once
-ros2 topic hz /fire/detections_3d
+ros2 topic echo /fire/detections --once
+ros2 topic hz /fire/detections/status
 ```
 
-더미가 시작 로그에 **`[정답]`** 좌표를 찍습니다. 발행된 좌표와 비교하세요 —
-기본 설정이면 둘 다 `(+3.300, +0.000, +0.350)` 입니다.
+더미가 시작 로그에 원본 pixel/depth 정답을 찍습니다. `/fire/detections`의
+pixel/depth와 비교하세요. CameraInfo 역투영과 TF 기반 map 좌표는 downstream
+integration Adapter 책임입니다.
 
 | 명령 | 무엇을 보는가 |
 |---|---|
-| `dummy_check.launch.py` | 기본. `[정답]`과 발행 좌표가 일치해야 정상 |
+| `dummy_check.launch.py` | 기본. 원본 pixel/depth가 일치해야 정상 |
 | `... flame_hole:=true` | 화염으로 뎁스가 빔 → **발행 0건**이 정상. 좌표를 지어내면 안 됨 |
-| `... flame_hole:=true fallback_regions:="bottom,below,ring"` | 폴백. 값이 나오되 `score`가 절반으로 표시됨 |
+| `... flame_hole:=true fallback_regions:="bottom,below,ring"` | 폴백. numeric depth와 `fallback_*` provenance 확인 |
 | `... floor_height_m:=0.35 flame_hole:=true` | 바닥면 장면. 5-1 폴백 3종 비교 |
 | `... break_stamp_sec:=0.02` | stamp를 일부러 깨뜨림 → `StampMonitor`가 ERROR를 냄 |
 | `... distance_m:=2.0` | 카메라에 유리한 거리 (스펙 0.2~4m) |
@@ -97,16 +98,12 @@ python3 tools/preview_depth_scene.py --floor 0.35 --flame-hole    # 5-1 폴백 �
 | ② 구독 | `/yolo_result` (`vision_msgs/Detection2DArray`) |
 | ② 구독 | `/ascamera/camera_publisher/depth0/image_raw` (16UC1, mm) |
 | ② 구독 | `/ascamera/camera_publisher/depth0/camera_info`, `/image_enhanced/camera_info` |
-| ② 발행 | `/fire/detections_3d` (`Detection3DArray`, `base_link`, 미터) |
+| ② 발행 | `/fire/detections` (`std_msgs/String`, JSON pixel/depth envelope) |
+| ② health | `/fire/detections/status` (`std_msgs/String`, JSON heartbeat) |
 
 **RGB는 `/image`이고 뎁스만 `/image_raw`입니다.** 여기서 틀리면 콜백이 안 불립니다.
 
-## 읽는 순서
-
-1. `CLAUDE.md` — 규칙과 금지사항 (짧습니다)
-2. `HANDOVER.md` — 배경·설계 근거·이미 밟은 지뢰·다음 작업
-3. `docs/` — 프로젝트 전체 맥락 (필요할 때만)
-
-`docs/태스크2_작업지시서.md`는 RealSense를 전제로 쓰였고
-`docs/인수인계_문서_v2.md`의 카메라 항목도 실물과 다릅니다.
-차이와 확인 근거는 `HANDOVER.md` 5-2c·5-2d에 있습니다.
+`stamp_sec/stamp_nanosec`는 원본 detection/source image timestamp다. downstream은
+이를 publish time이나 `now()`로 바꾸지 않는다. Detection silence와 pipeline
+failure는 별개이며 health는 status topic의 `ok`, `stalled`,
+`waiting_camera_info`, `no_input`으로 판단한다.

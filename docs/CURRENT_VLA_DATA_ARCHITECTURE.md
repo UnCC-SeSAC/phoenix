@@ -1,5 +1,48 @@
 # Current VLA Data Architecture — 2D Map Contract
 
+> 2026-08-12 최신 계약: 아래의 과거 VLA-03B 기록보다 이 절을 우선한다.
+> image_pipeline source는 `origin/albitro/image_pipeline` @
+> `ef592b5f756d87bff5dac0db1aeb0fbda05819ad`이다.
+
+## VLA-07C 최신 image_pipeline 계약
+
+```text
+/yolo_result (vision_msgs/Detection2DArray)
++ depth0/image_raw + rgb0 CameraInfo
+→ image_pipeline
+→ /fire/detections (pixel + depth + source stamp)
++ /fire/detections/status (independent heartbeat)
+→ VLA ROS Adapter (CameraInfo backprojection + source-time TF)
+→ /vla/perception_observation (canonical map x/y)
+→ stable ID fallback → SemanticObservation → WorldModel
+```
+
+`/fire/detections`는 envelope 하나에 여러 detection을 담는다. `x/y`는 원본
+rgb0 pixel이며 map 좌표가 아니다. `stamp_sec/nanosec`는 publish time이 아닌
+원본 detection/source image stamp다. Adapter는 이 정확한 sec/nanosec로 TF를
+조회하며 `now()` 또는 float seconds로 바꾸지 않는다. Upstream `score`는 scaling
+없이 canonical `confidence`로 1:1 rename한다.
+
+Depth status는 `ok`, `unknown`, `fallback_bottom`, `fallback_below`,
+`fallback_ring`이다. `unknown`은 numeric depth가 잘못 포함돼도 fail-closed하고,
+`fallback_*`은 positive finite depth만 투영하되 status provenance를 보존한다.
+smoke는 MVP에서 ignore한다. VLA WorldModel은 계속 2D `map (x,y)`만 사용한다.
+
+Heartbeat state는 `ok`, `stalled`, `waiting_camera_info`, `no_input`이다.
+Detection event silence만으로 detector failure를 판단하지 않는다. Event가 없어도
+heartbeat `ok`면 detector는 정상이고, 나머지 state만 health problem으로 mapping한다.
+
+| 이전 가정 | 최신 upstream | 처리 |
+|---|---|---|
+| `/yolo/detections` String | `/yolo_result` Detection2DArray | image_pipeline이 소비 |
+| `/vision/detections` flat JSON | `/fire/detections` envelope | VLA bridge 입력 변경 |
+| upstream confidence/map x/y | score/pixel x/y | rename + CameraInfo/TF |
+| one-message/one-detection | multi-detection envelope | batch one-to-one association |
+| silence 기반 health 추론 | `/fire/detections/status` | 독립 health mapping |
+
+이 절 아래의 `/vision/detections` 및 `origin/state_manage` 설명은 이전 구현 이력이며
+현재 runtime contract가 아니다.
+
 분석 기준:
 
 - VLA branch: `feature/vla-brain` @ `07fc86d1b4de1d46aa897252ee625d214d49bda0`

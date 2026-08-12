@@ -1,5 +1,22 @@
 # Verification Report
 
+## VLA-07C latest image_pipeline software verification — 2026-08-12
+
+검증 source는 `origin/albitro/image_pipeline` @
+`ef592b5f756d87bff5dac0db1aeb0fbda05819ad`이다. `/fire/detections` 실제 envelope,
+`score→confidence`, source stamp nanosecond 보존, fake CameraInfo 역투영,
+source-time fake TF, person/fire, multi-detection one-to-one stable ID, smoke ignore,
+unknown fail-closed, fallback 3종 provenance, stale stamp, invalid score,
+NaN/Inf depth와 heartbeat `ok/stalled/no_input/waiting_camera_info` fixture를
+software-only로 검증했다.
+
+Upstream image_pipeline 자체 pytest는 287 passed였고 `run_local_check.sh`의
+합성 입력, 알고리즘 tests, offline tuning/benchmark, depth dummy scene도 PASS했다.
+기존 short-nav preflight는 Mock Navigation으로 ACCEPTED, actual Nav2 goal 0,
+cmd_vel 0을 유지했다. 실제 camera/YOLO/live TF hardware 검증은 수행하지 않았다.
+
+이 아래 VLA-03B `/vision/detections` 결과는 과거 계약의 검증 이력이다.
+
 ## 현재 checkout 재검증 결과
 
 기준 branch와 commit:
