@@ -88,15 +88,29 @@ hardware. The authoritative navigation and semantic space is a 2D `map` frame.
 
 - Start with `git status`, `git fetch origin --prune`, and current remote SHAs.
 - Never push directly to `main`, force-push, or push to another team's branch.
+- `feature/vla-brain` may receive verified standalone VLA commits and pushes;
+  open a PR only when the team explicitly requests an actual merge.
+- `integration/vla-robot-e2e` may receive verified integration/E2E commits and
+  pushes. Do not automatically request review or open a PR to `main`.
+- Merging to `main` always requires separate user approval.
 - Preserve user files and untracked artifacts; never delete them casually.
 - Do not resolve conflicts by blindly choosing `ours` or `theirs`; resolve the
   semantic contract.
 - Commit and push only after proportionate verification passes. Keep related
   code and documentation in the same task.
-- Issue workflow: Issue → implementation → verification → result comment → close
-  only when Acceptance Criteria are met.
-- Record integration results on the existing integration PR. Do not merge a PR
-  without explicit user approval.
+- Default work tracking is: Issue → implementation → verification → commit and
+  push → result comment → close only when Acceptance Criteria are met. A PR is
+  not a required step.
+- Write Issue titles, bodies, and result comments in concise, professional
+  Korean. Keep only necessary technical names, topics, classes, and commands in
+  English; do not paste long execution logs.
+- PR-related write actions require an explicit user request. Without it, do not
+  create a PR or Draft PR, comment on an existing PR, mark it ready for review,
+  or merge it. A completed commit, Issue, or integration verification does not
+  imply PR authorization.
+- Create a PR only when the user explicitly asks to merge a specific branch into
+  another shared branch or `main`. Use a concise professional Korean title and
+  body covering purpose, key changes, verification, and remaining work.
 
 ## Verification
 
