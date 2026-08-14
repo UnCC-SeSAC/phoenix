@@ -325,6 +325,11 @@ class MissionExecutor(Node):
                 f"fire_suppression 실패(attempts={result.attempts}): "
                 f"{result.message} — 그래도 넘어감"
             )
+        else:
+            self.get_logger().info(
+                f"fire_suppression 성공(attempts={result.attempts}): "
+                f"{result.message}"
+            )
 
         self.notify_target_complete(success=result.success)
 
