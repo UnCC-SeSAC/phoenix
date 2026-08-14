@@ -51,6 +51,7 @@ SERVO_SWEEP_RANGE_DEG = 15          # 중앙 기준 +-범위
 SERVO_UPDATE_INTERVAL = 0.05        # 각도 갱신 주기(초). 작을수록 더 매끄러움
 SERVO_MAX_SPEED_DEG_PER_SEC = 120.0 # 가장자리 부근에서의 각속도
 SERVO_CENTER_SPEED_FACTOR = 0.25    # 중앙에서의 속도 배율 (1보다 작을수록 중앙에서 더 오래 머무름)
+SERVO_SMOOTHING_ALPHA = 0.3   # EMA 계수(0~1). 작을수록 더 부드럽지만 반응이 느려짐(슬루레이트 제한 효과)
 
 # ControlExploration 서비스는 frontier_exploration_ros2가 이미 제공 (수정 불필요)
 CONTROL_EXPLORATION_SERVICE = 'control_exploration'
@@ -68,6 +69,7 @@ class FireSuppressionNode(Node):
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
             min_pulse_width=0.0005, max_pulse_width=0.0025,
+            initial_angle=SERVO_CENTER_ANGLE,
         )
 
         self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)
@@ -170,10 +172,12 @@ class FireSuppressionNode(Node):
 
     async def run_suppression_routine(self, goal_handle) -> bool:
         """펌프 ON 상태로 SPRAY_SECONDS 동안 연속 스윕 분사.
+        목표각을 EMA로 한 번 더 걸러서 명령해 떨림을 줄인다.
         도중에 취소 요청이 오면 즉시 펌프/서보를 정지하고 True를 반환한다."""
-        angle = SERVO_CENTER_ANGLE
+        target_angle = SERVO_CENTER_ANGLE
+        smoothed_angle = SERVO_CENTER_ANGLE
         direction = 1
-        self.servo.angle = angle
+        self.servo.angle = smoothed_angle
 
         self.pump.value = 1.0
         elapsed = 0.0
@@ -181,8 +185,9 @@ class FireSuppressionNode(Node):
             while elapsed < SPRAY_SECONDS:
                 if goal_handle.is_cancel_requested:
                     return True
-                angle, direction = self._next_sweep_angle(angle, direction)
-                self.servo.angle = angle
+                target_angle, direction = self._next_sweep_angle(target_angle, direction)
+                smoothed_angle += SERVO_SMOOTHING_ALPHA * (target_angle - smoothed_angle)
+                self.servo.angle = smoothed_angle
                 await self._rclpy_sleep(SERVO_UPDATE_INTERVAL)
                 elapsed += SERVO_UPDATE_INTERVAL
         finally:
@@ -190,7 +195,7 @@ class FireSuppressionNode(Node):
             self.servo.angle = SERVO_CENTER_ANGLE
 
         return False
-
+        
     # ---------------- YOLO 상태 확인 ----------------
     async def check_fire_status_async(self, observation_seconds: float):
         if not self.yolo_client.wait_for_service(timeout_sec=2.0):
