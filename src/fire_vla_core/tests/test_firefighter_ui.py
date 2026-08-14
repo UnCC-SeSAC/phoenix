@@ -165,14 +165,18 @@ def request(server, path, *, body=None):
         return response.status, response.headers["Content-Type"], response.read()
 
 
-def test_http_root_serves_ui_with_required_panels_and_map(http_server):
+def test_http_root_serves_only_required_mvp_panels(http_server):
     server, _ = http_server
     status, content_type, body = request(server, "/")
     html = body.decode("utf-8")
     assert status == 200 and content_type.startswith("text/html")
-    for text in ("Mission 보내기", "Robot", "People", "Fires", "Decision", "2D Semantic Map"):
+    for text in (
+        "Mission", "Robot Status", "Current Action", "Detected Objects",
+        "Recent Result", "CONNECTED", "DISCONNECTED",
+    ):
         assert text in html
-    assert "NAVIGATE 버튼" not in html
+    for excluded in ("cmd_vel", "NavigateToPose", "Pump", "2D Semantic Map"):
+        assert excluded not in html
 
 
 def test_status_api_returns_canonical_status(http_server):
