@@ -3,7 +3,7 @@ controller_server:
     use_sim_time: False
     controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
 
@@ -14,8 +14,8 @@ controller_server:
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.5
-      movement_time_allowance: 10.0
+      required_movement_radius: 0.10
+      movement_time_allowance: 15.0
 
     general_goal_checker:
       stateful: True
@@ -30,24 +30,24 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
-      min_vel_x: -0.4
-      min_vel_y: 0.0
-      max_vel_x: 0.4
-      max_vel_y: 0.0
+      min_vel_x: -0.3 # 앞뒤 이동
+      min_vel_y: -0.15 # 좌우 이동
+      max_vel_x: 0.3 # 앞뒤 이동
+      max_vel_y: 0.15 # 좌우 이동
       max_vel_theta: 1.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.4
+      max_speed_xy: 0.35
       min_speed_theta: 0.0
       acc_lim_x: 2.5
-      acc_lim_y: 0.0
+      acc_lim_y: 1.0 # DWB의 Y축 최대 가속도 (m/s²)
       acc_lim_theta: 3.2
       decel_lim_x: -2.5
-      decel_lim_y: 0.0
+      decel_lim_y: -1.0 # DWB의 Y축 최대 감속도 (m/s²)
       decel_lim_theta: -3.2
       vx_samples: 20
-      vy_samples: 5
+      vy_samples: 5 # 샘플 수 늘리기 
       vtheta_samples: 20
-      sim_time: 1.7
+      sim_time: 1.5 # 값이 작을 수록 속도를 기반으로 짧은 시간동안 궤적을 생성
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
@@ -57,15 +57,16 @@ controller_server:
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
-      PathAlign.scale: 32.0
+      PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 24.0
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0
+      PathDist.scale: 20.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
+      Oscillation.scale: 1.0
 controller_server_rclcpp_node:
   ros__parameters:
     use_sim_time: False
