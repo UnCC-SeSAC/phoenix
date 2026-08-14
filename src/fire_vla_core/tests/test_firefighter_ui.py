@@ -133,12 +133,29 @@ def test_invalid_port_is_rejected(port):
 @pytest.fixture
 def http_server():
     store = StatusStore()
+    world = make_world()
+    navigation = Action(
+        "nav_0001", ActionType.NAVIGATE_TO, "인명을 우선 확인합니다.",
+        "person_0001", Pose2D(2.0, 1.0),
+    )
+    submission = ActionSubmission(
+        navigation.action_id, ActionSubmissionStatus.ACCEPTED, "accepted"
+    )
+    world.apply_submission(navigation, submission)
+    world.apply_action_result(ActionResult(
+        navigation.action_id, ExecutionSource.NAVIGATION,
+        ActionResultStatus.SUCCEEDED, "person_0001",
+    ))
     store.update({
         "timestamp": "2026-08-10T00:00:00+00:00",
-        "world_model": make_world().create_snapshot(),
-        "decision": {"action": "WAIT", "target": None, "reason": "대기"},
-        "validation": None,
-        "submission": None,
+        "world_model": world.create_snapshot(),
+        "decision": {
+            "action": "NAVIGATE_TO",
+            "target": "person_0001",
+            "reason": "인명을 우선 확인합니다.",
+        },
+        "validation": {"approved": True, "reason": ""},
+        "submission": {"status": "ACCEPTED", "detail": "accepted"},
         "blocked_reason": "",
     })
     missions = []
@@ -165,18 +182,24 @@ def request(server, path, *, body=None):
         return response.status, response.headers["Content-Type"], response.read()
 
 
-def test_http_root_serves_only_required_mvp_panels(http_server):
+def test_http_root_serves_required_v2_panels(http_server):
     server, _ = http_server
     status, content_type, body = request(server, "/")
     html = body.decode("utf-8")
     assert status == 200 and content_type.startswith("text/html")
     for text in (
-        "Mission", "Robot Status", "Current Action", "Detected Objects",
-        "Recent Result", "CONNECTED", "DISCONNECTED",
+        "Mission", "Robot Status", "Current Action", "Live Vision",
+        "Semantic Map", "Situation Timeline", "Detected Objects",
+        "Recent Result", "VLA Decision / Reason", "CONNECTED", "DISCONNECTED",
     ):
         assert text in html
-    for excluded in ("cmd_vel", "NavigateToPose", "Pump", "2D Semantic Map"):
+    for excluded in ("cmd_vel", "NavigateToPose", "Pump", "motor control"):
         assert excluded not in html
+    for canonical_field in (
+        "world.people", "world.fires", "world.current_action",
+        "world.last_action", "decision.reason", "current.target_pose",
+    ):
+        assert canonical_field in html
 
 
 def test_status_api_returns_canonical_status(http_server):
@@ -185,7 +208,14 @@ def test_status_api_returns_canonical_status(http_server):
     payload = json.loads(body)
     assert status == 200 and content_type.startswith("application/json")
     assert payload["world_model"]["people"][0]["id"] == "person_0001"
-    assert payload["decision"]["reason"] == "대기"
+    assert payload["world_model"]["fires"][0]["id"] == "fire_0001"
+    assert payload["world_model"]["last_action"]["action"] == "NAVIGATE_TO"
+    assert payload["world_model"]["last_action"]["status"] == "SUCCEEDED"
+    assert payload["decision"] == {
+        "action": "NAVIGATE_TO",
+        "target": "person_0001",
+        "reason": "인명을 우선 확인합니다.",
+    }
 
 
 def test_mission_api_publishes_one_canonical_payload(http_server):
@@ -224,12 +254,24 @@ def test_navigation_report_and_spray_lifecycle_are_visible_in_snapshot():
     world.apply_action_result(ActionResult(
         "spray_1", ExecutionSource.SPRAY, ActionResultStatus.SUCCEEDED, "fire_0001"
     ))
-    snapshot = VLAStatusTracker().create_payload(world.create_snapshot())["world_model"]
+    tracker = VLAStatusTracker()
+    tracker.update(DecisionCycle(
+        ActionDecision(ActionType.EXTINGUISH, "화재 진압을 수행합니다.", "fire_0001"),
+        ValidationResult(True, action=spray), accepted(spray),
+    ))
+    payload = tracker.create_payload(world.create_snapshot())
+    snapshot = payload["world_model"]
     assert snapshot["robot"]["navigation_status"] == "SUCCEEDED"
     assert snapshot["people"][0]["reported"] is True
     assert snapshot["fires"][0]["state"] == FireState.PENDING_VERIFICATION.value
     assert snapshot["fires"][0]["spray_count"] == 1
     assert snapshot["last_action"]["action"] == "EXTINGUISH"
+    assert snapshot["last_action"]["status"] == "SUCCEEDED"
+    assert payload["decision"] == {
+        "action": "EXTINGUISH",
+        "target": "fire_0001",
+        "reason": "화재 진압을 수행합니다.",
+    }
 
 
 def test_existing_launches_do_not_force_start_ui():
