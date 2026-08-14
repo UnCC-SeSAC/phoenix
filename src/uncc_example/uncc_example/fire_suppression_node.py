@@ -35,21 +35,27 @@ from gpiozero.pins.lgpio import LGPIOFactory
 
 Device.pin_factory = LGPIOFactory()
 
-# ---------------- 하드웨어 설정 ----------------
+# 하드웨어 설정
 PUMP_PIN = 13
 SERVO_PIN = 18
 PWM_FREQUENCY = 1000
 
-SPRAY_SECONDS = 4.0          # 한 번 진압 시도(1회)에서 분사하는 시간
-SERVO_CENTER_ANGLE = 90.0    # 노즐 중앙 각도
-SERVO_SWEEP_RANGE_DEG = 20.0  # 중앙 기준 좌우로 움직이는 폭 (총 스윙 = 이 값의 2배)
+SPRAY_SECONDS = 3.0
 RETRY_WAIT_SECONDS = 2.0
 DEFAULT_MAX_ATTEMPTS = 3
 STATUS_CHECK_SECONDS = 2.0
 
+# 서보 스윕 설정
+SERVO_CENTER_ANGLE = 90
+SERVO_SWEEP_RANGE_DEG = 15          # 중앙 기준 +-범위
+SERVO_UPDATE_INTERVAL = 0.05        # 각도 갱신 주기(초). 작을수록 더 매끄러움
+SERVO_MAX_SPEED_DEG_PER_SEC = 120.0 # 가장자리 부근에서의 각속도
+SERVO_CENTER_SPEED_FACTOR = 0.25    # 중앙에서의 속도 배율 (1보다 작을수록 중앙에서 더 오래 머무름)
+
 # ControlExploration 서비스는 frontier_exploration_ros2가 이미 제공 (수정 불필요)
 CONTROL_EXPLORATION_SERVICE = 'control_exploration'
 CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
+
 
 
 class FireSuppressionNode(Node):
@@ -141,27 +147,49 @@ class FireSuppressionNode(Node):
         return goal_handle.is_cancel_requested
 
     # ---------------- 하드웨어 제어 ----------------
-    async def run_suppression_routine(self, goal_handle):
-        """펌프 ON + 서보를 중앙 기준 좌우 SERVO_SWEEP_RANGE_DEG도로 왕복
-        스윕하며 SPRAY_SECONDS 동안 분사 후 정지 (= 1회 진압 시도).
-        도중에 취소 요청이 오면 스윕을 중단하고 즉시 펌프를 끈다.
-        반환값 True면 스프레이 도중 취소된 것."""
-        left = SERVO_CENTER_ANGLE - SERVO_SWEEP_RANGE_DEG
-        right = SERVO_CENTER_ANGLE + SERVO_SWEEP_RANGE_DEG
-        angles = [left, right, left, right]  # 4초 동안 좌우 왕복 2회
-        step = SPRAY_SECONDS / len(angles)
+    def _next_sweep_angle(self, angle: float, direction: int) -> tuple:
+        """중앙에서는 느리게(오래 머무름), 가장자리 근처에서는 빠르게 움직이는
+        다음 각도를 계산. 경계에 닿으면 즉시 방향을 반전한다 (고정 대기 없음)."""
+        min_angle = SERVO_CENTER_ANGLE - SERVO_SWEEP_RANGE_DEG
+        max_angle = SERVO_CENTER_ANGLE + SERVO_SWEEP_RANGE_DEG
+
+        offset_ratio = abs(angle - SERVO_CENTER_ANGLE) / SERVO_SWEEP_RANGE_DEG
+        speed_factor = SERVO_CENTER_SPEED_FACTOR + (1 - SERVO_CENTER_SPEED_FACTOR) * offset_ratio ** 2
+        speed = SERVO_MAX_SPEED_DEG_PER_SEC * speed_factor
+
+        next_angle = angle + direction * speed * SERVO_UPDATE_INTERVAL
+
+        if next_angle >= max_angle:
+            next_angle = max_angle
+            direction = -1
+        elif next_angle <= min_angle:
+            next_angle = min_angle
+            direction = 1
+
+        return next_angle, direction
+
+    async def run_suppression_routine(self, goal_handle) -> bool:
+        """펌프 ON 상태로 SPRAY_SECONDS 동안 연속 스윕 분사.
+        도중에 취소 요청이 오면 즉시 펌프/서보를 정지하고 True를 반환한다."""
+        angle = SERVO_CENTER_ANGLE
+        direction = 1
+        self.servo.angle = angle
 
         self.pump.value = 1.0
-        cancelled = False
-        for a in angles:
-            self.servo.angle = a
-            cancelled = await self.interruptible_sleep(goal_handle, step)
-            if cancelled:
-                break
+        elapsed = 0.0
+        try:
+            while elapsed < SPRAY_SECONDS:
+                if goal_handle.is_cancel_requested:
+                    return True
+                angle, direction = self._next_sweep_angle(angle, direction)
+                self.servo.angle = angle
+                await self._rclpy_sleep(SERVO_UPDATE_INTERVAL)
+                elapsed += SERVO_UPDATE_INTERVAL
+        finally:
+            self.pump.value = 0.0
+            self.servo.angle = SERVO_CENTER_ANGLE
 
-        self.pump.value = 0.0
-        self.servo.angle = SERVO_CENTER_ANGLE
-        return cancelled
+        return False
 
     # ---------------- YOLO 상태 확인 ----------------
     async def check_fire_status_async(self, observation_seconds: float):

@@ -260,10 +260,10 @@ def generate_launch_description():
 
     # =========================================
     # 6.5. Fire Suppression
-    #    (fire_status_service_node + fire_suppression_node +
-    #    fire_extinguisher 세 노드를 같이 띄운다. mission_manager가
-    #    /fire_extinguisher/extinguish 를 호출하므로 mission_manager
-    #    (t=13)보다 반드시 먼저 떠 있어야 한다. frontier(t=11) /
+    #    (fire_status_service_node + fire_suppression_node 
+    #    두 노드를 같이 띄운다. mission_manager가 SuppressFire
+    #    Action을 호출하므로 mission_manager(t=13)보다 
+    #    반드시 먼저 떠 있어야 한다. frontier(t=11) /
     #    avoidance(t=12) 다음, control_exploration 서비스가 이미
     #    준비된 뒤에 뜨도록 배치했다.)
     # =========================================
@@ -319,19 +319,6 @@ def generate_launch_description():
                 ),
             ),
 
-            Node(
-                package='uncc_example',
-
-                executable='fire_extinguisher',
-
-                name='fire_extinguisher',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_fire_suppression
-                ),
-            ),
         ],
     )
 

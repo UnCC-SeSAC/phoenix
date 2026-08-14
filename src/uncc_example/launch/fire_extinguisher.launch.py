@@ -15,8 +15,7 @@ def generate_launch_description():
         ros2 launch uncc_example fire_suppression_test.launch.py
 
         # 다른 터미널에서 수동 트리거
-        ros2 service call /fire_extinguisher/extinguish std_srvs/srv/Trigger "{}"
-        ros2 topic echo /fire_extinguisher/result
+        ros2 action send_goal /suppress_fire interfaces/action/SuppressFire "{max_attempts: 1}"
     """
     return LaunchDescription([
         Node(
@@ -29,12 +28,6 @@ def generate_launch_description():
             package='uncc_example',
             executable='fire_suppression_node',
             name='fire_suppression_node',
-            output='screen',
-        ),
-        Node(
-            package='uncc_example',
-            executable='fire_extinguisher',
-            name='fire_extinguisher',
             output='screen',
         ),
     ])
