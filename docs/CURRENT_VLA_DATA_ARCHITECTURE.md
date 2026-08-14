@@ -147,7 +147,7 @@ Topic/type: `/yolo/detections`, `std_msgs/msg/String` JSON
 | `fallback_bottom` / `fallback_below` / `fallback_ring` | 유효한 meter depth이면 transform |
 | `unknown` | `depth=null`; detection drop |
 
-현재 `vision_detector.py`는 `depth`가 숫자가 아니면 drop하므로 `depth_status="unknown"` + `depth=null` 조합은 안전하게 발행되지 않는다. 다만 `depth_status` 문자열 자체를 분기하지는 않는다. 따라서 upstream이 계약을 위반해 `unknown`과 numeric depth를 함께 보내는 경우까지 명시적으로 차단한다고 보장하지 않으며, 이 조합과 실제 status 분포는 live hardware verification 항목이다.
+현재 `vision_detector.py`는 envelope의 source timestamp를 프레임 전체에 적용하고 detection별 confidence를 보존한다. `unknown` 또는 미지원 `depth_status`, null/비수치/비양수 depth, invalid confidence/timestamp/intrinsics, TF failure는 모두 fail-closed로 drop한다. `/vision/detections`는 같은 source frame의 유효한 map detection들을 하나의 batch로 발행한다.
 
 추가로 depth `<=0`/NaN/Inf, invalid CameraInfo/intrinsics, malformed detection, invalid confidence/timestamp, TF failure는 map detection을 발행하지 않는다. 과거 map coordinate를 재사용하지 않는다.
 

@@ -26,13 +26,11 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
-def include_launch(
-    path,
-    condition=None,
-):
+def include_launch(path, condition=None, launch_arguments=None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(path),
         condition=condition,
+        launch_arguments=(launch_arguments or {}).items(),
     )
 
 
@@ -52,6 +50,10 @@ def generate_launch_description():
 
     peripherals_share = get_package_share_directory(
         'peripherals'
+    )
+
+    image_pipeline_share = get_package_share_directory(
+        'image_pipeline'
     )
 
     launch_dir = os.path.join(
@@ -100,6 +102,10 @@ def generate_launch_description():
     start_vision = LaunchConfiguration(
         'start_vision'
     )
+
+    vision_model_path = LaunchConfiguration('vision_model_path')
+    vision_class_names = LaunchConfiguration('vision_class_names')
+    vision_layout = LaunchConfiguration('vision_layout')
 
     return_to_start_on_complete = LaunchConfiguration(
         'return_to_start_on_complete'
@@ -262,11 +268,9 @@ def generate_launch_description():
     )
 
     # =========================================
-    # 7. Depth Camera + yolo_detector
-    #    (yolo_detector 는 실제 YOLO 모델 없이 파이프라인 테스트용
-    #    더미 감지만 발행하는 임시 노드 — 나중에 다른 사람이 작성한
-    #    코드로 교체될 예정이라 mission_manager 와 별도 프로세스로
-    #    유지한다)
+    # 7. Production Camera + image_pipeline
+    #    Test-only full_chain_check.launch.py is intentionally excluded:
+    #    it starts fake_detection_node and the stub YOLO backend.
     # =========================================
 
     vision = TimerAction(
@@ -280,19 +284,34 @@ def generate_launch_description():
                 ),
                 IfCondition(start_vision),
             ),
-
-            Node(
-                package='uncc_example',
-
-                executable='yolo_detector',
-
-                name='yolo_detector',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_vision
+            include_launch(
+                os.path.join(
+                    image_pipeline_share,
+                    'launch',
+                    'preprocess.launch.py',
                 ),
+                IfCondition(start_vision),
+            ),
+            include_launch(
+                os.path.join(
+                    image_pipeline_share,
+                    'launch',
+                    'yolo.launch.py',
+                ),
+                IfCondition(start_vision),
+                {
+                    'model_path': vision_model_path,
+                    'class_names': vision_class_names,
+                    'layout': vision_layout,
+                },
+            ),
+            include_launch(
+                os.path.join(
+                    image_pipeline_share,
+                    'launch',
+                    'detection_3d.launch.py',
+                ),
+                IfCondition(start_vision),
             ),
         ],
     )
@@ -371,6 +390,24 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'start_vision',
             default_value='false',
+        ),
+
+        DeclareLaunchArgument(
+            'vision_model_path',
+            default_value='',
+            description='Production YOLO model path; required when start_vision=true',
+        ),
+
+        DeclareLaunchArgument(
+            'vision_class_names',
+            default_value="['fire']",
+            description='Class order from the production model data.yaml',
+        ),
+
+        DeclareLaunchArgument(
+            'vision_layout',
+            default_value='auto',
+            description='Production model output layout; pin after backend verification',
         ),
 
         DeclareLaunchArgument(

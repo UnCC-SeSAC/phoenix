@@ -37,6 +37,7 @@
   <exec_depend>std_srvs</exec_depend>
 
   <exec_depend>interfaces</exec_depend>
+  <exec_depend>image_pipeline</exec_depend>
   <exec_depend>frontier_exploration_ros2</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>

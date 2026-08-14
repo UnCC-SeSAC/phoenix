@@ -1,5 +1,14 @@
 # 통합 변경 보고서
 
+## 팀 최신 코드 선별 통합 — 2026-08-14
+
+- `integration/vla-robot-e2e`를 조립 기준으로 유지하고 팀 branch 전체 merge는 하지 않았다.
+- `state_manage`의 multi-detection/cluster 및 SuppressFire 직접 호출 의미는 기존 integration에 이미 반영돼 있음을 확인했다. VisionDetector는 최신 `/fire/detections` batch/QoS 계약으로 정렬하되 confidence, source timestamp, CameraInfo/TF fail-closed 검증을 보존했다.
+- production vision은 실제 camera와 `preprocess.launch.py`, `yolo.launch.py`, `detection_3d.launch.py`만 조합한다. fake producer와 stub backend를 포함하는 `full_chain_check.launch.py`는 test-only로 제외했고 `start_vision=false`를 유지했다.
+- LD19 2D LaserScan 구성에 맞춰 local costmap을 VoxelLayer에서 ObstacleLayer로 변경하고 최신 footprint, DWB, velocity smoother 설정을 반영했다.
+- `fire_v2` 의미에 맞춰 MissionExecutor → SuppressFire Action 직접 경로를 유지하고 구형 `fire_extinguisher` adapter/entrypoint를 제거했다. 실제 Pump command는 수행하지 않았다.
+- `albitro/image_processing`과 `frontier_basic`은 현재 integration보다 오래된 baseline이므로 가져오지 않았다.
+
 ## VLA-07C image_pipeline integration — 2026-08-12
 
 - Upstream: `origin/albitro/image_pipeline` @

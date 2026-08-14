@@ -12,10 +12,9 @@ def main(args=None):
     vision_detector + state_manager + mission_executor 를 한
     프로세스에서 같이 돌린다 (RAM 절약 목적).
 
-    yolo_detector 는 나중에 다른 사람이 작성한 코드로 교체될
-    예정이라 의도적으로 여기 포함하지 않고 계속 별도 프로세스로
-    둔다 — 무거운 의존성(모델 로딩 등)을 이 프로세스까지 끌고
-    오지 않기 위함.
+    비전 파이프라인(image_pipeline)은 의도적으로 여기 포함하지
+    않고 계속 별도 프로세스로 둔다 — 무거운 의존성(모델 로딩 등)을
+    이 프로세스까지 끌고 오지 않기 위함.
 
     개별 노드(state_manager, vision_detector, mission_executor)의
     ros2 run 진입점은 그대로 남아있어서, 필요하면 지금처럼 따로
