@@ -164,6 +164,28 @@
 - **재발 시 확인:** 이미 완료한 software/yaw/timestamp/resource 진단을 반복하지 말고
   Pi host, container, ROS stack, DDS pose 중 최초 소실 계층만 최소 분리한다.
 
+### 12. 동일 SHA isolated deployment 재사용
+
+- integration `cc20d29ca2214a6b93f7d3e944d65f0c5cc976c8`은
+  `/tmp/vla_integration_deploy_cc20d29_clean`에서 필요한 11개 package build와 isolated
+  prefix 우선순위, `ObstacleLayer`, 최신 footprint/DWB/velocity smoother 및
+  `ObstacleFootprint.scale: 0.02`를 확인했다.
+- 같은 SHA의 Hardware retry에서는 해당 경로의 `build/`, `install/`, package prefix와
+  config가 유효하면 그대로 재사용한다. retry 자체를 이유로 새 workspace나 전체 clean
+  build를 만들지 않는다.
+- rebuild는 SHA 변경, deployment 삭제, artifact 손상 증거, source/config 불일치 또는
+  코드 변경에 따른 dependency 변화가 있을 때만 수행한다.
+- `/opt/ros/humble → 검증된 Robot/vendor runtime install(read-only) → isolated
+  integration overlay` 순서를 사용한다. 팀 source/config/build/install은 수정하지 않고,
+  integration에서 변경된 package와 config는 isolated overlay가 먼저 해석돼야 한다.
+- 기존 이력에서 calibration, `mentorpi_description`, `ros_robot_controller`,
+  `ros_robot_controller_msgs`, `MACHINE_TYPE=MentorPi_Mecanum`, ubuntu user-local
+  `pyserial` 조건은 이미 확인됐다. 같은 SHA에서 dependency를 처음부터 재탐색하지 않는다.
+- 최근 `ISOLATED_DEPLOY_SHORT_NAV_FAIL`은 deployment/build 실패가 아니라 boundary K,
+  Robot/DDS continuity 소실이다. actual goal, non-zero `cmd_vel`, 이동, Pump 명령은 모두
+  0이었으므로 다음 retry는 identity와 deployment 유효성을 짧게 확인한 뒤 runtime
+  continuity와 actual short-nav 1회에 집중한다.
+
 ## 재발 시 최소 진단표
 
 “연결 끊김”을 하나의 원인으로 처리하지 말고 첫 FAIL 단계에서 실패 계층과 시각을

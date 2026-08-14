@@ -77,6 +77,18 @@ hardware. The authoritative navigation and semantic space is a 2D `map` frame.
   the task explicitly authorizes it.
 - In hardware-free work, never issue Robot, Nav2 motion, motor, or Pump commands.
 
+## Hardware Deployment
+
+- Reuse a verified isolated deployment for Hardware retries at the same
+  integration SHA; do not repeat a clean rebuild without a SHA change or
+  evidence that its build/install artifacts are missing, damaged, or stale.
+- Keep the team workspace unchanged. A verified Robot/vendor runtime install
+  may be used as a read-only underlay, while current integration packages and
+  configuration must resolve from the isolated overlay first.
+- After a brief deployment validity check, prioritize the pending actual E2E
+  execution instead of repeating completed dependency discovery or deployment
+  purity diagnostics.
+
 ## Perception Boundary
 
 - `albitro/image_pipeline` is the current upstream perception source of truth.
