@@ -400,8 +400,8 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'vision_class_names',
-            default_value="['fire']",
-            description='Class order from the production model data.yaml',
+            default_value="['fire', 'person']",
+            description='Phoenix production model order: fire=0, person=1',
         ),
 
         DeclareLaunchArgument(

@@ -635,12 +635,20 @@ class UltralyticsDetector:
         self.iou = float(iou)
         # 모델이 이름을 알고 있으면 그걸 씁니다 — 손으로 적은 순서보다 안전합니다.
         names = getattr(self.model, "names", None)
-        if class_names:
-            self.class_names = tuple(str(n) for n in class_names)
-        elif isinstance(names, dict):
-            self.class_names = tuple(names[i] for i in sorted(names))
+        if isinstance(names, dict):
+            model_class_names = tuple(str(names[i]) for i in sorted(names))
         else:
-            self.class_names = tuple(names or ())
+            model_class_names = tuple(str(name) for name in (names or ()))
+        if class_names:
+            configured_class_names = tuple(str(n) for n in class_names)
+            if model_class_names and configured_class_names != model_class_names:
+                raise ValueError(
+                    "class_names가 .pt 모델 metadata와 다릅니다: "
+                    f"configured={configured_class_names}, model={model_class_names}"
+                )
+            self.class_names = configured_class_names
+        else:
+            self.class_names = model_class_names
         self.detected_layout = "ultralytics"
         self.timings = {"pre": 0.0, "infer": 0.0, "post": 0.0, "total": 0.0}
 

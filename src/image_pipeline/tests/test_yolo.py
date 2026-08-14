@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 
 import numpy as np
 import pytest
@@ -37,6 +38,32 @@ from image_pipeline.yolo import (  # noqa: E402
     normalize_output,
     undo_letterbox,
 )
+
+
+class TestUltralyticsDetectorClassContract:
+    class _FakeYOLO:
+        names = {0: "fire", 1: "person"}
+
+        def __init__(self, _weights):
+            pass
+
+    def test_rejects_configured_names_that_disagree_with_pt_metadata(
+            self, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules, "ultralytics", types.SimpleNamespace(YOLO=self._FakeYOLO))
+        from image_pipeline.yolo import UltralyticsDetector
+
+        with pytest.raises(ValueError, match="metadata"):
+            UltralyticsDetector("model.pt", class_names=["fire"])
+
+    def test_accepts_exact_model_class_order(self, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules, "ultralytics", types.SimpleNamespace(YOLO=self._FakeYOLO))
+        from image_pipeline.yolo import UltralyticsDetector
+
+        detector = UltralyticsDetector(
+            "model.pt", class_names=["fire", "person"])
+        assert detector.class_names == ("fire", "person")
 
 
 # --------------------------------------------------------------- 합성 출력

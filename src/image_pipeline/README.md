@@ -17,7 +17,7 @@ depth0/image_raw ─────────────────────
 | 실행 파일 | 역할 |
 |---|---|
 | `preprocess_node` | 태스크① — 감마·디헤이즈(DCP/AOD-Net)·CLAHE |
-| `yolo_node` | YOLO26 추론 (ONNX/OpenCV, torch 불필요). **가중치 대기 중** |
+| `yolo_node` | YOLO26 추론 (`.pt`/Ultralytics 개발 PC, ONNX/OpenCV 백엔드) |
 | `detection_3d_node` | 태스크② — 박스 + 뎁스 → 거리 → JSON 발행 |
 | `fake_detection_node` | 로봇·YOLO 없이 돌려보기 위한 더미 (정답을 로그에 찍음) |
 | `fake_camera_node` | 로봇 없이 쓰는 가짜 카메라 |
@@ -75,16 +75,25 @@ ROS 없이 도는 테스트 341개:
 python3 -m pytest tests/ -q
 ```
 
-## YOLO 가중치가 오면
+## Phoenix production YOLO 가중치
+
+Hugging Face `albitro/phoenix_detection` revision
+`eed14671dfc1d32a26710594d865da03dbca664f`에는 YOLO26s 가중치 두 종류가 있다.
+Production 전처리 체인(`full`: gamma → DCP → CLAHE)에는 `filtered/best.pt`를
+사용하며, weight는 Git이 아닌 외부 artifact cache에 둔다. SHA-256은
+`a09bc762875f61b0a822231ae12f15aeedb0408d62fcb03d9672c97a800ee989`,
+입력 크기는 640, class 순서는 `fire=0, person=1`이다(`smoke` class 없음).
 
 ```bash
-python3 tools/detect_offline.py --model models/xxx.onnx --describe   # 출력 텐서 shape 확인
-python3 tools/detect_offline.py --model models/xxx.onnx 사진.jpg --names fire -o out/
-ros2 launch image_pipeline yolo.launch.py model_path:=models/xxx.onnx class_names:="['fire']"
+python3 tools/detect_offline.py --model /artifact/filtered/best.pt \
+  --preprocess full --names fire person 사진.jpg -o out/
+ros2 launch image_pipeline yolo.launch.py \
+  model_path:=/artifact/filtered/best.pt class_names:="['fire', 'person']" imgsz:=640
 ```
 
-시작 로그의 `레이아웃=` 값을 확인한 뒤 `layout:=v8` 또는 `end2end`로 **못박으세요.**
-자동 판별은 휴리스틱이고, Hailo 출력이 PC ONNX와 다를 수 있습니다.
+`.pt` backend는 Ultralytics가 postprocess한 `Results`(`xyxy`, score, class id)를
+사용하므로 ONNX용 `layout` 인자는 적용되지 않는다. 추후 ONNX export를 사용할
+때는 실제 출력을 확인한 뒤 `layout:=v8` 또는 `end2end`로 고정한다.
 
 `.hef`(Hailo) 백엔드는 **일부러 비워 뒀습니다** — 스트림 이름·양자화 스케일이
 컴파일마다 달라 추측으로 채우면 "도는데 좌표가 틀린" 코드가 됩니다.

@@ -1,6 +1,6 @@
 """YOLO26 검출 노드 런치 — 태스크① 출력 -> 태스크② 입력.
 
-  ros2 launch image_pipeline yolo.launch.py model_path:=models/fire_yolo26s.onnx
+  ros2 launch image_pipeline yolo.launch.py model_path:=/path/to/filtered/best.pt
 
 전체 사슬(①→YOLO→②)을 한 번에 띄우려면 셋을 각각 launch 하세요:
 
@@ -33,8 +33,8 @@ def generate_launch_description():
             description='태스크①의 출력. 원본 rgb0 가 아닙니다'),
         DeclareLaunchArgument('detections_topic', default_value='/yolo_result'),
         DeclareLaunchArgument(
-            'class_names', default_value="['fire']",
-            description='★ 학습 때 순서 그대로'),
+            'class_names', default_value="['fire', 'person']",
+            description='★ Phoenix data.yaml 순서: fire=0, person=1'),
         DeclareLaunchArgument(
             'imgsz', default_value='640',
             description='★ 학습 때 값과 같아야 합니다'),
