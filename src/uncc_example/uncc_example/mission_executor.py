@@ -57,6 +57,9 @@ class MissionExecutor(Node):
         )
 
         self._fire_goal_handle = None
+        # Nav2 도착부터 target_complete로 state가 갱신될 때까지 한 화점의
+        # navigation/suppression cycle이 다시 시작되지 않게 한다.
+        self._fire_cycle_active = False
 
         # -----------------------------
         # Subscriptions
@@ -106,6 +109,9 @@ class MissionExecutor(Node):
             # 배터리 부족 등으로 복귀가 최우선이 되면, 진행 중이던
             # 진압 동작은 더 이상 의미가 없으니 취소한다.
             self._cancel_fire_suppression()
+
+        if msg.data != StateManager.FIRE_DETECTED:
+            self._fire_cycle_active = False
 
         self.state = msg.data
 
@@ -176,6 +182,9 @@ class MissionExecutor(Node):
     def _send_nav_goal(self, pose_stamped):
 
         if pose_stamped is None:
+            return
+
+        if self.state == StateManager.FIRE_DETECTED and self._fire_cycle_active:
             return
 
         target_xy = (
@@ -264,12 +273,17 @@ class MissionExecutor(Node):
         처리한다.
         """
 
+        if self._fire_cycle_active:
+            return
+
         if not self._fire_action_client.server_is_ready():
             self.get_logger().warn(
                 "fire_suppression 액션 서버가 아직 준비되지 않음",
                 throttle_duration_sec=2.0,
             )
             return
+
+        self._fire_cycle_active = True
 
         goal_msg = SuppressFire.Goal()
         # max_attempts 를 안 채우면(0) 서버가 자체 DEFAULT_MAX_ATTEMPTS 를 쓴다.
@@ -301,6 +315,7 @@ class MissionExecutor(Node):
 
         if not goal_handle.accepted:
             self.get_logger().warn("fire_suppression goal 이 거부됨")
+            self._fire_cycle_active = False
             return
 
         self._fire_goal_handle = goal_handle
@@ -320,10 +335,21 @@ class MissionExecutor(Node):
 
         result = future.result().result
 
+        # RETURNING_TO_BASE 같은 상위 상태가 진압을 취소한 뒤 도착한
+        # 이전 result로 새 target을 완료 처리하지 않는다.
+        if self.state != StateManager.FIRE_DETECTED:
+            self.get_logger().info("상태 전환 후 도착한 fire_suppression 결과를 무시함")
+            return
+
         if not result.success:
             self.get_logger().warn(
                 f"fire_suppression 실패(attempts={result.attempts}): "
                 f"{result.message} — 그래도 넘어감"
+            )
+        else:
+            self.get_logger().info(
+                f"fire_suppression 성공(attempts={result.attempts}): "
+                f"{result.message}"
             )
 
         self.notify_target_complete(success=result.success)
