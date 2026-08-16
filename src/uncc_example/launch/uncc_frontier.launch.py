@@ -24,6 +24,7 @@ from launch.substitutions import (
 )
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def include_launch(
@@ -42,75 +43,57 @@ def generate_launch_description():
     # Package paths
     # -----------------------------------------
 
-    uncc_share = get_package_share_directory(
-        'uncc_example'
-    )
+    uncc_share = get_package_share_directory("uncc_example")
 
-    frontier_share = get_package_share_directory(
-        'frontier_exploration_ros2'
-    )
+    frontier_share = get_package_share_directory("frontier_exploration_ros2")
 
-    image_pipeline_share = get_package_share_directory(
-        'image_pipeline'
-    )
+    frontier_share = get_package_share_directory("frontier_exploration_ros2")
+
+    image_pipeline_share = get_package_share_directory("image_pipeline")
 
     launch_dir = os.path.join(
         uncc_share,
-        'launch',
+        "launch",
     )
 
     frontier_params = os.path.join(
         frontier_share,
-        'config',
-        'params.yaml',
+        "config",
+        "params.yaml",
     )
 
     # -----------------------------------------
     # Arguments
     # -----------------------------------------
 
-    start_hardware = LaunchConfiguration(
-        'start_hardware'
-    )
+    start_hardware = LaunchConfiguration("start_hardware")
 
-    start_lidar_app = LaunchConfiguration(
-        'start_lidar_app'
-    )
+    start_lidar_app = LaunchConfiguration("start_lidar_app")
 
-    start_slam = LaunchConfiguration(
-        'start_slam'
-    )
+    start_slam = LaunchConfiguration("start_slam")
 
-    start_nav2 = LaunchConfiguration(
-        'start_nav2'
-    )
+    start_nav2 = LaunchConfiguration("start_nav2")
 
-    start_frontier = LaunchConfiguration(
-        'start_frontier'
-    )
+    start_lidar_app = LaunchConfiguration("start_lidar_app")
 
-    start_avoidance = LaunchConfiguration(
-        'start_avoidance'
-    )
+    start_frontier = LaunchConfiguration("start_frontier")
 
-    start_fire_suppression = LaunchConfiguration(
-        'start_fire_suppression'
-    )
+    start_avoidance = LaunchConfiguration("start_avoidance")
+
+    start_fire_suppression = LaunchConfiguration("start_fire_suppression")
 
     # true 로 주면 fire_suppression_node 대신 로컬 테스트용 더미
     # (fire_suppression_node_dummy_stub) 를 띄운다. GPIO/YOLO/frontier
     # 의존성 없이 mission_executor 와의 액션 통신만 확인하고 싶을 때 사용.
-    use_dummy_fire_suppression = LaunchConfiguration(
-        'use_dummy_fire_suppression'
-    )
+    use_dummy_fire_suppression = LaunchConfiguration("use_dummy_fire_suppression")
 
-    start_mission = LaunchConfiguration(
-        'start_mission'
-    )
+    start_mission = LaunchConfiguration("start_mission")
 
-    start_vision = LaunchConfiguration(
-        'start_vision'
-    )
+    start_vision = LaunchConfiguration("start_vision")
+
+    return_to_start_on_complete = LaunchConfiguration("return_to_start_on_complete")
+
+    goal_preemption_enabled = LaunchConfiguration("goal_preemption_enabled")
 
     # =========================================
     # 1. Hardware
@@ -119,7 +102,7 @@ def generate_launch_description():
     hardware = include_launch(
         os.path.join(
             launch_dir,
-            'hardware.launch.py',
+            "hardware.launch.py",
         ),
         IfCondition(start_hardware),
     )
@@ -132,12 +115,10 @@ def generate_launch_description():
         period=2.0,
         actions=[
             Node(
-                package='app',
-                executable='lidar_controller',
-                output='screen',
-                condition=IfCondition(
-                    start_lidar_app
-                ),
+                package="app",
+                executable="lidar_controller",
+                output="screen",
+                condition=IfCondition(start_lidar_app),
             )
         ],
     )
@@ -152,7 +133,7 @@ def generate_launch_description():
             include_launch(
                 os.path.join(
                     launch_dir,
-                    'slam_mapping.launch.py',
+                    "slam_mapping.launch.py",
                 ),
                 IfCondition(start_slam),
             )
@@ -169,7 +150,7 @@ def generate_launch_description():
             include_launch(
                 os.path.join(
                     launch_dir,
-                    'nav2_online.launch.py',
+                    "nav2_online.launch.py",
                 ),
                 IfCondition(start_nav2),
             )
@@ -184,37 +165,29 @@ def generate_launch_description():
         period=11.0,
         actions=[
             Node(
-                package='frontier_exploration_ros2',
-                executable='frontier_explorer',
-
-                name='frontier_explorer',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_frontier
-                ),
-
+                package="frontier_exploration_ros2",
+                executable="frontier_explorer",
+                name="frontier_explorer",
+                output="screen",
+                condition=IfCondition(start_frontier),
                 parameters=[
                     frontier_params,
-
                     {
                         # avoidance_manager / fire_suppression_node에서
                         # STOP / START를 호출하기 위해 필수
-                        'control_service_enabled': True,
-
-                        'autostart': True,
-
+                        "control_service_enabled": True,
+                        "autostart": True,
                         # Raspberry Pi 5에서는
                         # 먼저 가볍게 시작
-                        'mrtsp_solver': 'greedy',
-
-                        'map_processing_rate_hz': 0.5,
-
+                        "mrtsp_solver": "greedy",
+                        "map_processing_rate_hz": 0.5,
                         # 처음에는 기능을 단순하게
-                        'goal_preemption_enabled': False,
-
-                        'return_to_start_on_complete': False,
+                        "goal_preemption_enabled": ParameterValue(
+                            goal_preemption_enabled, value_type=bool
+                        ),
+                        "return_to_start_on_complete": ParameterValue(
+                            return_to_start_on_complete, value_type=bool
+                        ),
                     },
                 ],
             )
@@ -229,29 +202,18 @@ def generate_launch_description():
         period=12.0,
         actions=[
             Node(
-                package='uncc_example',
-
-                executable='avoidance_manager',
-
-                name='avoidance_manager',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_avoidance
-                ),
-
+                package="uncc_example",
+                executable="avoidance_manager",
+                name="avoidance_manager",
+                output="screen",
+                condition=IfCondition(start_avoidance),
                 parameters=[
                     {
-                        'trigger_distance': 0.50,
-
-                        'clear_distance': 0.75,
-
-                        'front_angle_deg': 90.0,
-
-                        'clear_hold_sec': 0.60,
-
-                        'avoidance_timeout_sec': 5.0,
+                        "trigger_distance": 0.30,
+                        "clear_distance": 0.35,
+                        "front_angle_deg": 210.0,
+                        "clear_hold_sec": 0.60,
+                        "avoidance_timeout_sec": 5.0,
                     }
                 ],
             )
@@ -260,9 +222,9 @@ def generate_launch_description():
 
     # =========================================
     # 6.5. Fire Suppression
-    #    (fire_status_service_node + fire_suppression_node 
+    #    (fire_status_service_node + fire_suppression_node
     #    두 노드를 같이 띄운다. mission_manager가 SuppressFire
-    #    Action을 호출하므로 mission_manager(t=13)보다 
+    #    Action을 호출하므로 mission_manager(t=13)보다
     #    반드시 먼저 떠 있어야 한다. frontier(t=11) /
     #    avoidance(t=12) 다음, control_exploration 서비스가 이미
     #    준비된 뒤에 뜨도록 배치했다.)
@@ -272,53 +234,46 @@ def generate_launch_description():
         period=12.5,
         actions=[
             Node(
-                package='uncc_example',
-
-                executable='fire_status_service_node',
-
-                name='fire_status_service_node',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_fire_suppression
-                ),
+                package="uncc_example",
+                executable="fire_status_service_node",
+                name="fire_status_service_node",
+                output="screen",
+                condition=IfCondition(start_fire_suppression),
             ),
-
             Node(
-                package='uncc_example',
-
-                executable='fire_suppression_node',
-
-                name='fire_suppression_node',
-
-                output='screen',
-
+                package="uncc_example",
+                executable="fire_suppression_node",
+                name="fire_suppression_node",
+                output="screen",
                 condition=IfCondition(
-                    PythonExpression([
-                        '"', start_fire_suppression, '" == "true" and "',
-                        use_dummy_fire_suppression, '" == "false"',
-                    ])
+                    PythonExpression(
+                        [
+                            '"',
+                            start_fire_suppression,
+                            '" == "true" and "',
+                            use_dummy_fire_suppression,
+                            '" == "false"',
+                        ]
+                    )
                 ),
             ),
-
             Node(
-                package='uncc_example',
-
-                executable='fire_suppression_node_dummy_stub',
-
-                name='fire_suppression_node',
-
-                output='screen',
-
+                package="uncc_example",
+                executable="fire_suppression_node_dummy_stub",
+                name="fire_suppression_node",
+                output="screen",
                 condition=IfCondition(
-                    PythonExpression([
-                        '"', start_fire_suppression, '" == "true" and "',
-                        use_dummy_fire_suppression, '" == "true"',
-                    ])
+                    PythonExpression(
+                        [
+                            '"',
+                            start_fire_suppression,
+                            '" == "true" and "',
+                            use_dummy_fire_suppression,
+                            '" == "true"',
+                        ]
+                    )
                 ),
             ),
-
         ],
     )
 
@@ -333,7 +288,7 @@ def generate_launch_description():
         period=4.0,
         actions=[
             include_launch(
-                image_pipeline_share + '/launch/full_chain_check.launch.py',
+                image_pipeline_share + "/launch/full_chain_check.launch.py",
                 IfCondition(start_vision),
             ),
         ],
@@ -352,17 +307,11 @@ def generate_launch_description():
         period=13.0,
         actions=[
             Node(
-                package='uncc_example',
-
-                executable='mission_manager',
-
-                name='mission_manager',
-
-                output='screen',
-
-                condition=IfCondition(
-                    start_mission
-                ),
+                package="uncc_example",
+                executable="mission_manager",
+                name="mission_manager",
+                output="screen",
+                condition=IfCondition(start_mission),
             ),
         ],
     )
@@ -371,69 +320,69 @@ def generate_launch_description():
     # LaunchDescription
     # =========================================
 
-    return LaunchDescription([
-
-        DeclareLaunchArgument(
-            'start_hardware',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_lidar_app',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_slam',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_nav2',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_frontier',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_avoidance',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'start_fire_suppression',
-            default_value='true',
-        ),
-
-        DeclareLaunchArgument(
-            'use_dummy_fire_suppression',
-            default_value='false',
-        ),
-
-        DeclareLaunchArgument(
-            'start_mission',
-            default_value='true',
-        ),
-
-        # 기본 false. 켜지면 (지금은 image_pipeline 더미 체인이라)
-        # 가짜 감지로도 실제 Nav2 이동 + 실제 fire_suppression 펌프
-        # 분사까지 이어질 수 있어서, 의도적으로 켤 때만
-        # start_vision:=true 로 명시하게 한다.
-        DeclareLaunchArgument(
-            'start_vision',
-            default_value='false',
-        ),
-
-        hardware,
-        lidar_app,
-        slam,
-        nav2,
-        frontier,
-        avoidance,
-        fire_suppression,
-        vision,
-        mission,
-    ])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "start_hardware",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_lidar_app",
+                default_value="false",
+            ),
+            DeclareLaunchArgument(
+                "start_slam",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_nav2",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_frontier",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "start_avoidance",
+                default_value="false",
+            ),
+            DeclareLaunchArgument(
+                "start_fire_suppression",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "use_dummy_fire_suppression",
+                default_value="false",
+            ),
+            DeclareLaunchArgument(
+                "start_mission",
+                default_value="true",
+            ),
+            # 기본 false. 켜지면 (지금은 image_pipeline 더미 체인이라)
+            # 가짜 감지로도 실제 Nav2 이동 + 실제 fire_suppression 펌프
+            # 분사까지 이어질 수 있어서, 의도적으로 켤 때만
+            # start_vision:=true 로 명시하게 한다.
+            DeclareLaunchArgument(
+                "start_vision",
+                default_value="false",
+            ),
+            # frontier_exploration_ros2 에 포함된, 탐사 후 시작 지점으로 리턴
+            DeclareLaunchArgument(
+                "return_to_start_on_complete",
+                default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "goal_preemption_enabled",
+                default_value="false",
+            ),
+            hardware,
+            lidar_app,
+            slam,
+            nav2,
+            frontier,
+            avoidance,
+            fire_suppression,
+            vision,
+            mission,
+        ]
+    )
