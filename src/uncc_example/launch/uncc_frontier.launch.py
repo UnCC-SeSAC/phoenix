@@ -173,6 +173,11 @@ def generate_launch_description():
                 parameters=[
                     frontier_params,
                     {
+                        # MissionExecutor가 제공할 중계 action으로 Frontier
+                        # goal을 보낸다. 실제 Nav2의 navigate_to_pose는
+                        # MissionExecutor 한 곳에서만 사용하도록 분리한다.
+                        "navigate_to_pose_action_name":
+                            "/mission/frontier_navigate_to_pose",
                         # avoidance_manager / fire_suppression_node에서
                         # STOP / START를 호출하기 위해 필수
                         "control_service_enabled": True,

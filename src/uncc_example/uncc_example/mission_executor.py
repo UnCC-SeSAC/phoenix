@@ -1,6 +1,12 @@
 import rclpy
 
-from rclpy.action import ActionClient
+from rclpy.action import (
+    ActionClient,
+    ActionServer,
+    CancelResponse,
+    GoalResponse,
+)
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
@@ -34,14 +40,36 @@ class MissionExecutor(Node):
         # -----------------------------
         # Nav2 (fire/person target 로 이동)
         # -----------------------------
+        # Frontier proxy ActionServer가 받은 goal을 같은 Nav2 client로
+        # 중계하고 결과를 기다리므로, server/client callback이 서로를
+        # 막지 않도록 reentrant callback group을 사용한다.
+        self._nav_callback_group = ReentrantCallbackGroup()
+
         self._nav_client = ActionClient(
             self,
             NavigateToPose,
             "navigate_to_pose",
+            callback_group=self._nav_callback_group,
         )
 
         self._nav_goal_handle = None
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
+
+        # Frontier Explorer는 실제 Nav2가 아니라 이 proxy action으로
+        # goal을 보낸다. MissionExecutor가 실제 navigate_to_pose로
+        # 전달하고 feedback/result/cancel을 원래 Frontier에 돌려준다.
+        self._frontier_server_goal_handle = None
+        self._frontier_nav_goal_handle = None
+        self._frontier_goal_reserved = False
+        self._frontier_action_server = ActionServer(
+            self,
+            NavigateToPose,
+            "/mission/frontier_navigate_to_pose",
+            execute_callback=self._execute_frontier_goal,
+            goal_callback=self._frontier_goal_callback,
+            cancel_callback=self._frontier_cancel_callback,
+            callback_group=self._nav_callback_group,
+        )
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
@@ -146,19 +174,107 @@ class MissionExecutor(Node):
 
     def process_exploring(self):
         self.get_logger().info(
-            f"[EXPLORING] target={self._target_str()}",
+            "[EXPLORING] Frontier proxy goal 대기 중",
             throttle_duration_sec=1.0,
         )
 
-        if self.target_type == 'frontier':
-            self._send_nav_goal(self.current_target)
-        else:
-            # target_type == 'idle' — 아직 갈 곳이 없다.
-            # self.current_target 에는 예전 frontier 좌표가 그대로
-            # 남아있을 수 있어 그걸 goal 로 쓰면 안 된다. 진행 중이던
-            # goal(예: 복귀하다 배터리가 회복된 경우)이 있으면 취소만
-            # 하고 다음 frontier 를 기다린다.
-            self._cancel_nav_goal()
+        # Frontier 이동은 /mission/frontier_navigate_to_pose ActionServer가
+        # 받아 실제 Nav2로 중계한다. 여기서 current_target을 다시 보내면
+        # 같은 frontier에 대한 Nav2 goal이 중복되므로 아무것도 하지 않는다.
+
+    # =========================================================
+    # Frontier NavigateToPose proxy
+    # =========================================================
+
+    def _frontier_goal_callback(self, goal_request):
+
+        if self._frontier_goal_reserved:
+            self.get_logger().warn(
+                "진행 중인 Frontier goal이 있어 새 goal을 거부함"
+            )
+            return GoalResponse.REJECT
+
+        if self.state not in (None, StateManager.EXPLORING):
+            self.get_logger().warn(
+                f"현재 mission state={self.state}이므로 Frontier goal을 거부함"
+            )
+            return GoalResponse.REJECT
+
+        self._frontier_goal_reserved = True
+        return GoalResponse.ACCEPT
+
+    def _frontier_cancel_callback(self, goal_handle):
+
+        if self._frontier_nav_goal_handle is not None:
+            self._frontier_nav_goal_handle.cancel_goal_async()
+
+        return CancelResponse.ACCEPT
+
+    def _frontier_feedback_callback(self, feedback_msg):
+
+        goal_handle = self._frontier_server_goal_handle
+
+        if goal_handle is None or goal_handle.is_cancel_requested:
+            return
+
+        goal_handle.publish_feedback(feedback_msg.feedback)
+
+    async def _execute_frontier_goal(self, goal_handle):
+        """Frontier goal을 실제 Nav2로 중계하고 terminal result를 반환한다."""
+
+        self._frontier_server_goal_handle = goal_handle
+        result = NavigateToPose.Result()
+
+        try:
+            if not self._nav_client.server_is_ready():
+                self.get_logger().error(
+                    "Frontier goal을 중계할 navigate_to_pose 서버가 준비되지 않음"
+                )
+                goal_handle.abort()
+                return result
+
+            nav_goal = NavigateToPose.Goal()
+            nav_goal.pose = goal_handle.request.pose
+            nav_goal.behavior_tree = goal_handle.request.behavior_tree
+
+            send_future = self._nav_client.send_goal_async(
+                nav_goal,
+                feedback_callback=self._frontier_feedback_callback,
+            )
+            nav_goal_handle = await send_future
+
+            if not nav_goal_handle.accepted:
+                self.get_logger().warn("Nav2가 Frontier proxy goal을 거부함")
+                goal_handle.abort()
+                return result
+
+            self._frontier_nav_goal_handle = nav_goal_handle
+
+            if goal_handle.is_cancel_requested:
+                await nav_goal_handle.cancel_goal_async()
+
+            result_response = await nav_goal_handle.get_result_async()
+            result = result_response.result
+
+            if result_response.status == GoalStatus.STATUS_SUCCEEDED:
+                goal_handle.succeed()
+            elif result_response.status == GoalStatus.STATUS_CANCELED:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
+
+            return result
+
+        except Exception as e:
+            self.get_logger().error(f"Frontier goal 중계 실패: {e}")
+            goal_handle.abort()
+            return result
+
+        finally:
+            if self._frontier_server_goal_handle is goal_handle:
+                self._frontier_server_goal_handle = None
+                self._frontier_nav_goal_handle = None
+            self._frontier_goal_reserved = False
 
     def _target_str(self):
 
