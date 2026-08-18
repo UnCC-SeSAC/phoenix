@@ -57,6 +57,9 @@ class MissionExecutor(Node):
         )
 
         self._fire_goal_handle = None
+        # goal 수락 응답 오기 전에 취소 요청이 오면 여기 남겨뒀다가
+        # 수락되는 즉시 취소한다 (안 그러면 그 사이 취소 요청이 씹힘).
+        self._fire_cancel_pending = False
 
         # -----------------------------
         # Subscriptions
@@ -271,6 +274,8 @@ class MissionExecutor(Node):
             )
             return
 
+        self._fire_cancel_pending = False
+
         goal_msg = SuppressFire.Goal()
         # max_attempts 를 안 채우면(0) 서버가 자체 DEFAULT_MAX_ATTEMPTS 를 쓴다.
 
@@ -285,6 +290,10 @@ class MissionExecutor(Node):
         if self._fire_goal_handle is not None:
             self._fire_goal_handle.cancel_goal_async()
             self._fire_goal_handle = None
+        else:
+            # goal 을 보냈지만 아직 수락 응답이 안 왔을 수도 있다 —
+            # _suppress_goal_response 에서 수락되는 즉시 취소하도록 남겨둔다.
+            self._fire_cancel_pending = True
 
     def _suppress_feedback_callback(self, feedback_msg):
 
@@ -302,6 +311,10 @@ class MissionExecutor(Node):
         if not goal_handle.accepted:
             self.get_logger().warn("fire_suppression goal 이 거부됨")
             return
+
+        if self._fire_cancel_pending:
+            self._fire_cancel_pending = False
+            goal_handle.cancel_goal_async()
 
         self._fire_goal_handle = goal_handle
 

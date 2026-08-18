@@ -1,5 +1,6 @@
 import json
 import math
+from collections import deque
 
 import rclpy
 
@@ -76,6 +77,9 @@ class StateManager(Node):
         self.start_y = None
 
         self.battery_raw = None
+        # 배터리 raw 값이 임계치 근처에서 순간적으로 튀는 걸(전류 부하로
+        # 인한 전압 강하 등) 걸러내기 위해 최근 10개의 평균으로 판단한다.
+        self.battery_history = deque(maxlen=10)
 
         self.frontier_target = None  # 최신 Frontier 추천 목적지 (PoseStamped)
 
@@ -367,12 +371,24 @@ class StateManager(Node):
 
     def battery_callback(self, msg):
         self.battery_raw = msg.data
+        self.battery_history.append(msg.data)
 
     def is_battery_low(self):
-        return (
-            self.battery_raw is not None
-            and self.battery_raw <= self.low_battery_threshold
-        )
+
+        if len(self.battery_history) < 10:
+            return False
+
+        average = sum(self.battery_history) / len(self.battery_history)
+        low = average <= self.low_battery_threshold
+
+        if low:
+            self.get_logger().warn(
+                f'배터리 부족 (최근 {len(self.battery_history)}개 평균 '
+                f'{average:.0f} <= 임계값 {self.low_battery_threshold})',
+                throttle_duration_sec=5.0,
+            )
+
+        return low
 
     # =========================================================
     # Frontier exploration target
