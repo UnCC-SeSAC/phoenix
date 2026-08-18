@@ -7,6 +7,7 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import qos_profile_action_status_default
 from rclpy.task import Future
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
@@ -45,7 +46,9 @@ class FrontierStateController(Node):
         self._frontier_state = None
         self._control_request_pending = False
         self._waiting_for_nav_cancel = False
-        self._stop_response_time = 0.0
+        self._stop_request_time = 0.0
+        self._last_nav_status_time = 0.0
+        self._nav_goal_active = False
         self._stop_wait_future = None
         self._stop_timeout_timer = None
 
@@ -53,7 +56,7 @@ class FrontierStateController(Node):
             GoalStatusArray,
             '/navigate_to_pose/_action/status',
             self._nav_status_callback,
-            10,
+            qos_profile_action_status_default,
             callback_group=self._callback_group,
         )
 
@@ -142,6 +145,11 @@ class FrontierStateController(Node):
 
         self.get_logger().info('Forwarding ACTION_STOP to Frontier Explorer')
 
+        # STOP 요청 이후에 관측된 Nav2 상태만 취소 완료 판단에 쓴다.
+        # 요청 시각을 서비스 호출 전에 저장해야, 서비스 응답보다 먼저
+        # 도착하는 빠른 CANCELED 상태도 놓치지 않는다.
+        self._stop_request_time = time.monotonic()
+
         try:
             frontier_response = await self._frontier_client.call_async(
                 frontier_request
@@ -184,10 +192,13 @@ class FrontierStateController(Node):
 
     async def _wait_for_nav_cancel(self):
         self._waiting_for_nav_cancel = True
-        self._stop_response_time = time.monotonic()
         self._stop_wait_future = Future()
 
-        if self._stop_timeout_sec <= 0.0:
+        # Nav2 취소 상태가 Frontier STOP 서비스 응답보다 먼저 도착했을
+        # 수 있으므로, 대기를 시작하기 전에 캐시된 최신 상태를 확인한다.
+        if self._nav_cancel_observed_since_stop_request():
+            self._finish_stop_wait(True)
+        elif self._stop_timeout_sec <= 0.0:
             self._finish_stop_wait(False)
         else:
             self._stop_timeout_timer = self.create_timer(
@@ -204,25 +215,30 @@ class FrontierStateController(Node):
             self._waiting_for_nav_cancel = False
 
     def _nav_status_callback(self, msg):
-        if not self._waiting_for_nav_cancel:
-            return
-
-        received_at = time.monotonic()
-        if received_at <= self._stop_response_time:
-            return
-
         active_states = {
             GoalStatus.STATUS_ACCEPTED,
             GoalStatus.STATUS_EXECUTING,
             GoalStatus.STATUS_CANCELING,
         }
-        nav_goal_active = any(
+        # STOP 대기 여부와 관계없이 항상 최신 Nav2 상태를 캐시한다.
+        # 그래야 STOP 서비스 응답 전에 취소가 끝나는 경우도 잡을 수 있다.
+        self._nav_goal_active = any(
             status.status in active_states
             for status in msg.status_list
         )
+        self._last_nav_status_time = time.monotonic()
 
-        if not nav_goal_active:
+        if (
+            self._waiting_for_nav_cancel
+            and self._nav_cancel_observed_since_stop_request()
+        ):
             self._finish_stop_wait(True)
+
+    def _nav_cancel_observed_since_stop_request(self):
+        return (
+            self._last_nav_status_time >= self._stop_request_time
+            and not self._nav_goal_active
+        )
 
     def _stop_timeout_callback(self):
         self._finish_stop_wait(False)

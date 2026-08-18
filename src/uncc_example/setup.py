@@ -61,7 +61,6 @@ setup(
             "fire_status_service_node = uncc_example.fire_status_service_node:main",
             "fire_status_service_node_dummy_stub = uncc_example.fire_status_service_node_dummy_stub:main",
             "navigate_to_pose_dummy_stub = uncc_example.navigate_to_pose_dummy_stub:main",
-            "mission_executor = uncc_example.mission_executor:main",
             (
                 "frontier_state_controller = "
                 "uncc_example.frontier_state_controller:main"
