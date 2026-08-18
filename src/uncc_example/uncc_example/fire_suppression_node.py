@@ -8,6 +8,8 @@
 - YOLO 상태는 fire_status_service_node가 노출하는 check_fire_status
   서비스를 통해 확인한다.
 - 펌프(GPIO13)/서보(GPIO18)는 라즈베리파이 GPIO를 직접 제어한다.
+- 분사 후 재시도 대기 구간에서는 서보 PWM 신호를 detach()로 끊어서
+  떨림/웅- 소음을 없앤다 (테스트 스크립트에서 검증된 패턴 반영).
 
 시퀀스 다이어그램 대응:
   ① 시작 goal 수신           -> execute_callback 진입
@@ -43,20 +45,27 @@ PWM_FREQUENCY = 1000
 SPRAY_SECONDS = 3.0
 RETRY_WAIT_SECONDS = 2.0
 DEFAULT_MAX_ATTEMPTS = 3
-STATUS_CHECK_SECONDS = 2.0
+STATUS_CHECK_SECONDS = 3.0
 
 # 서보 스윕 설정
 SERVO_CENTER_ANGLE = 90
 SERVO_SWEEP_RANGE_DEG = 15          # 중앙 기준 +-범위
-SERVO_UPDATE_INTERVAL = 0.05        # 각도 갱신 주기(초). 작을수록 더 매끄러움
-SERVO_MAX_SPEED_DEG_PER_SEC = 120.0 # 가장자리 부근에서의 각속도
+SERVO_UPDATE_INTERVAL = 0.15        # 각도 갱신 주기(초). 작을수록 더 매끄러움
+SERVO_MAX_SPEED_DEG_PER_SEC = 80.0  # 가장자리 부근에서의 각속도
 SERVO_CENTER_SPEED_FACTOR = 0.25    # 중앙에서의 속도 배율 (1보다 작을수록 중앙에서 더 오래 머무름)
-SERVO_SMOOTHING_ALPHA = 0.3   # EMA 계수(0~1). 작을수록 더 부드럽지만 반응이 느려짐(슬루레이트 제한 효과)
+SERVO_SMOOTHING_ALPHA = 0.3         # EMA 계수(0~1). 작을수록 더 부드럽지만 반응이 느려짐(슬루레이트 제한 효과)
+
+# 서보 펄스폭 (테스트 스크립트에서 확인된 안전 범위로 조정: 0.0005~0.0025 -> 0.0006~0.0024)
+SERVO_MIN_PULSE_WIDTH = 0.0006
+SERVO_MAX_PULSE_WIDTH = 0.0024
+
+# 대기 구간 진입 시, 중앙으로 복귀한 뒤 detach()하기 전까지 대기하는 시간(초)
+# 너무 짧으면 물리적으로 중앙에 도달하기 전에 신호가 끊겨 어중간한 위치에서 멈출 수 있음
+SERVO_SETTLE_SECONDS = 0.3
 
 # ControlExploration 서비스는 frontier_exploration_ros2가 이미 제공 (수정 불필요)
 CONTROL_EXPLORATION_SERVICE = 'control_exploration'
 CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
-
 
 
 class FireSuppressionNode(Node):
@@ -68,7 +77,7 @@ class FireSuppressionNode(Node):
         )
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
-            min_pulse_width=0.0005, max_pulse_width=0.0025,
+            min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
             initial_angle=SERVO_CENTER_ANGLE,
         )
 
@@ -149,6 +158,14 @@ class FireSuppressionNode(Node):
         return goal_handle.is_cancel_requested
 
     # ---------------- 하드웨어 제어 ----------------
+    async def _settle_and_detach(self):
+        """서보를 중앙으로 복귀시키고, 물리적으로 도달할 시간을 준 뒤
+        PWM 신호를 끊는다. 대기 구간 동안 서보가 떨거나 웅- 소음을
+        내는 걸 막아준다 (테스트 스크립트에서 검증된 패턴)."""
+        self.servo.angle = SERVO_CENTER_ANGLE
+        await self._rclpy_sleep(SERVO_SETTLE_SECONDS)
+        self.servo.detach()
+
     def _next_sweep_angle(self, angle: float, direction: int) -> tuple:
         """중앙에서는 느리게(오래 머무름), 가장자리 근처에서는 빠르게 움직이는
         다음 각도를 계산. 경계에 닿으면 즉시 방향을 반전한다 (고정 대기 없음)."""
@@ -173,11 +190,12 @@ class FireSuppressionNode(Node):
     async def run_suppression_routine(self, goal_handle) -> bool:
         """펌프 ON 상태로 SPRAY_SECONDS 동안 연속 스윕 분사.
         목표각을 EMA로 한 번 더 걸러서 명령해 떨림을 줄인다.
-        도중에 취소 요청이 오면 즉시 펌프/서보를 정지하고 True를 반환한다."""
+        끝나면(취소든 정상 종료든) 중앙 복귀 후 detach()로 정숙 대기 상태에
+        들어간다. 도중에 취소 요청이 오면 즉시 정지하고 True를 반환한다."""
         target_angle = SERVO_CENTER_ANGLE
         smoothed_angle = SERVO_CENTER_ANGLE
         direction = 1
-        self.servo.angle = smoothed_angle
+        self.servo.angle = smoothed_angle  # detach 상태였다면 여기서 자동 재개됨
 
         self.pump.value = 1.0
         elapsed = 0.0
@@ -192,10 +210,10 @@ class FireSuppressionNode(Node):
                 elapsed += SERVO_UPDATE_INTERVAL
         finally:
             self.pump.value = 0.0
-            self.servo.angle = SERVO_CENTER_ANGLE
+            await self._settle_and_detach()
 
         return False
-        
+
     # ---------------- YOLO 상태 확인 ----------------
     async def check_fire_status_async(self, observation_seconds: float):
         if not self.yolo_client.wait_for_service(timeout_sec=2.0):
@@ -221,7 +239,7 @@ class FireSuppressionNode(Node):
         try:
             for attempt in range(1, max_attempts + 1):
                 if goal_handle.is_cancel_requested:
-                    return self._handle_cancel(goal_handle, attempt - 1)
+                    return await self._handle_cancel(goal_handle, attempt - 1)
 
                 feedback_msg.current_attempt = attempt
                 feedback_msg.status = f'{attempt}차 진압 로직 수행 중'
@@ -229,7 +247,7 @@ class FireSuppressionNode(Node):
 
                 cancelled = await self.run_suppression_routine(goal_handle)
                 if cancelled:
-                    return self._handle_cancel(goal_handle, attempt)
+                    return await self._handle_cancel(goal_handle, attempt)
 
                 feedback_msg.status = f'{attempt}차 상태 확인 중'
                 goal_handle.publish_feedback(feedback_msg)
@@ -254,9 +272,11 @@ class FireSuppressionNode(Node):
                     return result
 
                 if attempt < max_attempts:
+                    # run_suppression_routine의 finally에서 이미 detach 됐으므로
+                    # 이 대기 구간 내내 서보는 조용히 쉬고 있음
                     cancelled = await self.interruptible_sleep(goal_handle, RETRY_WAIT_SECONDS)
                     if cancelled:
-                        return self._handle_cancel(goal_handle, attempt)
+                        return await self._handle_cancel(goal_handle, attempt)
 
             goal_handle.succeed()
             result.success = False
@@ -267,11 +287,11 @@ class FireSuppressionNode(Node):
         finally:
             await self.set_exploration_running(True)
 
-    def _handle_cancel(self, goal_handle, attempts_done: int):
-        """취소 확정 처리: 펌프 즉시 정지, 서보 중앙 복귀, 취소 결과 반환.
+    async def _handle_cancel(self, goal_handle, attempts_done: int):
+        """취소 확정 처리: 펌프 즉시 정지, 서보 중앙 복귀 후 detach, 취소 결과 반환.
         set_exploration_running(True)는 execute_callback의 finally에서 처리됨."""
         self.pump.value = 0.0
-        self.servo.angle = SERVO_CENTER_ANGLE
+        await self._settle_and_detach()
         goal_handle.canceled()
 
         result = SuppressFire.Result()
