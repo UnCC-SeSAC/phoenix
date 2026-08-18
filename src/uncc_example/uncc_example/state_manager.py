@@ -11,8 +11,8 @@ from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener, TransformException
 
 from std_msgs.msg import String, UInt16
-from std_srvs.srv import SetBool
 from geometry_msgs.msg import PoseStamped
+from interfaces.srv import SetString
 
 
 class StateManager(Node):
@@ -26,6 +26,12 @@ class StateManager(Node):
     # 배터리가 임계치 이하: 다른 목적지보다 우선하여 충전하러 복귀
     # (frontier_exploration_ros2 의 return_to_start 와는 다른 개념이라 구분)
     RETURNING_TO_CHARGE = 'RETURNING_TO_CHARGE'
+
+    # target_complete 요청(request.data)에 담기는 처리 결과 문자열.
+    # mission_executor 가 그대로 가져다 쓰므로 여기서만 정의한다.
+    TARGET_STATUS_SUCCESS = 'success'          # person 도달 / fire 진화 성공
+    TARGET_STATUS_FAILED = 'failed'            # fire 진압을 시도했으나 실패
+    TARGET_STATUS_UNREACHABLE = 'unreachable'  # nav2 반복 실패로 시도 자체를 못함
 
     def __init__(self):
         super().__init__('state_manager')
@@ -139,12 +145,11 @@ class StateManager(Node):
             10,
         )
 
-        # 행동 노드가 목적지 처리를 끝내면 호출. request.data 에 성공 여부
-        # (불이 꺼졌는지 등)도 같이 담아 보낸다 — 완료 처리와 결과를 한 번에
-        # 받으려고 Trigger 대신 SetBool 을 쓴다. 결과를 따로 받으면 그 사이
-        # active_target 이 이미 지워져서 결과를 어디에 저장할지 알 수 없다.
+        # 행동 노드가 목적지 처리를 끝내면 호출. request.data 에 처리 결과
+        # (TARGET_STATUS_*)를 담아 보낸다 — bool 하나로는 "실패"와
+        # "시도조차 못함(unreachable)"을 구분 못해 SetBool 대신 SetString 사용.
         self.create_service(
-            SetBool,
+            SetString,
             '~/target_complete',
             self.target_complete_callback,
         )
@@ -216,6 +221,8 @@ class StateManager(Node):
             'cluster': None,
             # fire 전용 — target_complete_callback 이 진화 성공 여부를 채운다.
             'extinguished': None,
+            # nav2 가 반복 실패해서 실제 임무(구조/진압)를 시도조차 못했는지.
+            'unreachable': False,
         }
 
         self.found_targets.append(entry)
@@ -306,21 +313,28 @@ class StateManager(Node):
         self.found_targets_pub.publish(msg)
 
     def _target_category(self, entry):
-        """지도 표시용 5분류로 변환한다: person_unconfirmed / person_confirmed
-        / fire_unvisited / fire_failed / fire_extinguished. 내부 로직에 쓰는
-        type/status 는 그대로 두고 publish 할 때만 하나로 합쳐서, 구독하는
-        쪽(map_visualizer)이 내부 상태를 몰라도 되게 한다.
+        """지도 표시용 7분류로 변환한다: person_unconfirmed / person_confirmed
+        / person_unreachable / fire_unvisited / fire_failed /
+        fire_extinguished / fire_unreachable. 내부 로직에 쓰는 type/status 는
+        그대로 두고 publish 할 때만 하나로 합쳐서, 구독하는 쪽(map_visualizer)
+        이 내부 상태를 몰라도 되게 한다.
 
-        사람은 구조 성공/실패를 알려주는 노드가 없어서 방문 여부(status)로만
-        구분한다."""
+        *_unreachable 은 nav2 가 반복 실패해서 구조/진압을 시도조차 못한
+        경우다. 사람은 구조 성공/실패를 알려주는 노드가 없어서 나머지는
+        방문 여부(status)로만 구분한다."""
 
         if entry['type'] == 'person':
-            if entry['status'] == 'done':
-                return 'person_confirmed'
-            return 'person_unconfirmed'
+            if entry['status'] != 'done':
+                return 'person_unconfirmed'
+            if entry['unreachable']:
+                return 'person_unreachable'
+            return 'person_confirmed'
 
         if entry['status'] != 'done':
             return 'fire_unvisited'
+
+        if entry['unreachable']:
+            return 'fire_unreachable'
 
         if entry['extinguished']:
             return 'fire_extinguished'
@@ -361,9 +375,14 @@ class StateManager(Node):
         # 제거 경로라 따로 존재 확인을 하지 않아도 된다.
         if self.active_target is not None:
             self.active_target['status'] = 'done'
+            self.active_target['unreachable'] = (
+                request.data == self.TARGET_STATUS_UNREACHABLE
+            )
             # fire 는 request.data 로 실제 진화 성공 여부가 들어온다
             # (person/base 는 의미 없지만 넣어도 무해함).
-            self.active_target['extinguished'] = request.data
+            self.active_target['extinguished'] = (
+                request.data == self.TARGET_STATUS_SUCCESS
+            )
             self.target_queue.remove(self.active_target)
             self._publish_found_targets()
 
