@@ -96,9 +96,8 @@ class MissionExecutor(Node):
 
     def state_callback(self, msg):
 
-        if msg.data == StateManager.RETURNING_TO_CHARGE:
-            # 배터리 부족 등으로 복귀가 최우선이 되면, 진행 중이던
-            # 진압 동작은 더 이상 의미가 없으니 취소한다.
+        if self.state == StateManager.FIRE_DETECTED and msg.data != StateManager.FIRE_DETECTED:
+            # FIRE_DETECTED 를 벗어나면 진압이 안 끝났어도 무조건 멈춘다.
             self._cancel_fire_suppression()
 
         self.state = msg.data
@@ -209,7 +208,6 @@ class MissionExecutor(Node):
     def _nav_goal_result(self, future):
 
         self._nav_goal_handle = None
-        self._nav_goal_xy = None
 
         status = future.result().status
 
@@ -227,6 +225,7 @@ class MissionExecutor(Node):
                 # 호출해도 무시되고(no-op), person 은 이걸로 완료 처리된다.
                 self.notify_target_complete()
         else:
+            self._nav_goal_xy = None
             self.get_logger().warn(f"Nav2 goal 이 완료되지 못함 (status={status})")
 
     # =========================================================
