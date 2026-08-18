@@ -28,7 +28,6 @@ class MissionExecutor(Node):
         # State (state_manager 로부터 받은 값)
         # -----------------------------
         self.state = None
-        self.target_type = None
         self.current_target = None
 
         # -----------------------------
@@ -46,10 +45,9 @@ class MissionExecutor(Node):
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
         # -----------------------------
-        # fire_suppression_node 가 action 서버를 'suppress_fire' (상대
-        # 이름, 네임스페이스 없음) 로 등록하므로 클라이언트도 동일하게
-        # 맞춘다. 둘 중 하나라도 launch 시 네임스페이스가 붙으면
-        # 이름이 어긋나 서로 못 찾으니 주의.
+        # fire_suppression_node 는 액션 서버를 네임스페이스 없이
+        # 'suppress_fire' 로 등록하므로 클라이언트 이름도 똑같이 맞춘다
+        # (launch 시 한쪽에만 네임스페이스가 붙으면 서로 못 찾는다).
         self._fire_action_client = ActionClient(
             self,
             SuppressFire,
@@ -68,13 +66,6 @@ class MissionExecutor(Node):
             String,
             "/mission/state",
             self.state_callback,
-            10,
-        )
-
-        self.create_subscription(
-            String,
-            "/mission/target_type",
-            self.target_type_callback,
             10,
         )
 
@@ -105,15 +96,12 @@ class MissionExecutor(Node):
 
     def state_callback(self, msg):
 
-        if msg.data == StateManager.RETURNING_TO_BASE:
+        if msg.data == StateManager.RETURNING_TO_CHARGE:
             # 배터리 부족 등으로 복귀가 최우선이 되면, 진행 중이던
             # 진압 동작은 더 이상 의미가 없으니 취소한다.
             self._cancel_fire_suppression()
 
         self.state = msg.data
-
-    def target_type_callback(self, msg):
-        self.target_type = msg.data
 
     def target_callback(self, msg):
         self.current_target = msg
@@ -130,13 +118,11 @@ class MissionExecutor(Node):
         elif self.state in (
             StateManager.PERSON_DETECTED,
             StateManager.FIRE_DETECTED,
-            StateManager.RETURNING_TO_BASE,
+            StateManager.RETURNING_TO_CHARGE,
         ):
-            # 셋 다 "현재 목적지로 이동" 뿐이라 동일하게 처리한다.
-            # 도착 후 동작(PERSON_DETECTED 는 TODO 인 구조 동작,
-            # FIRE_DETECTED 는 fire_suppression 호출, RETURNING_TO_
-            # BASE 는 도착만으로 완료)이 서로 다른 부분은 도착 시점인
-            # _nav_goal_result 에서 분기한다.
+            # 셋 다 "현재 목적지로 이동"까지는 동일하게 처리한다. 도착 후
+            # 동작(구조/진압 호출/복귀 완료)이 갈리는 부분은 _nav_goal_result
+            # 에서 state 로 분기한다.
             self.get_logger().info(
                 f"[{self.state}] target={self._target_str()}",
                 throttle_duration_sec=1.0,
@@ -149,19 +135,9 @@ class MissionExecutor(Node):
 
     def process_exploring(self):
         self.get_logger().info(
-            f"[EXPLORING] target={self._target_str()}",
+            "[EXPLORING]",
             throttle_duration_sec=1.0,
         )
-
-        if self.target_type == 'frontier':
-            self._send_nav_goal(self.current_target)
-        else:
-            # target_type == 'idle' — 아직 갈 곳이 없다.
-            # self.current_target 에는 예전 frontier 좌표가 그대로
-            # 남아있을 수 있어 그걸 goal 로 쓰면 안 된다. 진행 중이던
-            # goal(예: 복귀하다 배터리가 회복된 경우)이 있으면 취소만
-            # 하고 다음 frontier 를 기다린다.
-            self._cancel_nav_goal()
 
     def _target_str(self):
 
@@ -240,18 +216,15 @@ class MissionExecutor(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info("Nav2 목적지 도착")
 
-            # 도착 시점의 (지금) state 로 분기한다 — 활성 target 이
-            # 있는 동안엔 state_manager 가 바꾸지 않으므로, goal을
-            # 보낼 때 따로 스냅샷을 떠둘 필요 없이 이 시점의 값을
-            # 그대로 신뢰할 수 있다.
+            # 도착 시점의 state 로 분기한다 — target 이 진행 중인 동안엔
+            # state_manager 가 state 를 안 바꾸므로 이 값을 그대로 믿어도 된다.
             if self.state == StateManager.FIRE_DETECTED:
                 # 도착만으론 완료가 아니다 — 진압 노드를 불러서 그
                 # 응답이 와야 완료 처리한다.
                 self._call_fire_suppression()
             else:
-                # RETURNING_TO_BASE/EXPLORING 은 state_manager 쪽에
-                # active_target 이 없어서 호출해도 그냥 무시된다
-                # (안전한 no-op). person 은 이걸로 완료 처리됨.
+                # RETURNING_TO_CHARGE/EXPLORING 은 active_target 이 없어서
+                # 호출해도 무시되고(no-op), person 은 이걸로 완료 처리된다.
                 self.notify_target_complete()
         else:
             self.get_logger().warn(f"Nav2 goal 이 완료되지 못함 (status={status})")
@@ -261,11 +234,8 @@ class MissionExecutor(Node):
     # =========================================================
 
     def _call_fire_suppression(self):
-        """
-        fire_suppression_node 의 suppress_fire 액션에 goal 을 보낸다.
-        완료 여부는 여기서 기다리지 않고 _suppress_goal_result 에서
-        처리한다.
-        """
+        """suppress_fire 액션에 goal 을 보낸다. 완료 처리는 여기서
+        기다리지 않고 _suppress_goal_result 에서 한다."""
 
         if not self._fire_action_client.server_is_ready():
             self.get_logger().warn(
@@ -322,12 +292,9 @@ class MissionExecutor(Node):
         result_future.add_done_callback(self._suppress_goal_result)
 
     def _suppress_goal_result(self, future):
-        """
-        불을 껐든 못 껐든(success 상관없이) 결과가 왔으면 그냥
-        완료 처리하고 다음 목적지로 넘어간다 — 재시도하지 않는다.
-        실제 성공 여부는 state_manager 에 그대로 전달해서 지도
-        표시(꺼짐/안꺼짐)에 반영되게 한다.
-        """
+        """성공 여부와 상관없이 결과가 오면 완료 처리하고 다음 목적지로
+        넘어간다(재시도 없음). 실제 성공 여부는 state_manager 에 전달해서
+        지도 표시(꺼짐/안꺼짐)에 반영되게 한다."""
 
         self._fire_goal_handle = None
 
