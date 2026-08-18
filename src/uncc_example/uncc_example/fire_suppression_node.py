@@ -22,6 +22,8 @@
        안꺼짐 & 횟수 소진 -> ⑤ FAIL 반환
 """
 
+import signal
+
 import rclpy
 from rclpy.action import ActionServer, CancelResponse
 from rclpy.node import Node
@@ -63,6 +65,11 @@ SERVO_MAX_PULSE_WIDTH = 0.0024
 # 너무 짧으면 물리적으로 중앙에 도달하기 전에 신호가 끊겨 어중간한 위치에서 멈출 수 있음
 SERVO_SETTLE_SECONDS = 0.3
 
+# _rclpy_sleep 이 공유해서 쓰는 재사용 타이머의 tick 주기(초).
+# 매번 create_timer/destroy_timer 를 새로 하지 않기 위해, 이 주기로 도는
+# 타이머 하나만 만들어두고 남은 틱 수를 세는 방식으로 sleep 을 구현한다.
+SLEEP_TICK_SECONDS = 0.05
+
 # ControlExploration 서비스는 frontier_exploration_ros2가 이미 제공 (수정 불필요)
 CONTROL_EXPLORATION_SERVICE = 'control_exploration'
 CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
@@ -85,6 +92,15 @@ class FireSuppressionNode(Node):
         self.exploration_client = self.create_client(
             ControlExploration, CONTROL_EXPLORATION_SERVICE
         )
+
+        # _rclpy_sleep 전용 재사용 타이머. 매 sleep 마다 타이머를 새로
+        # 만들고 없애던 방식(과거) 대신, 이 타이머 하나를 계속 돌리면서
+        # 남은 틱 수(_sleep_ticks_remaining)를 세는 방식으로 바꿨다.
+        # 액션 콜백은 한 번에 하나만 실행되므로 동시에 두 개의 sleep이
+        # 겹칠 일은 없다고 가정한다.
+        self._sleep_future = None
+        self._sleep_ticks_remaining = 0
+        self._sleep_timer = self.create_timer(SLEEP_TICK_SECONDS, self._on_sleep_tick)
 
         self._action_server = ActionServer(
             self,
@@ -127,23 +143,28 @@ class FireSuppressionNode(Node):
         )
 
     # ---------------- 취소 지원 ----------------
+    def _on_sleep_tick(self):
+        """재사용 타이머의 콜백. 대기 중인 sleep 이 있으면 남은 틱을
+        하나 소모하고, 다 소모됐으면 Future 를 완료시켜 깨운다."""
+        if self._sleep_future is None:
+            return
+        self._sleep_ticks_remaining -= 1
+        if self._sleep_ticks_remaining <= 0 and not self._sleep_future.done():
+            self._sleep_future.set_result(None)
+
     async def _rclpy_sleep(self, seconds: float):
         """asyncio.sleep 대체용. rclpy 액션 콜백 안에는 진짜 asyncio
         이벤트루프가 없어서 asyncio.sleep()이 'no running event loop'로
-        터진다. rclpy.task.Future + Timer 조합은 rclpy 실행기가 직접
-        지원하는 방식이라 안전하게 await 할 수 있다."""
-        future = Future()
-
-        def _on_timer():
-            if not future.done():
-                future.set_result(None)
-
-        timer = self.create_timer(seconds, _on_timer)
+        터진다. 매번 새 타이머를 만들지 않고, 노드 생성 시 만들어둔
+        재사용 타이머(self._sleep_timer)의 tick 수를 세는 방식으로
+        rclpy.task.Future 를 완료시켜 안전하게 await 한다."""
+        ticks = max(1, round(seconds / SLEEP_TICK_SECONDS))
+        self._sleep_ticks_remaining = ticks
+        self._sleep_future = Future()
         try:
-            await future
+            await self._sleep_future
         finally:
-            timer.cancel()
-            self.destroy_timer(timer)
+            self._sleep_future = None
 
     async def interruptible_sleep(self, goal_handle, seconds: float, poll_interval: float = 0.1):
         """일반 sleep과 달리 취소 요청이 오면 즉시 빠져나온다.
@@ -305,13 +326,27 @@ class FireSuppressionNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = FireSuppressionNode()
+
+    # ros2 launch 가 SIGINT 이후에도 종료가 늦어지면 SIGTERM 으로
+    # 강제 종료시키는 경우가 있다. 파이썬 기본 동작은 SIGTERM 을 받으면
+    # try/finally 도 안 거치고 그냥 죽어버리므로, SIGTERM 을
+    # KeyboardInterrupt 로 변환해서 아래 finally(하드웨어 정리)가
+    # 항상 실행되도록 만든다.
+    def _handle_sigterm(signum, frame):
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.pump.off()
-        node.servo.detach()
+        # off()/detach() 는 신호만 끊을 뿐 GPIO 핀(lgpio 칩 핸들) 자체는
+        # 계속 점유한 상태로 남는다. close() 를 호출해 핀을 완전히
+        # 반환해야 다음 재실행 때 핀 점유 상태가 깨끗하게 시작된다.
+        node.pump.close()
+        node.servo.close()
         node.destroy_node()
         rclpy.shutdown()
 
