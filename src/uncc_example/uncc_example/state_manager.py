@@ -1,5 +1,6 @@
 import json
 import math
+from collections import deque
 
 import rclpy
 
@@ -10,9 +11,8 @@ from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener, TransformException
 
 from std_msgs.msg import String, UInt16
-from std_srvs.srv import SetBool
 from geometry_msgs.msg import PoseStamped
-from visualization_msgs.msg import Marker
+from interfaces.srv import SetString
 
 
 class StateManager(Node):
@@ -23,8 +23,15 @@ class StateManager(Node):
     PERSON_DETECTED = 'PERSON_DETECTED'
     # 대기중인 목적지 중 불이 가장 가까움: 진화 접근
     FIRE_DETECTED = 'FIRE_DETECTED'
-    # 배터리가 임계치 이하: 다른 모든 목적지보다 우선하여 복귀
-    RETURNING_TO_BASE = 'RETURNING_TO_BASE'
+    # 배터리가 임계치 이하: 다른 목적지보다 우선하여 충전하러 복귀
+    # (frontier_exploration_ros2 의 return_to_start 와는 다른 개념이라 구분)
+    RETURNING_TO_CHARGE = 'RETURNING_TO_CHARGE'
+
+    # target_complete 요청(request.data)에 담기는 처리 결과 문자열.
+    # mission_executor 가 그대로 가져다 쓰므로 여기서만 정의한다.
+    TARGET_STATUS_SUCCESS = 'success'          # person 도달 / fire 진화 성공
+    TARGET_STATUS_FAILED = 'failed'            # fire 진압을 시도했으나 실패
+    TARGET_STATUS_UNREACHABLE = 'unreachable'  # nav2 반복 실패로 시도 자체를 못함
 
     def __init__(self):
         super().__init__('state_manager')
@@ -41,9 +48,8 @@ class StateManager(Node):
         # 이 반경 안의 같은 종류(fire/person) 감지는 하나의 목적지로 병합
         self.declare_parameter('target_merge_radius', 0.5)
 
-        # 불과 사람이 동시에 감지됐을 때, 이 거리 이내로 붙어 있으면
-        # 사람이 위험하다고 보고 불부터 끄고, 이보다 멀리 떨어져 있으면
-        # 사람부터 먼저 확인한다
+        # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
+        # 불부터 끄고, 멀면 사람부터 확인한다
         self.declare_parameter('fire_person_proximity_threshold', 2.0)
 
         self.declare_parameter('state_check_period', 0.2)
@@ -69,19 +75,16 @@ class StateManager(Node):
         self.robot_x = None
         self.robot_y = None
 
-        # 로봇이 처음 켜졌을 때(TF 가 처음 잡힌 순간)의 map 좌표.
-        # 이후 어떤 target 을 거치든 값이 절대 안 바뀐다 — 이후 '복귀'
-        # 는 이 좌표를 기준으로 한다.
+        # TF 가 처음 잡힌 순간의 map 좌표 — 이후 안 바뀌며, '복귀'의 기준점.
         self.start_x = None
         self.start_y = None
 
-        self.battery_raw = None
+        # 배터리 raw 값이 순간적으로 튀는 걸(전류 부하로 인한 전압 강하 등)
+        # 걸러내기 위해 최근 10개의 평균으로 판단한다.
+        self.battery_history = deque(maxlen=10)
 
-        self.frontier_target = None  # 최신 Frontier 추천 목적지 (PoseStamped)
-
-        # fire/person 감지가 쌓이는 목적지 큐. 원소: {'type', 'pose'}
-        # found_targets 와 원소(dict)를 공유한다 — 아직 처리 안 한
-        # 것만 여기 들어있고, target_complete 로 여기서만 빠진다.
+        # fire/person 목적지 큐. found_targets 와 원소(dict)를 공유하며,
+        # 아직 처리 안 한 것만 담고 target_complete 로 여기서만 빠진다.
         self.target_queue = []
         self.active_target = None  # 현재 상태로 채택된 목적지 (완료 통보 대상)
 
@@ -89,7 +92,8 @@ class StateManager(Node):
         # 신규 감지 중복 판단(dedup)과, 나중에 지도에 표시할 데이터로 쓴다.
         self.found_targets = []
 
-        self._last_logged_state = None
+        self._last_published_state = None
+        self._last_published_target_id = None
 
         # -----------------------------
         # TF (로봇 현재 위치 확인용)
@@ -119,27 +123,11 @@ class StateManager(Node):
         )
 
         # -----------------------------
-        # Frontier exploration 이 추천하는 다음 목적지
-        # -----------------------------
-        self.create_subscription(
-            Marker,
-            '/exploration/best_frontier',
-            self.frontier_callback,
-            10,
-        )
-
-        # -----------------------------
         # Publishers (실제 행동은 다른 노드가 이 값을 보고 수행)
         # -----------------------------
         self.state_pub = self.create_publisher(
             String,
             '/mission/state',
-            10,
-        )
-
-        self.target_type_pub = self.create_publisher(
-            String,
-            '/mission/target_type',
             10,
         )
 
@@ -149,23 +137,19 @@ class StateManager(Node):
             10,
         )
 
-        # 발견 기록 전체 (원본 데이터만, 시각화는 별도 노드
-        # map_visualizer 가 담당). 같은 도메인의 서버가 구독해서
-        # MarkerArray 로 바꿔 RViz2 에 그린다. found_targets 가
-        # 바뀔 때마다(신규 발견/완료 처리) 전체 스냅샷을 다시 보낸다.
+        # 발견 기록 전체(원본 데이터, 시각화는 map_visualizer 가 담당).
+        # found_targets 가 바뀔 때마다 전체 스냅샷을 다시 보낸다.
         self.found_targets_pub = self.create_publisher(
             String,
             '/mission/found_targets',
             10,
         )
 
-        # 행동을 담당하는 노드가 현재 목적지를 다 처리했을 때 호출.
-        # request.data 로 실제 성공 여부(불이 꺼졌는지 등)를 같이
-        # 받는다 — 완료 처리와 결과값을 한 번에 원자적으로 처리하기
-        # 위해 Trigger 대신 SetBool 사용 (별도 토픽으로 따로 받으면
-        # active_target 이 이미 지워진 뒤일 수 있는 레이스가 생김).
+        # 행동 노드가 목적지 처리를 끝내면 호출. request.data 에 처리 결과
+        # (TARGET_STATUS_*)를 담아 보낸다 — bool 하나로는 "실패"와
+        # "시도조차 못함(unreachable)"을 구분 못해 SetBool 대신 SetString 사용.
         self.create_service(
-            SetBool,
+            SetString,
             '~/target_complete',
             self.target_complete_callback,
         )
@@ -219,32 +203,26 @@ class StateManager(Node):
             self._publish_found_targets()
 
     def _add_detection(self, target_type, pose_stamped):
-        """
-        중복(이미 기록된 대상)이면 아무것도 안 하고 None 반환.
-        새로 추가됐으면 그 entry 를 반환 — 무리 묶기는 여기서 안
-        하고 detection_callback 이 프레임 전체를 다 추가한 뒤
-        _update_clusters 에서 한꺼번에 처리한다.
-        """
+        """중복이면 None, 새로 추가됐으면 그 entry 를 반환한다.
+        무리 묶기는 여기서 안 하고 _update_clusters 에서 한꺼번에 처리한다."""
 
         pose = pose_stamped.pose
 
         if self._find_found_target(target_type, pose) is not None:
-            # 이미 기록된 대상 — pending/done 상관없이 재감지는
-            # 위치 갱신도, 재방문 대상 추가도 하지 않고 무시한다.
-            # 꺼졌는지 여부는 나중에 지도를 그릴 때 status 로만 확인한다.
+            # 이미 기록된 대상은 다시 감지돼도 무시한다(위치 갱신 안 함).
             return None
 
         entry = {
             'type': target_type,
             'pose': pose_stamped,
             'status': 'pending',
-            # 임계값 이내로 묶인 무리(리스트, 무리원끼리 같은 리스트
-            # 객체 공유). 대표 하나만 짝짓지 않고 무리 전체가 같은
-            # 우선순위를 공유하도록 하기 위함.
+            # 임계값 이내로 묶인 무리. 무리원끼리 같은 리스트를 공유해서
+            # 무리 전체가 같은 우선순위를 갖게 한다.
             'cluster': None,
-            # fire 만 의미 있음 — target_complete_callback 이
-            # 실제 진화 성공 여부를 여기에 채운다 (지도 표시용).
+            # fire 전용 — target_complete_callback 이 진화 성공 여부를 채운다.
             'extinguished': None,
+            # nav2 가 반복 실패해서 실제 임무(구조/진압)를 시도조차 못했는지.
+            'unreachable': False,
         }
 
         self.found_targets.append(entry)
@@ -253,10 +231,8 @@ class StateManager(Node):
         return entry
 
     def _update_clusters(self):
-        """
-        아직 무리가 없는 불/사람 중, 임계값 이내인 불-사람 쌍을
-        전부 하나의 무리로 묶는다(연쇄적으로도 합쳐짐).
-        """
+        """무리 없는 불/사람 중 임계값 이내인 불-사람 쌍을 무리로 묶는다
+        (여러 쌍이 걸리면 연쇄적으로 하나의 무리로 합쳐진다)."""
 
         unclustered = [
             entry for entry in self.target_queue
@@ -337,24 +313,28 @@ class StateManager(Node):
         self.found_targets_pub.publish(msg)
 
     def _target_category(self, entry):
-        """
-        지도 표시용 5분류: person_unconfirmed / person_confirmed /
-        fire_unvisited / fire_failed / fire_extinguished. 내부
-        로직(우선순위 판단 등)에 쓰는 type/status 는 그대로 두고,
-        publish 할 때만 하나로 합친다 — 구독하는 쪽(map_visualizer)이
-        내부 상태 의미를 몰라도 되게 하기 위함.
+        """지도 표시용 7분류로 변환한다: person_unconfirmed / person_confirmed
+        / person_unreachable / fire_unvisited / fire_failed /
+        fire_extinguished / fire_unreachable. 내부 로직에 쓰는 type/status 는
+        그대로 두고 publish 할 때만 하나로 합쳐서, 구독하는 쪽(map_visualizer)
+        이 내부 상태를 몰라도 되게 한다.
 
-        사람은 아직 구조 성공/실패를 알려주는 노드가 없어서(fire_
-        extinguisher 같은 게 없음) 방문 여부(status)만으로 나뉜다.
-        """
+        *_unreachable 은 nav2 가 반복 실패해서 구조/진압을 시도조차 못한
+        경우다. 사람은 구조 성공/실패를 알려주는 노드가 없어서 나머지는
+        방문 여부(status)로만 구분한다."""
 
         if entry['type'] == 'person':
-            if entry['status'] == 'done':
-                return 'person_confirmed'
-            return 'person_unconfirmed'
+            if entry['status'] != 'done':
+                return 'person_unconfirmed'
+            if entry['unreachable']:
+                return 'person_unreachable'
+            return 'person_confirmed'
 
         if entry['status'] != 'done':
             return 'fire_unvisited'
+
+        if entry['unreachable']:
+            return 'fire_unreachable'
 
         if entry['extinguished']:
             return 'fire_extinguished'
@@ -366,23 +346,24 @@ class StateManager(Node):
     # =========================================================
 
     def battery_callback(self, msg):
-        self.battery_raw = msg.data
+        self.battery_history.append(msg.data)
 
     def is_battery_low(self):
-        return (
-            self.battery_raw is not None
-            and self.battery_raw <= self.low_battery_threshold
-        )
 
-    # =========================================================
-    # Frontier exploration target
-    # =========================================================
+        if len(self.battery_history) < 10:
+            return False
 
-    def frontier_callback(self, msg):
-        pose_stamped = PoseStamped()
-        pose_stamped.header = msg.header
-        pose_stamped.pose = msg.pose
-        self.frontier_target = pose_stamped
+        average = sum(self.battery_history) / len(self.battery_history)
+        low = average <= self.low_battery_threshold
+
+        if low:
+            self.get_logger().warn(
+                f'배터리 부족 (최근 {len(self.battery_history)}개 평균 '
+                f'{average:.0f} <= 임계값 {self.low_battery_threshold})',
+                throttle_duration_sec=5.0,
+            )
+
+        return low
 
     # =========================================================
     # Target completion (다른 노드가 처리 완료를 알려줌)
@@ -390,14 +371,18 @@ class StateManager(Node):
 
     def target_complete_callback(self, request, response):
 
-        # active_target 이 있으면 항상 target_queue 안에도 있다 —
-        # 여기서 빼는 게 유일한 제거 경로이자 active_target 을 None
-        # 으로 되돌리는 지점이기도 하기 때문에 멤버십 재확인이 불필요.
+        # active_target 은 항상 target_queue 안에 있다 — 여기가 유일한
+        # 제거 경로라 따로 존재 확인을 하지 않아도 된다.
         if self.active_target is not None:
             self.active_target['status'] = 'done'
+            self.active_target['unreachable'] = (
+                request.data == self.TARGET_STATUS_UNREACHABLE
+            )
             # fire 는 request.data 로 실제 진화 성공 여부가 들어온다
             # (person/base 는 의미 없지만 넣어도 무해함).
-            self.active_target['extinguished'] = request.data
+            self.active_target['extinguished'] = (
+                request.data == self.TARGET_STATUS_SUCCESS
+            )
             self.target_queue.remove(self.active_target)
             self._publish_found_targets()
 
@@ -417,7 +402,7 @@ class StateManager(Node):
     def _refresh_state(self):
 
         if self.is_battery_low():
-            self._enter_returning_to_base()
+            self._enter_returning_to_charge()
             return
 
         priority_target = self._pick_priority_target()
@@ -428,15 +413,15 @@ class StateManager(Node):
 
         self._enter_exploring()
 
-    def _enter_returning_to_base(self):
-        self.state = self.RETURNING_TO_BASE
+    def _enter_returning_to_charge(self):
+        self.state = self.RETURNING_TO_CHARGE
         self.active_target = None
 
         start_pose = self._make_pose_stamped(
             self.map_frame, self.start_x, self.start_y
         )
 
-        self._publish('base', start_pose)
+        self._publish(start_pose)
 
     def _enter_urgent_target(self, entry):
         self.state = (
@@ -446,60 +431,44 @@ class StateManager(Node):
         )
         self.active_target = entry
 
-        # 불/사람이 새로 나타나면 원래 가려던 탐사 목적지는 버린다.
-        # 큐가 다시 비었을 때 Frontier 로부터 새로 받은 값으로만 재개한다.
-        self.frontier_target = None
-
-        self._publish(entry['type'], entry['pose'])
+        self._publish(entry['pose'])
 
     def _enter_exploring(self):
         self.state = self.EXPLORING
         self.active_target = None
 
-        # state 만으로는 EXPLORING 안에서 "갈 곳이 정해졌는지(frontier)
-        # 아직 없는지(idle)"를 구분할 수 없어서 target_type 으로 구분한다.
-        # idle 일 땐 pose_stamped=None 이라 current_target 을 publish
-        # 하지 않으므로, 구독자는 target_type=='frontier' 일 때만
-        # current_target 을 유효한 값으로 보고 써야 한다 — 그렇지
-        # 않으면 idle 중에도 이전 frontier 좌표가 그대로 남아있는
-        # current_target 을 잘못 쓰게 된다.
-        if self.frontier_target is not None:
-            self._publish('frontier', self.frontier_target)
-        else:
-            self._publish('idle', None)
+        self._publish(None)
 
-    def _publish(self, target_type, pose_stamped):
+    def _publish(self, pose_stamped):
 
-        if self.state != self._last_logged_state:
-            self.get_logger().info(
-                f'State -> {self.state} ({target_type})'
-            )
-            self._last_logged_state = self.state
+        state_changed = self.state != self._last_published_state
 
-        state_msg = String()
-        state_msg.data = self.state
-        self.state_pub.publish(state_msg)
+        if state_changed:
+            self.get_logger().info(f'State -> {self.state}')
 
-        type_msg = String()
-        type_msg.data = target_type
-        self.target_type_pub.publish(type_msg)
+            state_msg = String()
+            state_msg.data = self.state
+            self.state_pub.publish(state_msg)
 
-        if pose_stamped is not None:
+            self._last_published_state = self.state
+
+        if pose_stamped is None:
+            return
+
+        target_id = id(self.active_target)
+
+        if state_changed or target_id != self._last_published_target_id:
             self.target_pub.publish(pose_stamped)
+            self._last_published_target_id = target_id
 
     # =========================================================
     # Target priority (가까운 목적지부터 처리)
     # =========================================================
 
     def _pick_priority_target(self):
-        """
-        지금 상황에서 가장 먼저 처리해야 할 목적지를 고른다.
-
-        이미 active_target 으로 접근 중인 불/사람이 있으면 그대로
-        유지한다 — 유일한 예외는 지금 접근 중인 사람의 무리에 새로
-        불이 잡힌 경우(그 사람 근처에 불이 막 생긴 것)뿐이고,
-        이미 불을 끄러 가는 중이면 무슨 일이 있어도 안 바꾼다.
-        """
+        """지금 처리할 목적지를 고른다. active_target 이 있으면 그대로
+        유지하되, 접근 중인 사람의 무리에 새 불이 잡힌 경우에만 그
+        불로 전환한다 (이미 불을 끄러 가는 중이면 절대 안 바꾼다)."""
 
         if self.active_target is not None:
             if self.active_target['type'] == 'person':
@@ -518,21 +487,15 @@ class StateManager(Node):
         return self._choose_new_target()
 
     def _choose_new_target(self):
-        """
-        active_target 이 없을 때(처음이거나 방금 완료됐을 때) 큐
-        전체에서 새로 목적지를 고른다.
+        """active_target 이 없을 때 큐 전체에서 새 목적지를 고른다.
 
-        무리(cluster)는 감지 시점에 한 번 묶이면 무리원이 완료돼도
-        풀리지 않는다 — 그래서 "무리가 있고, 아직 처리할 차례인"
-        항목을 최우선으로 본다:
-
+        무리(cluster)는 한 번 묶이면 무리원이 완료돼도 안 풀리므로,
+        "무리가 있고 아직 처리할 차례인" 항목을 최우선으로 본다:
           - 무리가 있는 불: 항상 우선 (사람이 위험하니 먼저 끈다)
-          - 무리가 있는 사람: 그 무리의 불이 전부 이미 꺼졌을
-            때만 (안 꺼진 불이 하나라도 있으면 그 불부터 처리할
-            차례라 후보에서 제외)
+          - 무리가 있는 사람: 그 무리의 불이 전부 꺼졌을 때만
 
-        위 후보가 하나도 없으면(무리 없는 고립된 불/사람만 남음),
-        로봇과 가장 가까운 것을 고른다.
+        해당 후보가 없으면(무리 없는 고립된 불/사람만 남으면) 로봇과
+        가장 가까운 것을 고른다.
         """
 
         if not self.target_queue:

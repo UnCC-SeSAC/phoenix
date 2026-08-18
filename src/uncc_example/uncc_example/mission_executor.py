@@ -5,11 +5,11 @@ from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
-from std_srvs.srv import SetBool
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 
 from interfaces.action import SuppressFire
+from interfaces.srv import SetString
 
 from .state_manager import StateManager
 
@@ -26,11 +26,16 @@ class MissionExecutor(Node):
         # -----------------------------
         self.declare_parameter("action_check_period", 0.2)
 
+        # nav2 목적지가 이 횟수만큼 연속으로 실패하면 도달 불가로 보고
+        # 포기한다 (같은 곳으로 무한 재시도하지 않는다).
+        self.declare_parameter("nav_max_attempts", 3)
+
+        self.nav_max_attempts = self.get_parameter("nav_max_attempts").value
+
         # -----------------------------
         # State (state_manager 로부터 받은 값)
         # -----------------------------
         self.state = None
-        self.target_type = None
         self.current_target = None
 
         # -----------------------------
@@ -44,14 +49,14 @@ class MissionExecutor(Node):
 
         self._nav_goal_handle = None
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
+        self._nav_fail_count = 0  # 현재 목적지로 연속 실패한 횟수
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
         # -----------------------------
-        # fire_suppression_node 가 action 서버를 'suppress_fire' (상대
-        # 이름, 네임스페이스 없음) 로 등록하므로 클라이언트도 동일하게
-        # 맞춘다. 둘 중 하나라도 launch 시 네임스페이스가 붙으면
-        # 이름이 어긋나 서로 못 찾으니 주의.
+        # fire_suppression_node 는 액션 서버를 네임스페이스 없이
+        # 'suppress_fire' 로 등록하므로 클라이언트 이름도 똑같이 맞춘다
+        # (launch 시 한쪽에만 네임스페이스가 붙으면 서로 못 찾는다).
         self._fire_action_client = ActionClient(
             self,
             SuppressFire,
@@ -59,6 +64,9 @@ class MissionExecutor(Node):
         )
 
         self._fire_goal_handle = None
+        # goal 수락 응답 오기 전에 취소 요청이 오면 여기 남겨뒀다가
+        # 수락되는 즉시 취소한다 (안 그러면 그 사이 취소 요청이 씹힘).
+        self._fire_cancel_pending = False
 
         # -----------------------------
         # Subscriptions
@@ -67,13 +75,6 @@ class MissionExecutor(Node):
             String,
             "/mission/state",
             self.state_callback,
-            10,
-        )
-
-        self.create_subscription(
-            String,
-            "/mission/target_type",
-            self.target_type_callback,
             10,
         )
 
@@ -88,7 +89,7 @@ class MissionExecutor(Node):
         # state_manager 에게 현재 목적지 처리가 끝났음을 알리는 클라이언트
         # -----------------------------
         self.target_complete_client = self.create_client(
-            SetBool,
+            SetString,
             "/state_manager/target_complete",
         )
 
@@ -117,18 +118,17 @@ class MissionExecutor(Node):
 
     def state_callback(self, msg):
 
-        if msg.data == StateManager.RETURNING_TO_BASE:
-            # 배터리 부족 등으로 복귀가 최우선이 되면, 진행 중이던
-            # 진압 동작은 더 이상 의미가 없으니 취소한다.
+        if self.state == StateManager.FIRE_DETECTED and msg.data != StateManager.FIRE_DETECTED:
+            # FIRE_DETECTED 를 벗어나면 진압이 안 끝났어도 무조건 멈춘다.
             self._cancel_fire_suppression()
 
         self.state = msg.data
 
-    def target_type_callback(self, msg):
-        self.target_type = msg.data
-
     def target_callback(self, msg):
+        # 새 목적지가 왔다는 뜻이므로 이전 목적지의 실패 횟수는 버린다
+        # (state_manager 는 target 이 실제로 바뀔 때만 publish 한다).
         self.current_target = msg
+        self._nav_fail_count = 0
 
     # =========================================================
     # Timer / State machine
@@ -142,13 +142,11 @@ class MissionExecutor(Node):
         elif self.state in (
             StateManager.PERSON_DETECTED,
             StateManager.FIRE_DETECTED,
-            StateManager.RETURNING_TO_BASE,
+            StateManager.RETURNING_TO_CHARGE,
         ):
-            # 셋 다 "현재 목적지로 이동" 뿐이라 동일하게 처리한다.
-            # 도착 후 동작(PERSON_DETECTED 는 TODO 인 구조 동작,
-            # FIRE_DETECTED 는 fire_suppression 호출, RETURNING_TO_
-            # BASE 는 도착만으로 완료)이 서로 다른 부분은 도착 시점인
-            # _nav_goal_result 에서 분기한다.
+            # 셋 다 "현재 목적지로 이동"까지는 동일하게 처리한다. 도착 후
+            # 동작(구조/진압 호출/복귀 완료)이 갈리는 부분은 _nav_goal_result
+            # 에서 state 로 분기한다.
             self.get_logger().info(
                 f"[{self.state}] target={self._target_str()}",
                 throttle_duration_sec=1.0,
@@ -170,7 +168,7 @@ class MissionExecutor(Node):
 
     def process_exploring(self):
         self.get_logger().info(
-            f"[EXPLORING] target={self._target_str()}",
+            "[EXPLORING]",
             throttle_duration_sec=1.0,
         )
 
@@ -314,39 +312,47 @@ class MissionExecutor(Node):
     def _nav_goal_result(self, future):
 
         self._nav_goal_handle = None
-        self._nav_goal_xy = None
 
         status = future.result().status
 
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info("Nav2 목적지 도착")
 
-            # 도착 시점의 (지금) state 로 분기한다 — 활성 target 이
-            # 있는 동안엔 state_manager 가 바꾸지 않으므로, goal을
-            # 보낼 때 따로 스냅샷을 떠둘 필요 없이 이 시점의 값을
-            # 그대로 신뢰할 수 있다.
+            # 도착 시점의 state 로 분기한다 — target 이 진행 중인 동안엔
+            # state_manager 가 state 를 안 바꾸므로 이 값을 그대로 믿어도 된다.
             if self.state == StateManager.FIRE_DETECTED:
                 # 도착만으론 완료가 아니다 — 진압 노드를 불러서 그
                 # 응답이 와야 완료 처리한다.
                 self._call_fire_suppression()
             else:
-                # RETURNING_TO_BASE/EXPLORING 은 state_manager 쪽에
-                # active_target 이 없어서 호출해도 그냥 무시된다
-                # (안전한 no-op). person 은 이걸로 완료 처리됨.
+                # RETURNING_TO_CHARGE/EXPLORING 은 active_target 이 없어서
+                # 호출해도 무시되고(no-op), person 은 이걸로 완료 처리된다.
                 self.notify_target_complete()
         else:
-            self.get_logger().warn(f"Nav2 goal 이 완료되지 못함 (status={status})")
+            self._nav_goal_xy = None
+            self._nav_fail_count += 1
+
+            if self._nav_fail_count >= self.nav_max_attempts:
+                self.get_logger().warn(
+                    f"Nav2 목적지 {self._nav_fail_count}회 연속 실패 — "
+                    f"도달 불가로 보고 다음 목적지로 넘어감 (status={status})"
+                )
+                self.notify_target_complete(
+                    status=StateManager.TARGET_STATUS_UNREACHABLE
+                )
+            else:
+                self.get_logger().warn(
+                    f"Nav2 goal 이 완료되지 못함 "
+                    f"({self._nav_fail_count}/{self.nav_max_attempts}, status={status})"
+                )
 
     # =========================================================
     # 진압 동작 (fire_suppression_node 호출)
     # =========================================================
 
     def _call_fire_suppression(self):
-        """
-        fire_suppression_node 의 suppress_fire 액션에 goal 을 보낸다.
-        완료 여부는 여기서 기다리지 않고 _suppress_goal_result 에서
-        처리한다.
-        """
+        """suppress_fire 액션에 goal 을 보낸다. 완료 처리는 여기서
+        기다리지 않고 _suppress_goal_result 에서 한다."""
 
         if not self._fire_action_client.server_is_ready():
             self.get_logger().warn(
@@ -354,6 +360,8 @@ class MissionExecutor(Node):
                 throttle_duration_sec=2.0,
             )
             return
+
+        self._fire_cancel_pending = False
 
         goal_msg = SuppressFire.Goal()
         # max_attempts 를 안 채우면(0) 서버가 자체 DEFAULT_MAX_ATTEMPTS 를 쓴다.
@@ -369,6 +377,10 @@ class MissionExecutor(Node):
         if self._fire_goal_handle is not None:
             self._fire_goal_handle.cancel_goal_async()
             self._fire_goal_handle = None
+        else:
+            # goal 을 보냈지만 아직 수락 응답이 안 왔을 수도 있다 —
+            # _suppress_goal_response 에서 수락되는 즉시 취소하도록 남겨둔다.
+            self._fire_cancel_pending = True
 
     def _suppress_feedback_callback(self, feedback_msg):
 
@@ -387,18 +399,19 @@ class MissionExecutor(Node):
             self.get_logger().warn("fire_suppression goal 이 거부됨")
             return
 
+        if self._fire_cancel_pending:
+            self._fire_cancel_pending = False
+            goal_handle.cancel_goal_async()
+
         self._fire_goal_handle = goal_handle
 
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._suppress_goal_result)
 
     def _suppress_goal_result(self, future):
-        """
-        불을 껐든 못 껐든(success 상관없이) 결과가 왔으면 그냥
-        완료 처리하고 다음 목적지로 넘어간다 — 재시도하지 않는다.
-        실제 성공 여부는 state_manager 에 그대로 전달해서 지도
-        표시(꺼짐/안꺼짐)에 반영되게 한다.
-        """
+        """성공 여부와 상관없이 결과가 오면 완료 처리하고 다음 목적지로
+        넘어간다(재시도 없음). 실제 성공 여부는 state_manager 에 전달해서
+        지도 표시(꺼짐/안꺼짐)에 반영되게 한다."""
 
         self._fire_goal_handle = None
 
@@ -415,13 +428,17 @@ class MissionExecutor(Node):
                 f"{result.message}"
             )
 
-        self.notify_target_complete(success=result.success)
+        self.notify_target_complete(
+            status=StateManager.TARGET_STATUS_SUCCESS
+            if result.success
+            else StateManager.TARGET_STATUS_FAILED
+        )
 
     # =========================================================
     # state_manager 에게 완료 통보
     # =========================================================
 
-    def notify_target_complete(self, success=True):
+    def notify_target_complete(self, status=StateManager.TARGET_STATUS_SUCCESS):
 
         if not self.target_complete_client.service_is_ready():
             self.get_logger().warn(
@@ -429,7 +446,9 @@ class MissionExecutor(Node):
             )
             return
 
-        future = self.target_complete_client.call_async(SetBool.Request(data=success))
+        future = self.target_complete_client.call_async(
+            SetString.Request(data=status)
+        )
 
         future.add_done_callback(self.target_complete_done)
 
