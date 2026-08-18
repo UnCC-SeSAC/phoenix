@@ -25,7 +25,7 @@
 import signal
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
 from rclpy.action.server import ServerGoalHandle
 from rclpy.task import Future
@@ -78,6 +78,7 @@ CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
 class FireSuppressionNode(Node):
     def __init__(self):
         super().__init__('fire_suppression_node')
+        self._busy = False
 
         self.pump = PWMOutputDevice(
             PUMP_PIN, active_high=False, frequency=PWM_FREQUENCY, initial_value=0.0
@@ -85,7 +86,7 @@ class FireSuppressionNode(Node):
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
             min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
-            initial_angle=SERVO_CENTER_ANGLE,
+            initial_angle=None,
         )
 
         self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)
@@ -107,10 +108,21 @@ class FireSuppressionNode(Node):
             SuppressFire,
             'suppress_fire',
             execute_callback=self.execute_callback,
+            goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
 
         self.get_logger().info('🔥 화재진압 노드 준비 완료 (Action: suppress_fire)')
+
+    def goal_callback(self, goal_request):
+        """이미 진압 중이면 새 goal을 거부한다. 이게 없으면 rclpy가
+        goal을 무조건 다 받아서 execute_callback이 동시에 여러 개
+        돌 수 있고, 그러면 servo/pump/sleep 상태를 여러 코루틴이
+        동시에 건드려서 꼬인다."""
+        if self._busy:
+            self.get_logger().warn('이미 진압 작업 실행 중 — 새 goal 거부')
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT    
 
     def cancel_callback(self, goal_handle):
         """취소 요청을 받아들일지 결정. rclpy 기본값은 REJECT라서
@@ -250,63 +262,66 @@ class FireSuppressionNode(Node):
 
     # ---------------- Action 실행 ----------------
     async def execute_callback(self, goal_handle: ServerGoalHandle):
-        max_attempts = goal_handle.request.max_attempts or DEFAULT_MAX_ATTEMPTS
-        feedback_msg = SuppressFire.Feedback()
-        result = SuppressFire.Result()
-
-        self.get_logger().info(f'진압 시작. 최대 {max_attempts}회 시도.')
-        await self.set_exploration_running(False)
-
+        self._busy = True
         try:
-            for attempt in range(1, max_attempts + 1):
-                if goal_handle.is_cancel_requested:
-                    return await self._handle_cancel(goal_handle, attempt - 1)
+            max_attempts = goal_handle.request.max_attempts or DEFAULT_MAX_ATTEMPTS
+            feedback_msg = SuppressFire.Feedback()
+            result = SuppressFire.Result()
 
-                feedback_msg.current_attempt = attempt
-                feedback_msg.status = f'{attempt}차 진압 로직 수행 중'
-                goal_handle.publish_feedback(feedback_msg)
+            self.get_logger().info(f'진압 시작. 최대 {max_attempts}회 시도.')
+            await self.set_exploration_running(False)
 
-                cancelled = await self.run_suppression_routine(goal_handle)
-                if cancelled:
-                    return await self._handle_cancel(goal_handle, attempt)
+            try:
+                for attempt in range(1, max_attempts + 1):
+                    if goal_handle.is_cancel_requested:
+                        return await self._handle_cancel(goal_handle, attempt - 1)
 
-                feedback_msg.status = f'{attempt}차 상태 확인 중'
-                goal_handle.publish_feedback(feedback_msg)
+                    feedback_msg.current_attempt = attempt
+                    feedback_msg.status = f'{attempt}차 진압 로직 수행 중'
+                    goal_handle.publish_feedback(feedback_msg)
 
-                status = await self.check_fire_status_async(STATUS_CHECK_SECONDS)
-
-                if status is None:
-                    self.get_logger().warn('YOLO 응답 없음. 이번 시도는 실패로 간주하고 재시도.')
-                    is_extinguished = False
-                else:
-                    is_extinguished = status.is_extinguished
-                    self.get_logger().info(
-                        f'{attempt}차 판별 결과: {"꺼짐" if is_extinguished else "안꺼짐"} '
-                        f'(확신도 {status.confidence:.2f})'
-                    )
-
-                if is_extinguished:
-                    goal_handle.succeed()
-                    result.success = True
-                    result.attempts = attempt
-                    result.message = '진압 성공'
-                    return result
-
-                if attempt < max_attempts:
-                    # run_suppression_routine의 finally에서 이미 detach 됐으므로
-                    # 이 대기 구간 내내 서보는 조용히 쉬고 있음
-                    cancelled = await self.interruptible_sleep(goal_handle, RETRY_WAIT_SECONDS)
+                    cancelled = await self.run_suppression_routine(goal_handle)
                     if cancelled:
                         return await self._handle_cancel(goal_handle, attempt)
 
-            goal_handle.succeed()
-            result.success = False
-            result.attempts = max_attempts
-            result.message = '진압 실패 (최대 시도 횟수 도달)'
-            return result
+                    feedback_msg.status = f'{attempt}차 상태 확인 중'
+                    goal_handle.publish_feedback(feedback_msg)
+
+                    status = await self.check_fire_status_async(STATUS_CHECK_SECONDS)
+
+                    if status is None:
+                        self.get_logger().warn('YOLO 응답 없음. 이번 시도는 실패로 간주하고 재시도.')
+                        is_extinguished = False
+                    else:
+                        is_extinguished = status.is_extinguished
+                        self.get_logger().info(
+                            f'{attempt}차 판별 결과: {"꺼짐" if is_extinguished else "안꺼짐"} '
+                            f'(확신도 {status.confidence:.2f})'
+                        )
+
+                    if is_extinguished:
+                        goal_handle.succeed()
+                        result.success = True
+                        result.attempts = attempt
+                        result.message = '진압 성공'
+                        return result
+
+                    if attempt < max_attempts:
+                        cancelled = await self.interruptible_sleep(goal_handle, RETRY_WAIT_SECONDS)
+                        if cancelled:
+                            return await self._handle_cancel(goal_handle, attempt)
+
+                goal_handle.succeed()
+                result.success = False
+                result.attempts = max_attempts
+                result.message = '진압 실패 (최대 시도 횟수 도달)'
+                return result
+
+            finally:
+                await self.set_exploration_running(True)
 
         finally:
-            await self.set_exploration_running(True)
+            self._busy = False
 
     async def _handle_cancel(self, goal_handle, attempts_done: int):
         """취소 확정 처리: 펌프 즉시 정지, 서보 중앙 복귀 후 detach, 취소 결과 반환.
