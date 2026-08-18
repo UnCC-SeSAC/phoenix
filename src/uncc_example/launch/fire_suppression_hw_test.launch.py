@@ -116,7 +116,7 @@ def generate_launch_description():
         package='uncc_example',
         executable='vision_detector',
         name='vision_detector',
-        output='screen',
+        output='both',
         parameters=[{
             'camera_info_topic': '/image_enhanced/camera_info',
         }],
@@ -126,21 +126,21 @@ def generate_launch_description():
         package='uncc_example',
         executable='state_manager',
         name='state_manager',
-        output='screen',
+        output='both',
     )
 
     mission_executor = Node(
         package='uncc_example',
         executable='mission_executor',
         name='mission_executor',
-        output='screen',
+        output='both',
     )
 
     fire_status_dummy = Node(
         package='uncc_example',
         executable='fire_status_service_node_dummy_stub',
         name='fire_status_service_node',
-        output='screen',
+        output='both',
     )
 
     # 더미로 대체하지 않는 실제 노드 — GPIO13(펌프)/GPIO18(서보) 실물 구동
@@ -148,7 +148,7 @@ def generate_launch_description():
         package='uncc_example',
         executable='fire_suppression_node',
         name='fire_suppression_node',
-        output='screen',
+        output='both',
     )
 
     mission_stack = TimerAction(
