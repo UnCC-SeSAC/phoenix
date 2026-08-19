@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> None:
         default="transformers",
     )
     parser.add_argument(
-        "--model-id", default="Qwen/Qwen2.5-1.5B-Instruct"
+        "--model-id", default="Qwen/Qwen3-1.7B"
     )
     parser.add_argument("--device", default="xpu:0")
     parser.add_argument("--max-new-tokens", type=int, default=128)

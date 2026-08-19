@@ -4,7 +4,9 @@ import json
 import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from dataclasses import dataclass
+from math import hypot
 from typing import Any
 
 from .domain import ActionDecision, ActionType
@@ -86,11 +88,36 @@ def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
 
 def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
     """Keep remote inference limited to semantic decision state."""
-    return {
+    compact = {
         field: world_model[field]
         for field in REMOTE_WORLD_MODEL_FIELDS
         if field in world_model
     }
+    compact = deepcopy(compact)
+    robot_pose = (compact.get("robot") or {}).get("pose")
+    if not isinstance(robot_pose, dict):
+        return compact
+    try:
+        robot_x = float(robot_pose["x"])
+        robot_y = float(robot_pose["y"])
+    except (KeyError, TypeError, ValueError):
+        return compact
+    for collection in ("people", "fires"):
+        for entity in compact.get(collection) or []:
+            position = entity.get("position") if isinstance(entity, dict) else None
+            if not isinstance(position, dict):
+                continue
+            try:
+                distance = round(hypot(
+                    float(position["x"]) - robot_x,
+                    float(position["y"]) - robot_y,
+                ), 3)
+                entity["distance_from_robot_m"] = distance
+                if collection == "people":
+                    entity["within_report_range"] = distance <= 0.8
+            except (KeyError, TypeError, ValueError):
+                continue
+    return compact
 
 
 @dataclass(slots=True)
@@ -129,24 +156,31 @@ class RemoteQwenBackend(LLMPort):
 
 
 def build_qwen_system_prompt() -> str:
-    return """당신은 화재 현장 로봇의 VLA Brain이다.
-Mission과 WorldModel Snapshot을 해석하여 다음 행동 하나를 결정하라.
+    return """You are a fire-response robot decision engine.
+Apply the FIRST matching rule. JSON null means absent.
+1. current_action is NOT null: WAIT with target null. WAIT IS FOR THIS CASE ONLY;
+   when current_action is null, continue to the next rules and never choose WAIT.
+2. An unresolved person has an ACTIVE fire whose blocks_route_to equals that
+   person's id: choose EXTINGUISH on that fire when robot_within_spray_range is
+   true; otherwise NAVIGATE_TO that fire.
+3. An unresolved person's within_report_range is true: REPORT_PERSON that person.
+4. An unresolved person's within_report_range is false: NAVIGATE_TO that person.
+5. An ACTIVE fire remains: EXTINGUISH it only when robot_within_spray_range is
+   true; otherwise NAVIGATE_TO that fire.
+6. unexplored_zones is non-empty: SEARCH the first zone.
+7. Otherwise, including empty people/fires/zones: RETURN_HOME with target null.
 
-Action 의미:
-NAVIGATE_TO: 사람 또는 화점처럼 특정 의미 대상에 접근할 때 사용
-REPORT_PERSON: 로봇이 이미 도착한 미보고 인명 정보를 보고
-EXTINGUISH: 현재 분사 가능 범위에 있는 ACTIVE 화점을 진압
-SEARCH: Mission이 탐색 또는 지도 작성을 요구할 때 미탐색 zone을 다음 탐색 대상으로 선택하며, 이 경우 NAVIGATE_TO가 아니라 SEARCH를 사용
-WAIT: 현재 위치에서 대기
-RETURN_HOME: home pose로 복귀
-
-반드시 JSON 객체 하나만 출력하고 정확히 action, target, reason 세 필드만 사용하라.
-action은 입력의 allowed_actions 중 하나여야 한다.
-target은 입력의 valid_targets 중 하나 또는 JSON null이어야 한다.
-설명문, 클래스 이름, 좌표 또는 새로운 ID를 target으로 생성하지 마라.
-target이 필요하지 않은 Action에서는 반드시 JSON null을 사용하라.
-문자열 "null"은 사용하지 마라.
-Markdown code fence와 추가 설명을 출력하지 마라."""
+Output exactly one JSON object with exactly action, target, reason.
+action must be in allowed_actions.
+NAVIGATE_TO targets an existing people or fires id.
+REPORT_PERSON targets an existing people id.
+EXTINGUISH targets an existing fires id.
+SEARCH targets an existing unexplored_zones id.
+WAIT and RETURN_HOME use JSON null.
+Every non-null target must exactly match one of valid_targets. If valid_targets
+is empty, never use NAVIGATE_TO, REPORT_PERSON, EXTINGUISH, or SEARCH.
+Never invent an id, coordinate, class name, or the string "null".
+Do not output Markdown or any text outside the JSON object."""
 
 
 def _load_transformers_runtime():
@@ -157,7 +191,7 @@ def _load_transformers_runtime():
 
 @dataclass(slots=True)
 class TransformersQwenAdapter(LLMPort):
-    model_id: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    model_id: str = "Qwen/Qwen3-1.7B"
     device: str = "xpu:0"
     dtype: str = "float32"
     max_new_tokens: int = 128
@@ -200,11 +234,12 @@ class TransformersQwenAdapter(LLMPort):
             ) from exc
 
     def decide(self, mission: str, world_model: dict[str, Any]) -> ActionDecision:
+        inference_world = build_compact_world_model(world_model)
         user_input = {
             "mission": mission,
-            "world_model": world_model,
+            "world_model": inference_world,
             "allowed_actions": ALLOWED_ACTIONS,
-            "valid_targets": extract_valid_targets(world_model),
+            "valid_targets": extract_valid_targets(inference_world),
         }
         messages = [
             {"role": "system", "content": build_qwen_system_prompt()},
@@ -212,7 +247,8 @@ class TransformersQwenAdapter(LLMPort):
         ]
         try:
             rendered = self._tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
             )
             inputs = self._tokenizer(rendered, return_tensors="pt").to(self.device)
             input_length = inputs["input_ids"].shape[-1]

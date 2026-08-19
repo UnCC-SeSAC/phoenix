@@ -693,3 +693,12 @@ user data가 반복적으로 소실됐기 때문이다. Robot state와 safety �
 불안정한 DDS link를 control loop 필수 경로에서 제거한다. HTTP failure나 strict
 decision schema 위반은 기존 blocked cycle로 귀결되며 Validator bypass나 자동
 fallback motion은 없다.
+## Pi-local Control / Remote Inference Contract (2026-08-19)
+
+Robot state와 control은 Pi-local이며 PC는 `Qwen/Qwen3-1.7B` non-thinking HTTP
+inference만 수행한다. HTTP payload는 Mission과 compact semantic WorldModel로 제한한다.
+people/fires에는 authoritative map pose에서 계산한 `distance_from_robot_m`, people에는
+`within_report_range`가 추가될 수 있으나 raw image, LaserScan, OccupancyGrid, TF tree,
+ROS dump는 전송하지 않는다. 응답은 기존 strict `action/target/reason`
+`ActionDecision` contract를 그대로 사용한다. malformed 또는 unsupported response는
+Resolver/Validator/Dispatcher 전에 차단한다.

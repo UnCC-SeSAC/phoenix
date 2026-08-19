@@ -161,3 +161,32 @@ Software verification:
   `SEARCH target required` 규칙을 위반해 안전하게 reject됐다.
 - 변경 source의 Pi `/tmp` 전달은 SSH/SCP가 전송 단계에서 지속 정지해 완료하지 못했다.
   따라서 Hardware mock-remote E2E와 actual short navigation은 수행하지 않았다.
+## Remote Qwen Software Completion (2026-08-19)
+
+이 절이 위의 초기 strict-schema reject 기록보다 최신이다. 기본 PC inference model은
+`Qwen/Qwen3-1.7B` non-thinking deterministic generation으로 갱신했다. prompt는 기존
+production action 우선순위와 action별 target 계약을 명시하며 parser strictness는
+완화하지 않았다. compact payload에는 raw data 대신 기존 map pose에서 계산한
+`distance_from_robot_m`과 `within_report_range` semantic field만 추가했다.
+
+Software-only 결과:
+
+- 실제 Qwen 대표 시나리오: far person `NAVIGATE_TO`, near person
+  `REPORT_PERSON`, blocking in-range fire `EXTINGUISH`, empty targets
+  `RETURN_HOME`; 모두 strict parser PASS.
+- 실제 local HTTP server → `RemoteQwenBackend` → Resolver → Validator → mock
+  navigation submission 1건 → mock `SUCCEEDED` → WorldModel 반영 PASS.
+- software fixture는 실제 Pi의 5 Hz pose callback을 모사했다. 정적 pose fixture는
+  추론 중 정상적으로 stale REJECT되며 production freshness threshold는 변경하지 않았다.
+- timeout, server unavailable/HTTP 500, invalid JSON, invalid schema와 unsupported
+  action은 모두 non-dispatch blocked/failure로 종료한다.
+- Pi 배포는 Git을 우선하고, 불가능할 때
+  `scripts/create_pi_vla_bundle.sh` bundle을 사용한다. 재개 절차는
+  `docs/VLA_HARDWARE_RESUME_RUNBOOK.md`에 기록했다.
+
+SOFTWARE PASS: RemoteQwenBackend, PC Qwen server, actual Qwen structured decision,
+Resolver/Validator software flow, mock navigation result/WorldModel flow.
+
+HARDWARE PENDING: Pi deployment, Pi-local Orchestrator runtime, actual NavigateToPose,
+non-zero cmd_vel, Robot movement, actual navigation result. Hardware PASS와 Actual Short
+Navigation PASS는 주장하지 않는다.
