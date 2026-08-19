@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .dispatcher import ActionDispatcher
-from .domain import ActionDecision, ActionSubmission, ActionSubmissionStatus, ActionType
+from .domain import (
+    ActionDecision,
+    ActionResultStatus,
+    ActionSubmission,
+    ActionSubmissionStatus,
+    ActionType,
+)
 from .llm import LLMError, LLMInferenceError, LLMOutputError
 from .ports import ActionResultSource, LLMPort
 from .resolver import TargetResolutionError, TargetResolver
@@ -33,6 +39,12 @@ class VLAOrchestrator:
     dispatcher: ActionDispatcher
     _last_decision_input_signature: tuple[Any, ...] | None = field(
         default=None, init=False, repr=False
+    )
+    _semantic_action_keys: dict[str, tuple[str, ActionType, str | None]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _non_retryable_semantic_keys: set[tuple[str, ActionType, str | None]] = field(
+        default_factory=set, init=False, repr=False
     )
 
     def decide_once(self) -> DecisionCycle:
@@ -78,8 +90,20 @@ class VLAOrchestrator:
                 f"ACTION_VALIDATION_REJECTED: {validation.reason}",
             )
 
+        semantic_key = self._semantic_action_key(validation.action)
+        if semantic_key in self._non_retryable_semantic_keys:
+            return DecisionCycle(
+                decision,
+                validation,
+                None,
+                "DUPLICATE_ACTION_BLOCKED: 동일 Mission에서 실행 중이거나 성공한 행동입니다.",
+            )
+
         submission = self.dispatcher.submit(validation.action)
         self.world.apply_submission(validation.action, submission)
+        if submission.status == ActionSubmissionStatus.ACCEPTED:
+            self._semantic_action_keys[validation.action.action_id] = semantic_key
+            self._non_retryable_semantic_keys.add(semantic_key)
         return DecisionCycle(decision, validation, submission)
 
     def process_results(self, source: ActionResultSource) -> int:
@@ -93,10 +117,22 @@ class VLAOrchestrator:
             if self.world.apply_action_result(result):
                 count += 1
                 physical_action_completed = physical_action_completed or bool(action and action.is_physical)
+                semantic_key = self._semantic_action_keys.pop(result.action_id, None)
+                if (
+                    semantic_key is not None
+                    and result.status != ActionResultStatus.SUCCEEDED
+                ):
+                    self._non_retryable_semantic_keys.discard(semantic_key)
         if physical_action_completed:
             self._last_decision_input_signature = None
         self.world.complete_mission_if_resolved()
         return count
+
+    def _semantic_action_key(
+        self, action: Any
+    ) -> tuple[str, ActionType, str | None]:
+        assert self.world.mission is not None
+        return (self.world.mission.id, action.action, action.target)
 
     def _decision_input_signature(self) -> tuple[Any, ...]:
         mission = self.world.mission

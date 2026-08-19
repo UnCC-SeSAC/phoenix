@@ -179,6 +179,71 @@ def test_duplicate_terminal_result_is_applied_once():
     assert world.last_action is action
 
 
+def test_same_mission_succeeded_navigation_is_not_dispatched_again():
+    world, node, navigation, orchestrator = make_system()
+    action = orchestrator.decide_once().validation.action
+    publish_result(node, action.action_id, "SUCCEEDED")
+    assert orchestrator.process_results(navigation) == 1
+
+    duplicate = orchestrator.decide_once()
+
+    assert duplicate.submission is None
+    assert duplicate.blocked_reason.startswith("DUPLICATE_ACTION_BLOCKED:")
+    assert len(node.publishers["/vla/navigation_goal"].messages) == 1
+
+
+def test_same_navigation_is_not_dispatched_while_running():
+    _, node, _, orchestrator = make_system()
+    first = orchestrator.decide_once()
+
+    waiting = orchestrator.decide_once()
+
+    assert first.submission.status.value == "ACCEPTED"
+    assert waiting.decision.action == ActionType.WAIT
+    assert len(node.publishers["/vla/navigation_goal"].messages) == 1
+
+
+def test_different_action_for_same_target_is_allowed_after_navigation():
+    world, node, navigation, orchestrator = make_system()
+    action = orchestrator.decide_once().validation.action
+    publish_result(node, action.action_id, "SUCCEEDED")
+    assert orchestrator.process_results(navigation) == 1
+    orchestrator.llm.decide = lambda mission, snapshot: ActionDecision(
+        ActionType.REPORT_PERSON, "도착한 사람을 보고", "person_01"
+    )
+
+    report = orchestrator.decide_once()
+
+    assert report.submission.status.value == "ACCEPTED"
+    assert report.validation.action.action == ActionType.REPORT_PERSON
+    assert len(node.publishers["/vla/navigation_goal"].messages) == 1
+
+
+def test_same_navigation_is_allowed_for_new_mission():
+    world, node, navigation, orchestrator = make_system()
+    action = orchestrator.decide_once().validation.action
+    publish_result(node, action.action_id, "SUCCEEDED")
+    assert orchestrator.process_results(navigation) == 1
+    world.set_mission("mission_02", "같은 사람에게 다시 이동")
+
+    second = orchestrator.decide_once()
+
+    assert second.submission.status.value == "ACCEPTED"
+    assert len(node.publishers["/vla/navigation_goal"].messages) == 2
+
+
+def test_failed_navigation_keeps_existing_retry_semantics():
+    _, node, navigation, orchestrator = make_system()
+    action = orchestrator.decide_once().validation.action
+    publish_result(node, action.action_id, "FAILED")
+    assert orchestrator.process_results(navigation) == 1
+
+    retry = orchestrator.decide_once()
+
+    assert retry.submission.status.value == "ACCEPTED"
+    assert len(node.publishers["/vla/navigation_goal"].messages) == 2
+
+
 class FakeNavigator:
     def __init__(self):
         self.cancel_calls = 0

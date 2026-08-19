@@ -213,3 +213,25 @@ production freshness threshold는 변경하지 않았다. Orchestrator의 pose s
 별도 callback group에 두고 2-thread executor를 사용하도록 최소 수정했다. 이 수정은
 software regression 후 Hardware 재검증 전 상태이므로
 `REMOTE_QWEN_HARDWARE_E2E_PASS = NO`, `ACTUAL_SHORT_NAV_PASS = NO`를 유지한다.
+
+## Remote-Qwen Hardware Navigation and Duplicate Guard (2026-08-19)
+
+`ac7eb68` Hardware 재시험에서 HTTP 추론 중 Pi-local robot pose가 약 5 Hz로
+계속 갱신되어 executor concurrency fix와 Validator freshness PASS를 확인했다.
+실제 `NAVIGATE_TO person_0001`은 ACCEPTED, non-zero cmd_vel, Robot 이동,
+Nav2 `SUCCEEDED`, `/vla/navigation_result`까지 완료됐다. 그러나 Mission 1회에서
+성공한 동일 navigation이 새 action ID로 한 번 더 dispatch되어 전체 E2E PASS는
+보류했다.
+
+직접 원인은 성공 결과가 `current_action`을 비우고 decision input signature를
+초기화한 뒤, 계속 RUNNING인 Mission의 다음 Qwen decision이 새 action ID를 받아
+기존 action-ID idempotency cache를 통과한 것이다. Mission은 navigation 성공만으로
+즉시 완료하지 않는다. 동일 target의 후속 `REPORT_PERSON` 등은 계속 허용한다.
+
+Orchestrator에 `(mission_id, action type, target_id)` semantic key guard를 추가했다.
+ACCEPTED/RUNNING 및 SUCCEEDED key는 같은 Mission에서 재-dispatch하지 않는다.
+FAILED, ABORTED, CANCELED, TIMED_OUT은 기존 retry semantics를 유지하며, 새 Mission과
+다른 action type은 허용한다. Validator, Nav2 Bridge, Qwen contract는 변경하지 않았다.
+Software regression은 PASS했으며 최신 guard의 Hardware 1-goal 재검증 전까지
+`DUPLICATE_NAV_GOAL_GUARD_PASS`, `REMOTE_QWEN_HARDWARE_E2E_PASS`,
+`ACTUAL_SHORT_NAV_PASS`는 모두 NO로 유지한다.
