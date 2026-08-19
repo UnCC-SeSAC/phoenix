@@ -5,11 +5,15 @@ from datetime import datetime, timezone
 
 try:
     import rclpy
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+    from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
     from std_msgs.msg import String
 except ImportError:
     rclpy = None
     Node = object
+    MutuallyExclusiveCallbackGroup = None
+    MultiThreadedExecutor = None
 
 from ..adapters.mock_adapters import (
     MockNavigationAdapter,
@@ -139,6 +143,9 @@ class VLAOrchestratorNode(Node):
         )
 
         self.world = WorldModel(WorldModelConfig())
+        # Remote inference is synchronous. Keep robot pose processing separate
+        # so Validator freshness advances while the timer waits for HTTP.
+        self.pose_callback_group = MutuallyExclusiveCallbackGroup()
         self.perception_normalizer = CanonicalPerceptionNormalizer(self.world)
         self.mock_results = MockResultQueue()
         self.status_tracker = VLAStatusTracker()
@@ -279,6 +286,7 @@ class VLAOrchestratorNode(Node):
             str(self.get_parameter("robot_pose_topic").value),
             self._pose_cb,
             10,
+            callback_group=self.pose_callback_group,
         )
         self.create_timer(
             float(self.get_parameter("decision_period_sec").value),
@@ -384,9 +392,12 @@ def main(args=None) -> None:
         raise RuntimeError("ROS2 환경에서 실행해야 합니다.")
     rclpy.init(args=args)
     node = VLAOrchestratorNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

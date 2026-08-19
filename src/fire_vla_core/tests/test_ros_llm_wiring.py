@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from fire_vla_core.llm import MockVLABrain, OllamaLLMClient
@@ -89,3 +91,18 @@ def test_invalid_transformers_token_limit_fails_explicitly(monkeypatch):
             "transformers",
             **kwargs,
         )
+
+
+def test_pose_callback_can_run_while_remote_inference_blocks_timer():
+    init_source = inspect.getsource(
+        orchestrator_node.VLAOrchestratorNode.__init__
+    )
+    main_source = inspect.getsource(orchestrator_node.main)
+
+    assert (
+        "self.pose_callback_group = MutuallyExclusiveCallbackGroup()"
+        in init_source
+    )
+    assert "callback_group=self.pose_callback_group" in init_source
+    assert "MultiThreadedExecutor(num_threads=2)" in main_source
+    assert "executor.spin()" in main_source

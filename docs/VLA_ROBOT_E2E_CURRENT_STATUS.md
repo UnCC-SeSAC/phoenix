@@ -190,3 +190,26 @@ Resolver/Validator software flow, mock navigation result/WorldModel flow.
 HARDWARE PENDING: Pi deployment, Pi-local Orchestrator runtime, actual NavigateToPose,
 non-zero cmd_vel, Robot movement, actual navigation result. Hardware PASS와 Actual Short
 Navigation PASS는 주장하지 않는다.
+## First Remote-Qwen Hardware Attempt (2026-08-19)
+
+Pi에 `10e1186`을 배포하고 Humble isolated overlay에서 `fire_vla_core`,
+`fire_vla_bringup`, `uncc_example`을 build했다. Hardware stack은 container의
+`ubuntu` 사용자로 실행해야 user-local `pyserial`과 motor controller가 연결된다.
+PC `Qwen/Qwen3-1.7B` health와 Pi→PC synthetic inference는 PASS했다.
+
+실제 Robot pose 기준 약 0.95 m 전방에 `person_0001`을 반영하고 Mission을 정확히
+1회 제출했다. Qwen은 `NAVIGATE_TO person_0001`을 반환했고 Resolver는 PASS했지만,
+동기 HTTP 추론 중 single-threaded ROS executor가 pose callback을 처리하지 못해
+Validator가 `로봇 위치가 없거나 너무 오래되었습니다.`로 REJECT했다.
+
+- `/vla/navigation_goal`: 0
+- NavigateToPose: 0
+- non-zero cmd_vel: 0
+- Robot movement: 0 m
+- `/vla/navigation_result`: 0
+- 최초 실패 단계: Validator
+
+production freshness threshold는 변경하지 않았다. Orchestrator의 pose subscription만
+별도 callback group에 두고 2-thread executor를 사용하도록 최소 수정했다. 이 수정은
+software regression 후 Hardware 재검증 전 상태이므로
+`REMOTE_QWEN_HARDWARE_E2E_PASS = NO`, `ACTUAL_SHORT_NAV_PASS = NO`를 유지한다.
