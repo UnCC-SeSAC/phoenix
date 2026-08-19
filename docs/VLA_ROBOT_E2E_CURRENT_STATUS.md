@@ -264,10 +264,34 @@ HailoRT TensorFlow NMS output `(1,2,5,100)`의 normalized yxyx를 기존 end-to-
 사용하지 않고 HEF sorted stream name으로 추출한다.
 
 `HailoBackend`와 NMS adapter focused tests는 PASS했지만 실제 perception E2E는
-HARDWARE PENDING이다. 현재 Pi에는 Hailo device(`/dev/hailo*`)와 설치된 runtime/
-driver가 없고 `hailortcli scan`도 device를 찾지 못했다. 또한 모델 저장소에는
-`data.yaml`, label metadata, model card가 없어 2개 class의 실제 순서를 증명할 수
-없다. 따라서 기본값 `fire=0, person=1`을 추측 적용하지 않았으며, class order가
-학습 artifact로 확인되기 전에는 live `/yolo_result`와 `/fire/detections`를
-production label로 발행하지 않는다. Camera, depth fusion, WorldModel live 검증은
-이 두 hardware/contract blocker가 해소된 다음 단계다. HEF binary는 Git에 넣지 않는다.
+HARDWARE PENDING이다. 현재 Hailo device/runtime은 hardware team 설치 중이므로 live
+Camera/YOLO/depth 검증은 수행하지 않았다. 모델 저장소에 `data.yaml`은 없지만 model
+owner가 class contract를 `class_id 0 = fire`, `class_id 1 = person`으로 확정했다.
+production `class_names=['fire','person']`와 software fixture는 이 순서를 사용한다.
+Hailo hardware 설치가 완료되면 live upstream만 이번 검증 경로에 연결한다.
+
+## Perception Downstream Software E2E (2026-08-19)
+
+Hardware 없이 image_pipeline production payload builder의 `/fire/detections` JSON을
+VLA production adapter에 입력했다. CameraInfo `(fx,fy)=(400,400)`, optical-frame
+pixel/depth 역투영과 deterministic source-time optical→map TF를 거쳐 center pixel,
+0.95 m person은 map `(0.95,0.0)`의 `person_0001`, pixel `(360,240)`, 2.0 m fire는
+map `(2.0,-0.2)`의 `fire_0001`로 생성됐다. confidence와 source timestamp가
+WorldModel까지 유지됐다.
+
+실제 `Qwen/Qwen3-1.7B` HTTP server와 5 Hz software robot-pose fixture에서 Mission
+`인명을 우선 확인해`는 `NAVIGATE_TO person_0001`을 반환했다. Resolver와 production
+Validator가 PASS하고 mock navigation submission 1건, `SUCCEEDED` result 1건과
+WorldModel `last_action`/navigation status 반영까지 완료됐다. direct semantic entity,
+map pose, navigation goal 주입은 사용하지 않았다.
+
+Unknown/null depth는 무시되고, non-positive depth, out-of-frame pixel, unsupported class,
+malformed JSON은 fail-closed 처리되며 stale source timestamp는 normalizer에서 entity를
+생성하지 않는다.
+기존 WorldModel confidence threshold 미만 person은 entity로 반영되지 않는다. YOLO
+threshold와 별도로 downstream에 새로운 임계값은 만들지 않았다.
+
+- `PERCEPTION_DOWNSTREAM_SW_E2E_PASS = YES`
+- `REMOTE_QWEN_PERCEPTION_SW_E2E_PASS = YES`
+- `LIVE_HAILO_PERCEPTION = NOT_RUN` (Hailo hardware installation pending)
+- `ACTUAL_PERCEPTION_NAVIGATION_E2E = NOT_RUN`
