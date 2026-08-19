@@ -70,7 +70,7 @@ class FrontierStateController(Node):
 
         self.get_logger().info(
             'Frontier state controller ready: '
-            f'{self._control_service.service_name} -> '
+            f'{self._control_service.srv_name} -> '
             f'{frontier_control_service}'
         )
 

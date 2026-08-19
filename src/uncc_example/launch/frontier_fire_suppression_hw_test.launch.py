@@ -1,9 +1,14 @@
+import json
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import (
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    TimerAction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -37,7 +42,10 @@ def generate_launch_description():
     회피는 Nav2 local planner 가 담당).
 
     나머지 입력/판정은 여전히 더미다:
-      - 비전(불 감지): image_pipeline 의 더미 체인(full_chain_check.launch.py)
+      - 비전(불 감지): 카메라 상대좌표라 로봇이 접근하며 계속 값이
+        바뀌어 같은 불이 새 객체로 반복 인식되는 걸 피하려고,
+        image_pipeline 체인 대신 /vision/detections 에 고정 map 좌표로
+        'ros2 topic pub --once' 를 한 번만 실행한다.
       - 불 꺼짐 판정(check_fire_status): fire_status_service_node_dummy_stub
         이 1차 호출은 안꺼짐, 2차 호출부터는 꺼짐으로 응답 (파라미터
         succeed_on_call 로 조절 가능)
@@ -60,7 +68,6 @@ def generate_launch_description():
     """
 
     uncc_share = get_package_share_directory('uncc_example')
-    image_pipeline_share = get_package_share_directory('image_pipeline')
     frontier_share = get_package_share_directory('frontier_exploration_ros2')
     launch_dir = os.path.join(uncc_share, 'launch')
     frontier_params = os.path.join(frontier_share, 'config', 'params.yaml')
@@ -139,50 +146,11 @@ def generate_launch_description():
     )
 
     # =========================================
-    # 비전(더미) + 미션 스택
+    # 미션 스택
     # frontier_state_controller(t=12) 뒤에 시작해야 mission_executor 가
     # EXPLORING 진입 즉시 frontier 서비스를 찾을 수 있다 (nav2 의
     # bt_navigator 도 t=7 이후라 이 시점엔 이미 떠 있다).
     # =========================================
-
-    # distance_m=0.29 : 목표거리(카메라 오프셋 0.0614 + 0.29 = 0.35m) 에서
-    # xy_goal_tolerance(0.25m) 만큼 앞에서 멈추면 실제 전진거리 = 0.10m
-    dummy_vision = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            image_pipeline_share + '/launch/full_chain_check.launch.py'
-        ),
-        launch_arguments={
-            'distance_m': '0.29',
-        }.items(),
-    )
-
-    # mecanum.xacro 실측 장착값(base_footprint->depth_cam) + REP-103
-    # 카메라->광학 프레임 표준 회전
-    tf_base_to_camera = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='tf_base_to_camera_dummy',
-        arguments=[
-            '--frame-id', 'base_footprint',
-            '--child-frame-id', 'camera_depth_optical_frame',
-            '--x', '0.061376',
-            '--y', '-0.00013463',
-            '--z', '0.121154',
-            '--roll', '-1.5707963267948966',
-            '--pitch', '0',
-            '--yaw', '-1.5707963267948966',
-        ],
-    )
-
-    vision_detector = Node(
-        package='uncc_example',
-        executable='vision_detector',
-        name='vision_detector',
-        output='both',
-        parameters=[{
-            'camera_info_topic': '/image_enhanced/camera_info',
-        }],
-    )
 
     state_manager = Node(
         package='uncc_example',
@@ -216,13 +184,31 @@ def generate_launch_description():
     mission_stack = TimerAction(
         period=13.0,
         actions=[
-            dummy_vision,
-            tf_base_to_camera,
-            vision_detector,
             state_manager,
             mission_executor,
             fire_status_dummy,
             fire_suppression_real,
+        ],
+    )
+
+    # vision_detector 가 실제로 publish 하는 것과 같은 스키마로,
+    # 고정 map 좌표(0.35, 0.0) 의 fire 감지를 딱 한 번만 흘려보낸다.
+    fire_detection_payload = json.dumps({
+        'frame_id': 'map',
+        'detections': [{'class': 'fire', 'x': 0.35, 'y': 0.0}],
+    })
+
+    fire_detection_once = TimerAction(
+        period=15.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    'ros2', 'topic', 'pub', '--once',
+                    '/vision/detections', 'std_msgs/msg/String',
+                    f"data: '{fire_detection_payload}'",
+                ],
+                output='both',
+            ),
         ],
     )
 
@@ -233,4 +219,5 @@ def generate_launch_description():
         frontier,
         frontier_state_controller,
         mission_stack,
+        fire_detection_once,
     ])
