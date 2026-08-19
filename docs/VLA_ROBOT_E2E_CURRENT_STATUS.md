@@ -155,6 +155,23 @@ Production candidate:
 Live HEF inference is `NOT_RUN` because Hailo device/runtime installation is not yet
 complete. The HEF binary is intentionally not committed.
 
+## ONNX Runtime Model Validation
+
+User-provided untracked `best_base.onnx` was validated without committing the binary.
+SHA-256 is `2e04e029ca825b021990bbeb44ecd1ba5f8c2fe41739b222b7d54fdb9ed10f9d`.
+ONNX checker and ONNX Runtime 1.29 PASS with opset 17, input
+`images [1,3,640,640] float32`, output `output0 [1,300,6] float32`, metadata
+`end2end=True`, and class names `0=fire, 1=person`. The existing Phoenix letterbox,
+BGR→RGB, float 0..1 preprocessing and end-to-end decoder completed dummy inference in
+about 101 ms on PC CPU; a blank image correctly produced zero detections.
+
+OpenCV DNN 4.6.0 still cannot import the model's attention `Split` node. An explicit
+`OnnxRuntimeBackend` now implements the existing `infer(blob) -> list[np.ndarray]`
+port and is selected with `backend:=onnxruntime`. The selected runtime must provide the
+optional `onnxruntime` Python package; absence is reported with an explicit installation
+error. Existing OpenCV, Ultralytics, Hailo, and Stub paths are unchanged; there is no
+silent fallback. Live Camera testing remains pending.
+
 ## Current Pending
 
 - live Camera → YOLO detection

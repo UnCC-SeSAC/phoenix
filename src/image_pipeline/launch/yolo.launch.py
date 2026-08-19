@@ -30,7 +30,7 @@ def generate_launch_description():
             description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo)'),
         DeclareLaunchArgument(
             'backend', default_value='auto',
-            description='auto | onnx | ultralytics | hailo | stub'),
+            description='auto | onnx | onnxruntime | ultralytics | hailo | stub'),
         DeclareLaunchArgument(
             'input_topic', default_value='/image_enhanced',
             description='태스크①의 출력. 원본 rgb0 가 아닙니다'),

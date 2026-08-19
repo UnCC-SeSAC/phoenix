@@ -65,7 +65,7 @@ __all__ = [
     "PAD_VALUE", "LAYOUTS", "Detection", "LetterboxInfo",
     "letterbox", "undo_letterbox", "make_blob",
     "normalize_output", "decode", "nms", "iou_matrix",
-    "OnnxCvBackend", "StubBackend", "HailoBackend",
+    "OnnxCvBackend", "OnnxRuntimeBackend", "StubBackend", "HailoBackend",
     "YoloDetector", "UltralyticsDetector",
     "make_detector", "describe_outputs",
 ]
@@ -449,6 +449,49 @@ class OnnxCvBackend:
         return list(outs)
 
 
+class OnnxRuntimeBackend:
+    """Explicit ONNX Runtime CPU adapter for OpenCV-incompatible models."""
+
+    kind = "onnxruntime"
+
+    def __init__(self, onnx_path: str, threads: int = 0):
+        if not os.path.exists(onnx_path):
+            raise FileNotFoundError(f"ONNX 모델 파일이 없습니다: {onnx_path}")
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise ImportError(
+                "backend=onnxruntime에는 onnxruntime이 필요합니다: "
+                "python3 -m pip install onnxruntime"
+            ) from exc
+        options = ort.SessionOptions()
+        if threads > 0:
+            options.intra_op_num_threads = int(threads)
+        self.session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        inputs = self.session.get_inputs()
+        if len(inputs) != 1 or inputs[0].type != "tensor(float)":
+            raise ValueError(
+                "단일 float tensor 입력을 기대합니다: "
+                f"{[(item.name, item.shape, item.type) for item in inputs]}"
+            )
+        self.input_name = inputs[0].name
+        self.output_names = [item.name for item in self.session.get_outputs()]
+        if not self.output_names:
+            raise ValueError("ONNX 모델에 output이 없습니다.")
+        self.path = str(onnx_path)
+
+    def infer(self, blob: np.ndarray) -> list[np.ndarray]:
+        array = np.asarray(blob, dtype=np.float32)
+        outputs = self.session.run(
+            self.output_names, {self.input_name: array}
+        )
+        return [np.asarray(output) for output in outputs]
+
+
 class StubBackend:
     """가중치 없이 **배선만** 확인하기 위한 가짜 백엔드.
 
@@ -735,6 +778,11 @@ def make_detector(model_path: str, *, backend: str = "auto", **kwargs):
     if backend == "onnx":
         threads = int(kwargs.pop("threads", 0))
         return YoloDetector(OnnxCvBackend(model_path, threads=threads), **kwargs)
+    if backend == "onnxruntime":
+        threads = int(kwargs.pop("threads", 0))
+        return YoloDetector(
+            OnnxRuntimeBackend(model_path, threads=threads), **kwargs
+        )
     if backend == "ultralytics":
         kwargs.pop("threads", None)
         kwargs.pop("layout", None)

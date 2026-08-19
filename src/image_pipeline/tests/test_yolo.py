@@ -543,3 +543,47 @@ class TestHailoNmsAdapter:
         assert len(output) == 1
         assert output[0][0, 0].tolist() == pytest.approx(
             [0.2, 0.1, 0.4, 0.3, 0.9, 1.0])
+
+
+class TestOnnxRuntimeBackend:
+    def test_missing_model_is_not_a_silent_fallback(self):
+        from image_pipeline.yolo import make_detector
+        with pytest.raises(FileNotFoundError, match="ONNX"):
+            make_detector("/nonexistent/model.onnx", backend="onnxruntime")
+
+    def test_uses_explicit_input_and_output_names(self, monkeypatch, tmp_path):
+        import sys
+        from types import SimpleNamespace
+        from image_pipeline.yolo import OnnxRuntimeBackend
+
+        model = tmp_path / "model.onnx"
+        model.write_bytes(b"test-only")
+
+        class Session:
+            def __init__(self, path, sess_options, providers):
+                self.calls = []
+
+            def get_inputs(self):
+                return [SimpleNamespace(
+                    name="images", shape=[1, 3, 640, 640], type="tensor(float)")]
+
+            def get_outputs(self):
+                return [SimpleNamespace(
+                    name="output0", shape=[1, 300, 6], type="tensor(float)")]
+
+            def run(self, output_names, inputs):
+                self.calls.append((output_names, inputs))
+                return [np.zeros((1, 300, 6), np.float32)]
+
+        fake_ort = SimpleNamespace(
+            SessionOptions=lambda: SimpleNamespace(intra_op_num_threads=0),
+            InferenceSession=Session,
+        )
+        monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+        backend = OnnxRuntimeBackend(str(model), threads=2)
+        output = backend.infer(np.zeros((1, 3, 640, 640), np.float64))
+        names, inputs = backend.session.calls[0]
+        assert names == ["output0"]
+        assert list(inputs) == ["images"]
+        assert inputs["images"].dtype == np.float32
+        assert output[0].shape == (1, 300, 6)
