@@ -53,7 +53,7 @@ STATUS_CHECK_SECONDS = 3.0
 
 # 서보 스윕 설정 (단순 왕복 방식)
 SERVO_CENTER_ANGLE = 90
-SERVO_SWEEP_RANGE_DEG = 15               # 중앙 기준 +-범위
+SERVO_SWEEP_RANGE_DEG = 10               # 중앙 기준 +-범위
 SERVO_SWEEP_STEP_SECONDS = 0.6           # 한쪽 끝에서 반대쪽 끝까지 이동하는 데 걸리는 시간
 
 # 서보 펄스폭 (테스트 스크립트에서 확인된 안전 범위로 조정: 0.0005~0.0025 -> 0.0006~0.0024)
@@ -62,7 +62,7 @@ SERVO_MAX_PULSE_WIDTH = 0.0024
 
 # 대기 구간 진입 시, 중앙으로 복귀한 뒤 detach()하기 전까지 대기하는 시간(초)
 # 너무 짧으면 물리적으로 중앙에 도달하기 전에 신호가 끊겨 어중간한 위치에서 멈출 수 있음
-SERVO_SETTLE_SECONDS = 0.3
+SERVO_SETTLE_SECONDS = 0.6
 
 # _rclpy_sleep 이 공유해서 쓰는 재사용 타이머의 tick 주기(초).
 # 매번 create_timer/destroy_timer 를 새로 하지 않기 위해, 이 주기로 도는
@@ -85,7 +85,7 @@ class FireSuppressionNode(Node):
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
             min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
-            initial_angle=None,
+            initial_angle=SERVO_CENTER_ANGLE,
         )
 
         self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)
