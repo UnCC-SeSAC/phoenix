@@ -24,12 +24,6 @@ class MissionExecutor(Node):
         # -----------------------------
         self.declare_parameter("action_check_period", 0.2)
 
-        # nav2 목적지가 이 횟수만큼 연속으로 실패하면 도달 불가로 보고
-        # 포기한다 (같은 곳으로 무한 재시도하지 않는다).
-        self.declare_parameter("nav_max_attempts", 3)
-
-        self.nav_max_attempts = self.get_parameter("nav_max_attempts").value
-
         # -----------------------------
         # State (state_manager 로부터 받은 값)
         # -----------------------------
@@ -47,7 +41,6 @@ class MissionExecutor(Node):
 
         self._nav_goal_handle = None
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
-        self._nav_fail_count = 0  # 현재 목적지로 연속 실패한 횟수
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
@@ -110,10 +103,7 @@ class MissionExecutor(Node):
         self.state = msg.data
 
     def target_callback(self, msg):
-        # 새 목적지가 왔다는 뜻이므로 이전 목적지의 실패 횟수는 버린다
-        # (state_manager 는 target 이 실제로 바뀔 때만 publish 한다).
         self.current_target = msg
-        self._nav_fail_count = 0
 
     # =========================================================
     # Timer / State machine
@@ -236,21 +226,13 @@ class MissionExecutor(Node):
                 self.notify_target_complete()
         else:
             self._nav_goal_xy = None
-            self._nav_fail_count += 1
-
-            if self._nav_fail_count >= self.nav_max_attempts:
-                self.get_logger().warn(
-                    f"Nav2 목적지 {self._nav_fail_count}회 연속 실패 — "
-                    f"도달 불가로 보고 다음 목적지로 넘어감 (status={status})"
-                )
-                self.notify_target_complete(
-                    status=StateManager.TARGET_STATUS_UNREACHABLE
-                )
-            else:
-                self.get_logger().warn(
-                    f"Nav2 goal 이 완료되지 못함 "
-                    f"({self._nav_fail_count}/{self.nav_max_attempts}, status={status})"
-                )
+            self.get_logger().warn(
+                f"Nav2 goal 이 실패함 — 도달 불가로 보고 다음 목적지로 "
+                f"넘어감 (status={status})"
+            )
+            self.notify_target_complete(
+                status=StateManager.TARGET_STATUS_UNREACHABLE
+            )
 
     # =========================================================
     # 진압 동작 (fire_suppression_node 호출)

@@ -1,6 +1,6 @@
 import json
 import math
-from collections import deque
+import time
 
 import rclpy
 
@@ -45,6 +45,9 @@ class StateManager(Node):
         # 로봇 컨트롤러가 보내는 raw 배터리 값 기준 (기기에 맞게 튜닝 필요)
         self.declare_parameter('low_battery_threshold', 7000)
 
+        # raw 값이 임계값 기준 방향을 이만큼(초) 연속 유지해야 상태를 전환한다
+        self.declare_parameter('low_battery_confirm_sec', 3.0)
+
         # 이 반경 안의 같은 종류(fire/person) 감지는 하나의 목적지로 병합
         self.declare_parameter('target_merge_radius', 0.5)
 
@@ -59,6 +62,9 @@ class StateManager(Node):
 
         self.low_battery_threshold = (
             self.get_parameter('low_battery_threshold').value
+        )
+        self.low_battery_confirm_sec = (
+            self.get_parameter('low_battery_confirm_sec').value
         )
         self.target_merge_radius = (
             self.get_parameter('target_merge_radius').value
@@ -79,9 +85,11 @@ class StateManager(Node):
         self.start_x = None
         self.start_y = None
 
-        # 배터리 raw 값이 순간적으로 튀는 걸(전류 부하로 인한 전압 강하 등)
-        # 걸러내기 위해 최근 10개의 평균으로 판단한다.
-        self.battery_history = deque(maxlen=10)
+        # 임계값 기준 방향이 low_battery_confirm_sec 만큼 유지돼야 확정한다
+        self.latest_battery = None
+        self._battery_low_state = False
+        self._battery_pending_value = None
+        self._battery_pending_since = None
 
         # fire/person 목적지 큐. found_targets 와 원소(dict)를 공유하며,
         # 아직 처리 안 한 것만 담고 target_complete 로 여기서만 빠진다.
@@ -346,24 +354,36 @@ class StateManager(Node):
     # =========================================================
 
     def battery_callback(self, msg):
-        self.battery_history.append(msg.data)
+        self.latest_battery = msg.data
 
     def is_battery_low(self):
 
-        if len(self.battery_history) < 10:
+        if self.latest_battery is None:
             return False
 
-        average = sum(self.battery_history) / len(self.battery_history)
-        low = average <= self.low_battery_threshold
+        raw_low = self.latest_battery <= self.low_battery_threshold
+        now = time.time()
 
-        if low:
+        if raw_low != self._battery_pending_value:
+            self._battery_pending_value = raw_low
+            self._battery_pending_since = now
+
+        if (
+            raw_low != self._battery_low_state
+            and self._battery_pending_since is not None
+            and now - self._battery_pending_since
+            >= self.low_battery_confirm_sec
+        ):
+            self._battery_low_state = raw_low
+
+        if self._battery_low_state:
             self.get_logger().warn(
-                f'배터리 부족 (최근 {len(self.battery_history)}개 평균 '
-                f'{average:.0f} <= 임계값 {self.low_battery_threshold})',
+                f'배터리 부족 (raw {self.latest_battery} <= '
+                f'임계값 {self.low_battery_threshold})',
                 throttle_duration_sec=5.0,
             )
 
-        return low
+        return self._battery_low_state
 
     # =========================================================
     # Target completion (다른 노드가 처리 완료를 알려줌)
