@@ -10,6 +10,8 @@
 - 펌프(GPIO13)/서보(GPIO18)는 라즈베리파이 GPIO를 직접 제어한다.
 - 분사 후 재시도 대기 구간에서는 서보 PWM 신호를 detach()로 끊어서
   떨림/웅- 소음을 없앤다 (테스트 스크립트에서 검증된 패턴 반영).
+- 스윕 자체는 EMA 스무딩/가변속 없이 min/max 각도를 단순 왕복하는
+  방식으로 단순화함 (저가형 서보에서는 정밀 스무딩 효과가 미미했음).
 
 시퀀스 다이어그램 대응:
   ① 시작 goal 수신           -> execute_callback 진입
@@ -49,13 +51,10 @@ RETRY_WAIT_SECONDS = 2.0
 DEFAULT_MAX_ATTEMPTS = 3
 STATUS_CHECK_SECONDS = 3.0
 
-# 서보 스윕 설정
+# 서보 스윕 설정 (단순 왕복 방식)
 SERVO_CENTER_ANGLE = 90
-SERVO_SWEEP_RANGE_DEG = 15          # 중앙 기준 +-범위
-SERVO_UPDATE_INTERVAL = 0.15        # 각도 갱신 주기(초). 작을수록 더 매끄러움
-SERVO_MAX_SPEED_DEG_PER_SEC = 80.0  # 가장자리 부근에서의 각속도
-SERVO_CENTER_SPEED_FACTOR = 0.25    # 중앙에서의 속도 배율 (1보다 작을수록 중앙에서 더 오래 머무름)
-SERVO_SMOOTHING_ALPHA = 0.3         # EMA 계수(0~1). 작을수록 더 부드럽지만 반응이 느려짐(슬루레이트 제한 효과)
+SERVO_SWEEP_RANGE_DEG = 10               # 중앙 기준 +-범위
+SERVO_SWEEP_STEP_SECONDS = 0.6           # 한쪽 끝에서 반대쪽 끝까지 이동하는 데 걸리는 시간
 
 # 서보 펄스폭 (테스트 스크립트에서 확인된 안전 범위로 조정: 0.0005~0.0025 -> 0.0006~0.0024)
 SERVO_MIN_PULSE_WIDTH = 0.0006
@@ -63,7 +62,7 @@ SERVO_MAX_PULSE_WIDTH = 0.0024
 
 # 대기 구간 진입 시, 중앙으로 복귀한 뒤 detach()하기 전까지 대기하는 시간(초)
 # 너무 짧으면 물리적으로 중앙에 도달하기 전에 신호가 끊겨 어중간한 위치에서 멈출 수 있음
-SERVO_SETTLE_SECONDS = 0.3
+SERVO_SETTLE_SECONDS = 0.6
 
 # _rclpy_sleep 이 공유해서 쓰는 재사용 타이머의 tick 주기(초).
 # 매번 create_timer/destroy_timer 를 새로 하지 않기 위해, 이 주기로 도는
@@ -86,7 +85,7 @@ class FireSuppressionNode(Node):
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
             min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
-            initial_angle=None,
+            initial_angle=SERVO_CENTER_ANGLE,
         )
 
         self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)
@@ -122,7 +121,7 @@ class FireSuppressionNode(Node):
         if self._busy:
             self.get_logger().warn('이미 진압 작업 실행 중 — 새 goal 거부')
             return GoalResponse.REJECT
-        return GoalResponse.ACCEPT    
+        return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
         """취소 요청을 받아들일지 결정. rclpy 기본값은 REJECT라서
@@ -199,36 +198,18 @@ class FireSuppressionNode(Node):
         await self._rclpy_sleep(SERVO_SETTLE_SECONDS)
         self.servo.detach()
 
-    def _next_sweep_angle(self, angle: float, direction: int) -> tuple:
-        """중앙에서는 느리게(오래 머무름), 가장자리 근처에서는 빠르게 움직이는
-        다음 각도를 계산. 경계에 닿으면 즉시 방향을 반전한다 (고정 대기 없음)."""
+    async def run_suppression_routine(self, goal_handle) -> bool:
+        """펌프 ON 상태로 SPRAY_SECONDS 동안 min/max 각도를 단순 왕복하며
+        분사한다 (EMA 스무딩/가변속 스윕은 저가형 서보에서 체감 효과가
+        없어 제거하고 단순 왕복으로 변경).
+        끝나면(취소든 정상 종료든) 중앙 복귀 후 detach()로 정숙 대기
+        상태에 들어간다. 도중에 취소 요청이 오면 즉시 정지하고 True를
+        반환한다."""
         min_angle = SERVO_CENTER_ANGLE - SERVO_SWEEP_RANGE_DEG
         max_angle = SERVO_CENTER_ANGLE + SERVO_SWEEP_RANGE_DEG
 
-        offset_ratio = abs(angle - SERVO_CENTER_ANGLE) / SERVO_SWEEP_RANGE_DEG
-        speed_factor = SERVO_CENTER_SPEED_FACTOR + (1 - SERVO_CENTER_SPEED_FACTOR) * offset_ratio ** 2
-        speed = SERVO_MAX_SPEED_DEG_PER_SEC * speed_factor
-
-        next_angle = angle + direction * speed * SERVO_UPDATE_INTERVAL
-
-        if next_angle >= max_angle:
-            next_angle = max_angle
-            direction = -1
-        elif next_angle <= min_angle:
-            next_angle = min_angle
-            direction = 1
-
-        return next_angle, direction
-
-    async def run_suppression_routine(self, goal_handle) -> bool:
-        """펌프 ON 상태로 SPRAY_SECONDS 동안 연속 스윕 분사.
-        목표각을 EMA로 한 번 더 걸러서 명령해 떨림을 줄인다.
-        끝나면(취소든 정상 종료든) 중앙 복귀 후 detach()로 정숙 대기 상태에
-        들어간다. 도중에 취소 요청이 오면 즉시 정지하고 True를 반환한다."""
-        target_angle = SERVO_CENTER_ANGLE
-        smoothed_angle = SERVO_CENTER_ANGLE
-        direction = 1
-        self.servo.angle = smoothed_angle  # detach 상태였다면 여기서 자동 재개됨
+        angle = min_angle
+        self.servo.angle = angle  # detach 상태였다면 여기서 자동 재개됨
 
         self.pump.value = 1.0
         elapsed = 0.0
@@ -236,11 +217,10 @@ class FireSuppressionNode(Node):
             while elapsed < SPRAY_SECONDS:
                 if goal_handle.is_cancel_requested:
                     return True
-                target_angle, direction = self._next_sweep_angle(target_angle, direction)
-                smoothed_angle += SERVO_SMOOTHING_ALPHA * (target_angle - smoothed_angle)
-                self.servo.angle = smoothed_angle
-                await self._rclpy_sleep(SERVO_UPDATE_INTERVAL)
-                elapsed += SERVO_UPDATE_INTERVAL
+                angle = max_angle if angle == min_angle else min_angle
+                self.servo.angle = angle
+                await self._rclpy_sleep(SERVO_SWEEP_STEP_SECONDS)
+                elapsed += SERVO_SWEEP_STEP_SECONDS
         finally:
             self.pump.value = 0.0
             await self._settle_and_detach()
