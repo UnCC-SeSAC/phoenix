@@ -3,7 +3,7 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Verified software baseline: `a59c4b16b3e8d417c5b47a6b8e31e01d3519d2bd`
+- Verified software baseline: `f526c733b32b8f768a5ac7b91a16dac81a0ca3e1`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
 - Model binaries and local runtime artifacts are not tracked.
@@ -130,12 +130,46 @@ WorldModel threshold do not create an unsafe entity/action.
 - `PERCEPTION_DOWNSTREAM_SW_E2E_PASS = YES`
 - `REMOTE_QWEN_PERCEPTION_SW_E2E_PASS = YES`
 
-Live Hardware perception remains pending:
+Live Hardware perception has reached Camera and preprocessing; ONNX YOLO and downstream live stages remain unverified:
 
 ```text
 actual person → ASCAMERA RGB → YOLO → actual depth → /fire/detections
 → actual CameraInfo/source-time TF → map (x,y) → person_0001 → WorldModel
 ```
+
+### Live perception Hardware validation — 2026-08-19
+
+After moving NOVATEK 3482:6723 to another Pi USB port, both Video interfaces enumerated with uvcvideo at 480 Mbps. A clean launch with exactly one ascamera_node produced actual Hardware data.
+
+- Camera stream start: PASS
+- RGB Image and CameraInfo: PASS, frame ascamera_color_0
+- Depth Image and CameraInfo: PASS, frame ascamera_color_0
+- preprocess passthrough input: 14.7–14.9 Hz
+- /image_enhanced actual Image: PASS
+- LIVE_CAMERA_PASS = YES
+
+IntelPi used system NumPy 1.26.4, OpenCV 4.5.4, ONNX Runtime 1.23.2, and a working CvBridge. UID 1000 user-site NumPy 2.2.6 was incompatible with the Humble CvBridge binary. No package was installed or removed; a process-local PYTHONPATH selected system NumPy/OpenCV first while retaining user-site ONNX Runtime.
+
+The installed /ros2_ws/phoenix/install/image_pipeline was older and routed explicit backend:=onnxruntime into OpenCV DNN. The verified source at /ros2_ws/phoenix_perception/src/image_pipeline contained OnnxRuntimeBackend; only image_pipeline was built in that isolated workspace. The team workspace was unchanged.
+
+The live attempt used /ros2_ws/models/best_base.onnx, backend onnxruntime, layout end2end, and class order fire=0/person=1. Immediately after startup, Pi SSH port 22 returned connection refused while ping still responded. The process state, inference output, and final log could not be recovered safely.
+
+- LIVE_ONNX_YOLO_PASS = NO
+- LIVE_DEPTH_FUSION_PASS = NOT_RUN
+- LIVE_MAP_LOCALIZATION_PASS = NOT_RUN
+- LIVE_PERCEPTION_WORLDMODEL_PASS = NOT_RUN
+- FIRST_FAILURE_STAGE = G. ONNX YOLO runtime
+
+LIVE_ONNX_YOLO_PASS = NO means the live inference result was not verifiable because runtime access was lost. It does not establish a model, decoder, or ONNX Runtime inference failure. OOM/resource exhaustion, sshd failure, and CPU or memory pressure remain unconfirmed hypotheses only. Mission, Qwen, Nav2, cmd_vel, Motor, Pump, and Servo were not run.
+
+Next session:
+
+1. Check kernel/OOM logs around the failure time.
+2. Check ssh.service and its journal.
+3. Record CPU and RAM before and during inference.
+4. Record docker stats for IntelPi.
+5. Measure ONNX Runtime thread/resource usage.
+6. Revalidate incrementally: YOLO alone, Camera plus YOLO, then the full perception chain.
 
 ## Hailo Status
 
@@ -170,11 +204,11 @@ OpenCV DNN 4.6.0 still cannot import the model's attention `Split` node. An expl
 port and is selected with `backend:=onnxruntime`. The selected runtime must provide the
 optional `onnxruntime` Python package; absence is reported with an explicit installation
 error. Existing OpenCV, Ultralytics, Hailo, and Stub paths are unchanged; there is no
-silent fallback. Live Camera testing remains pending.
+silent fallback. Live Camera and preprocess testing now pass; live ONNX YOLO output remains unverified because Pi SSH access was lost after startup.
 
 ## Current Pending
 
-- live Camera → YOLO detection
+- live ONNX YOLO detection (Camera and preprocess already PASS)
 - live RGB/depth synchronization and depth fusion
 - live `/fire/detections`
 - actual CameraInfo/source-time TF map localization
@@ -233,7 +267,7 @@ PASS:
 
 PENDING:
 
-- live Camera/YOLO/depth/map/WorldModel perception
+- live ONNX YOLO/depth/map/WorldModel perception
 - Hailo HEF live inference
 - full perception-to-navigation Hardware E2E
 - fire suppression full Hardware E2E
