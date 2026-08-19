@@ -244,3 +244,30 @@ result 이후 decision loop는 허용된 `REPORT_PERSON person_0001`을 제출�
 - `DUPLICATE_NAV_GOAL_GUARD_PASS = YES`
 - `REMOTE_QWEN_HARDWARE_E2E_PASS = YES`
 - `ACTUAL_SHORT_NAV_PASS = YES`
+
+## Hailo HEF Perception Integration Status (2026-08-19)
+
+Hugging Face `song59/yolo26_base`의 두 HEF를 HailoRT 5.3으로 직접 열어 계약을
+측정했다. `base_yolov26s_hailo10h.hef`는 11,644,928 bytes,
+SHA-256 `cff8e534f3aa050845a1483271010ac2a780242da02a5139b55fdc8369d82b5c`,
+`best_filtered_hailo10h.hef`는 11,616,256 bytes,
+SHA-256 `3f141f4604e4eec9c45c49fa17455fda29b78b3e5df2c550e9ee89d64d29063f`이다.
+
+두 모델의 runtime contract는 같다. input은 `yolov26s/input_layer1`,
+`(640,640,3)` NHWC UINT8, quantization scale 1.0/zero-point 0.0이다. 기존 BGR
+letterbox와 RGB NCHW float 0..1 preprocessing을 유지하고 Hailo adapter 경계에서
+NHWC RGB UINT8 0..255로 변환한다. output은
+`yolov26s/yolov8_nms_postprocess`, metadata shape `(2,5,100)`, FLOAT32,
+`HAILO_NMS_BY_CLASS`이며 embedded NMS(score 0.20, IoU 0.70)가 포함된다.
+HailoRT TensorFlow NMS output `(1,2,5,100)`의 normalized yxyx를 기존 end-to-end
+`(1,N,6)` xyxy/score/class contract로 변환한다. output dict iteration order는
+사용하지 않고 HEF sorted stream name으로 추출한다.
+
+`HailoBackend`와 NMS adapter focused tests는 PASS했지만 실제 perception E2E는
+HARDWARE PENDING이다. 현재 Pi에는 Hailo device(`/dev/hailo*`)와 설치된 runtime/
+driver가 없고 `hailortcli scan`도 device를 찾지 못했다. 또한 모델 저장소에는
+`data.yaml`, label metadata, model card가 없어 2개 class의 실제 순서를 증명할 수
+없다. 따라서 기본값 `fire=0, person=1`을 추측 적용하지 않았으며, class order가
+학습 artifact로 확인되기 전에는 live `/yolo_result`와 `/fire/detections`를
+production label로 발행하지 않는다. Camera, depth fusion, WorldModel live 검증은
+이 두 hardware/contract blocker가 해소된 다음 단계다. HEF binary는 Git에 넣지 않는다.

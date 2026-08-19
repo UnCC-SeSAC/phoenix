@@ -27,7 +27,10 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument(
             'model_path', default_value='',
-            description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo, 미구현)'),
+            description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo)'),
+        DeclareLaunchArgument(
+            'backend', default_value='auto',
+            description='auto | onnx | ultralytics | hailo | stub'),
         DeclareLaunchArgument(
             'input_topic', default_value='/image_enhanced',
             description='태스크①의 출력. 원본 rgb0 가 아닙니다'),
@@ -57,6 +60,7 @@ def generate_launch_description():
         parameters=[{
             'model_path': LaunchConfiguration('model_path'),
             'input_topic': LaunchConfiguration('input_topic'),
+            'backend': LaunchConfiguration('backend'),
             'detections_topic': LaunchConfiguration('detections_topic'),
             'class_names': LaunchConfiguration('class_names'),
             'imgsz': LaunchConfiguration('imgsz'),

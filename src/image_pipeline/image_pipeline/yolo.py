@@ -480,42 +480,92 @@ class StubBackend:
 
 
 class HailoBackend:
-    """Hailo-10H 온디바이스 추론 — **팀원5의 `.hef`가 와야 완성됩니다.**
-
-    ★ 지금 구현하지 않은 것은 게을러서가 아닙니다. `hailo_platform`의
-      스트림 이름·양자화 스케일·출력 순서는 **컴파일된 .hef마다 다르고**,
-      확인 없이 짜면 "도는데 좌표가 틀린" 코드가 됩니다. 그게 이 저장소에서
-      가장 비싼 실패 유형입니다.
-
-    받아야 하는 것 (HANDOVER 7-2 「남는 것」):
-      - `.hef` 파일과 입력 해상도(`imgsz`)
-      - 출력 텐서 레이아웃 — v8(4+nc, A)인지 end2end(N, 6)인지
-      - 클래스 번호 ↔ 이름 순서
-      - 입력 전처리 규약 — 레터박스 여부, 정규화(0~1인지 0~255인지), RGB/BGR
-
-    받으면 `infer()`만 채우면 됩니다. 나머지(디코딩·NMS·좌표 복원)는 이 파일이
-    이미 백엔드와 무관하게 처리합니다. 구현 골자:
-
-        from hailo_platform import VDevice, HEF, ConfigureParams, \\
-            InputVStreamParams, OutputVStreamParams, InferVStreams
-        # 1) HEF 로드 -> VDevice.configure -> network_group.activate()
-        # 2) InferVStreams 로 {입력스트림이름: blob} 을 넣고 dict 를 받음
-        # 3) 받은 dict 를 **합의된 순서대로** list 로 세워 반환
-        #    ★ dict 순서에 의존하지 마세요. 이름으로 꺼내세요.
-    """
+    """HailoRT adapter for the measured NHWC UINT8 / NMS-by-class HEFs."""
 
     kind = "hailo"
 
     def __init__(self, hef_path: str, **_kwargs):
-        raise NotImplementedError(
-            "Hailo 백엔드는 아직 비어 있습니다 — 팀원5의 .hef 와 출력 레이아웃 "
-            "합의가 필요합니다 (HANDOVER 7-2).\n"
-            "  지금 개발용으로는 ONNX 백엔드를 쓰세요:\n"
-            "    ros2 run image_pipeline yolo_node --ros-args "
-            "-p model_path:=models/fire_yolo26s.onnx")
+        if not os.path.exists(hef_path):
+            raise FileNotFoundError(f"HEF 모델 파일이 없습니다: {hef_path}")
+        try:
+            from hailo_platform import (FormatType, HEF, InferVStreams,
+                                        InputVStreamParams, OutputVStreamParams,
+                                        VDevice)
+        except ImportError as exc:
+            raise ImportError("HailoRT Python runtime(hailo_platform)이 없습니다") from exc
+        self.path = str(hef_path)
+        self._hef = HEF(self.path)
+        self.input_names = list(self._hef.get_sorted_input_names())
+        self.output_names = list(self._hef.get_sorted_output_names())
+        if len(self.input_names) != 1 or len(self.output_names) != 1:
+            raise ValueError("실측된 단일 입력/단일 NMS 출력 HEF만 지원합니다: "
+                             f"inputs={self.input_names}, outputs={self.output_names}")
+        self._device = VDevice()
+        self._device.__enter__()
+        try:
+            groups = self._device.configure(self._hef)
+            if len(groups) != 1:
+                raise ValueError(f"HEF network group이 1개가 아닙니다: {len(groups)}")
+            self._network_group = groups[0]
+            inputs = InputVStreamParams.make_from_network_group(
+                self._network_group, quantized=True, format_type=FormatType.UINT8)
+            outputs = OutputVStreamParams.make_from_network_group(
+                self._network_group, quantized=False, format_type=FormatType.FLOAT32)
+            self._activation = self._network_group.activate(
+                self._network_group.create_params())
+            self._activation.__enter__()
+            self._pipeline = InferVStreams(self._network_group, inputs, outputs,
+                                           tf_nms_format=True)
+            self._pipeline.__enter__()
+        except Exception:
+            self.close()
+            raise
 
-    def infer(self, blob: np.ndarray) -> list[np.ndarray]:  # pragma: no cover
-        raise NotImplementedError
+    @staticmethod
+    def _nms_to_end2end(raw: np.ndarray) -> np.ndarray:
+        """(1, classes, 5, max_det) yxyx NMS -> (1, N, 6) xyxy."""
+        arr = np.asarray(raw, dtype=np.float32)
+        if arr.ndim != 4 or arr.shape[0] != 1 or arr.shape[2] != 5:
+            raise ValueError("HAILO_NMS_BY_CLASS layout (1,C,5,N)을 기대했습니다: "
+                             f"actual={arr.shape}")
+        rows = []
+        for class_id in range(arr.shape[1]):
+            boxes = arr[0, class_id].T
+            boxes = boxes[boxes[:, 4] > 0.0]
+            if boxes.size == 0:
+                continue
+            converted = np.empty((boxes.shape[0], 6), dtype=np.float32)
+            converted[:, :4] = boxes[:, [1, 0, 3, 2]]
+            converted[:, 4] = boxes[:, 4]
+            converted[:, 5] = float(class_id)
+            rows.append(converted)
+        result = np.concatenate(rows, axis=0) if rows else np.empty((0, 6), np.float32)
+        return result[None, ...]
+
+    def infer(self, blob: np.ndarray) -> list[np.ndarray]:
+        arr = np.asarray(blob)
+        if arr.ndim != 4 or arr.shape[0] != 1 or arr.shape[1] != 3:
+            raise ValueError(f"NCHW RGB batch=1 blob을 기대했습니다: {arr.shape}")
+        nhwc = np.transpose(arr, (0, 2, 3, 1))
+        nhwc = np.clip(np.rint(nhwc * 255.0), 0, 255).astype(np.uint8)
+        outputs = self._pipeline.infer({self.input_names[0]: nhwc})
+        missing = [name for name in self.output_names if name not in outputs]
+        if missing:
+            raise KeyError(f"Hailo output stream이 없습니다: {missing}")
+        return [self._nms_to_end2end(outputs[name]) for name in self.output_names]
+
+    def close(self) -> None:
+        for name in ("_pipeline", "_activation", "_device"):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                try:
+                    obj.__exit__(None, None, None)
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    def __del__(self):
+        self.close()
 
 
 # ------------------------------------------------------------------- 검출기
