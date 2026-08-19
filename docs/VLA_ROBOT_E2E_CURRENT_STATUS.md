@@ -134,3 +134,30 @@ path의 Actual Short Navigation을 정확히 1회 수행한다.
 - Pump/Servo/SuppressFire Hardware command는 수행하지 않았다.
 - 다음 motion은 필수 TF/LiDAR-local-costmap, 단일 goal owner와 operator 안전 확인 후
   production VLA path로 goal 정확히 1건만 허용한다.
+## Pi-local VLA Control Plane (2026-08-19)
+
+반복된 PC↔Pi Fast DDS user-data continuity 실패로 Robot control plane을 Pi-local로
+변경했다. Hardware, SLAM, Nav2, TF, VLA Navigation Bridge, VLA Orchestrator,
+WorldModel, Resolver, Validator, Dispatcher는 Pi에서 함께 실행한다. 핵심
+`/vla/robot_pose_json`, `/vla/navigation_goal`, `/vla/navigation_result`는
+cross-machine DDS를 사용하지 않는다.
+
+PC는 compute-heavy Qwen inference만 담당한다. Pi의 `RemoteQwenBackend`가
+configuration으로 받은 HTTP `/infer` endpoint에 compact semantic WorldModel과
+Mission을 전송하고, PC server는 기존 `ActionDecision` JSON
+(`action`, `target`, `reason`)을 반환한다. raw image, LaserScan,
+OccupancyGrid, TF tree는 전송하지 않는다.
+
+Remote timeout, connection refusal, malformed JSON, schema violation은 기존
+`LLM_INFERENCE_FAILED` 또는 `LLM_OUTPUT_INVALID` blocked cycle로 처리하며
+Resolver/Validator/Dispatcher를 우회하거나 navigation action을 만들지 않는다.
+Hardware mock-remote 및 actual Qwen navigation E2E는 아직 수행하지 않았다.
+Software verification:
+- Remote success/timeout/malformed 및 기존 backend regression: 194 tests PASS.
+- PC mock HTTP server: health PASS, synthetic `NAVIGATE_TO person_0001` PASS.
+- Pi → PC HTTP: health PASS, synthetic inference PASS. 첫 연결 timeout 후 재시도에서
+  ICMP와 HTTP가 정상 확인됐다.
+- 실제 XPU Qwen server health는 PASS했지만 synthetic response가 기존 strict schema의
+  `SEARCH target required` 규칙을 위반해 안전하게 reject됐다.
+- 변경 source의 Pi `/tmp` 전달은 SSH/SCP가 전송 단계에서 지속 정지해 완료하지 못했다.
+  따라서 Hardware mock-remote E2E와 actual short navigation은 수행하지 않았다.

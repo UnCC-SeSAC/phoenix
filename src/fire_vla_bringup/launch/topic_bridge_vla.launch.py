@@ -45,6 +45,13 @@ def _create_vla_node(context):
                 LaunchConfiguration("transformers_max_new_tokens"),
                 value_type=int,
             ),
+            "remote_qwen_endpoint": LaunchConfiguration(
+                "remote_qwen_endpoint"
+            ),
+            "remote_qwen_timeout_sec": ParameterValue(
+                LaunchConfiguration("remote_qwen_timeout_sec"),
+                value_type=float,
+            ),
             "decision_period_sec": 1.0,
             "navigation_mode": "TOPIC_BRIDGE",
             "report_mode": "TOPIC_BRIDGE",
@@ -79,6 +86,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "transformers_max_new_tokens",
             default_value="128",
+        ),
+        DeclareLaunchArgument(
+            "remote_qwen_endpoint",
+            default_value="http://127.0.0.1:8088/infer",
+        ),
+        DeclareLaunchArgument(
+            "remote_qwen_timeout_sec",
+            default_value="3.0",
         ),
         DeclareLaunchArgument(
             "start_perception_bridge",

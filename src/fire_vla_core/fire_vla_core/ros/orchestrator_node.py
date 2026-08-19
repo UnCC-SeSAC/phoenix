@@ -20,7 +20,12 @@ from ..adapters.mock_adapters import (
 )
 from ..dispatcher import ActionDispatcher
 from ..domain import Pose2D
-from ..llm import MockVLABrain, OllamaLLMClient, TransformersQwenAdapter
+from ..llm import (
+    MockVLABrain,
+    OllamaLLMClient,
+    RemoteQwenBackend,
+    TransformersQwenAdapter,
+)
 from ..orchestrator import VLAOrchestrator
 from ..resolver import TargetResolver
 from ..status import VLAStatusTracker
@@ -44,6 +49,8 @@ def create_llm_backend(
     transformers_model_id: str,
     transformers_device: str,
     transformers_max_new_tokens: int,
+    remote_qwen_endpoint: str = "http://127.0.0.1:8088/infer",
+    remote_qwen_timeout_sec: float = 3.0,
 ):
     backend = backend.strip().lower()
     if backend == "mock":
@@ -63,8 +70,14 @@ def create_llm_backend(
             device=transformers_device,
             max_new_tokens=transformers_max_new_tokens,
         )
+    if backend == "remote_qwen":
+        return RemoteQwenBackend(
+            endpoint=remote_qwen_endpoint,
+            timeout_sec=remote_qwen_timeout_sec,
+        )
     raise ValueError(
-        "llm_backend는 mock, ollama, transformers 중 하나여야 합니다: "
+        "llm_backend는 mock, ollama, transformers, remote_qwen 중 "
+        "하나여야 합니다: "
         f"{backend}"
     )
 
@@ -93,6 +106,11 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("transformers_device", "xpu:0")
         self.declare_parameter("transformers_max_new_tokens", 128)
         self.declare_parameter("navigation_mode", "MOCK")
+        self.declare_parameter(
+            "remote_qwen_endpoint",
+            "http://127.0.0.1:8088/infer",
+        )
+        self.declare_parameter("remote_qwen_timeout_sec", 3.0)
         self.declare_parameter("report_mode", "MOCK")
         self.declare_parameter("spray_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")
@@ -140,6 +158,12 @@ class VLAOrchestratorNode(Node):
                 self.get_parameter(
                     "transformers_max_new_tokens"
                 ).value
+            ),
+            remote_qwen_endpoint=str(
+                self.get_parameter("remote_qwen_endpoint").value
+            ),
+            remote_qwen_timeout_sec=float(
+                self.get_parameter("remote_qwen_timeout_sec").value
             ),
         )
 

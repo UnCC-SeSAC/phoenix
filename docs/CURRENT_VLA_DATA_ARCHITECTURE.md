@@ -663,3 +663,33 @@ Browser POST /api/mission
 Production YOLO는 pending이다. 실제 producer의 `score`는 가장 얇은 연결 boundary에서 scaling 없이 VLA의 `confidence`로 이름만 mapping한다.
 
 첫 motion preflight에서는 Mock person (0.5,0.0)과 인명을 우선 확인해 Mission을 사용했지만 stale robot pose와 unexpected Mock `RETURN_HOME`으로 SAFE ABORT했다. 이는 software-only preflight 문제다.
+## 22. Pi-local control plane and remote Qwen inference
+
+Old:
+
+```text
+PC VLA Orchestrator / WorldModel / Validator
+↔ cross-machine ROS 2 DDS
+↔ Pi TF / Navigation Bridge / Nav2
+```
+
+New:
+
+```text
+Pi Hardware → SLAM/Nav2/TF → VLA Orchestrator → WorldModel
+→ LLMPort(RemoteQwenBackend) → HTTP/JSON → PC Qwen inference server
+→ ActionDecision JSON → Pi Resolver → Validator → Dispatcher
+→ /vla/navigation_goal → Pi Navigation Bridge → Nav2
+```
+
+Pi-local ROS 2가 `/vla/robot_pose_json`, `/vla/navigation_goal`,
+`/vla/navigation_result`를 소유한다. PC는 Robot pose, TF, Nav2 또는 ROS graph를
+구독하지 않으며 Qwen model loading과 inference만 수행한다. HTTP request는 Mission,
+allowed actions와 robot/people/fires/unexplored zones/current/last action 등 compact
+semantic state만 포함한다.
+
+변경 이유는 Pi 내부 TF, Bridge, pose 5 Hz가 정상인 동안 cross-machine Fast DDS
+user data가 반복적으로 소실됐기 때문이다. Robot state와 safety 판단을 Pi에 유지하고,
+불안정한 DDS link를 control loop 필수 경로에서 제거한다. HTTP failure나 strict
+decision schema 위반은 기존 blocked cycle로 귀결되며 Validator bypass나 자동
+fallback motion은 없다.

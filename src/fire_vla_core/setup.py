@@ -27,6 +27,7 @@ setup(
             "firefighter_ui = fire_vla_core.ros.firefighter_ui_node:main",
             "vla_perception_bridge = fire_vla_core.ros.perception_bridge_node:main",
             "vla_short_nav_preflight = fire_vla_core.short_nav_preflight:main",
+            "qwen_inference_server = fire_vla_core.qwen_inference_server:main",
         ],
     },
 )

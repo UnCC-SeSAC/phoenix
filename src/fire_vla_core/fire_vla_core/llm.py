@@ -12,6 +12,17 @@ from .ports import LLMPort
 
 
 ALLOWED_ACTIONS = [action.value for action in ActionType]
+REMOTE_WORLD_MODEL_FIELDS = (
+    "mission",
+    "exploration_status",
+    "perception_ready",
+    "robot",
+    "people",
+    "fires",
+    "unexplored_zones",
+    "current_action",
+    "last_action",
+)
 
 
 class LLMError(RuntimeError):
@@ -71,6 +82,50 @@ def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
                 seen.add(entity_id)
                 targets.append(entity_id)
     return targets
+
+
+def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
+    """Keep remote inference limited to semantic decision state."""
+    return {
+        field: world_model[field]
+        for field in REMOTE_WORLD_MODEL_FIELDS
+        if field in world_model
+    }
+
+
+@dataclass(slots=True)
+class RemoteQwenBackend(LLMPort):
+    endpoint: str
+    timeout_sec: float = 3.0
+
+    def __post_init__(self) -> None:
+        if not self.endpoint.startswith(("http://", "https://")):
+            raise ValueError("remote Qwen endpoint는 HTTP(S) URL이어야 합니다.")
+        if self.timeout_sec <= 0:
+            raise ValueError("remote Qwen timeout은 양수여야 합니다.")
+
+    def decide(self, mission: str, world_model: dict[str, Any]) -> ActionDecision:
+        payload = {
+            "mission": mission,
+            "world_model": build_compact_world_model(world_model),
+            "allowed_actions": ALLOWED_ACTIONS,
+        }
+        request = urllib.request.Request(
+            self.endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.timeout_sec
+            ) as response:
+                content = response.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise LLMInferenceError(
+                f"Remote Qwen 호출에 실패했습니다: {exc}"
+            ) from exc
+        return parse_action_decision(content)
 
 
 def build_qwen_system_prompt() -> str:
