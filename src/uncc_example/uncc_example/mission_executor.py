@@ -13,6 +13,8 @@ from interfaces.srv import SetString
 
 from .state_manager import StateManager
 
+from frontier_exploration_ros2.srv import ControlExploration
+
 
 class MissionExecutor(Node):
 
@@ -90,6 +92,19 @@ class MissionExecutor(Node):
             self.timer_callback,
         )
 
+        # -----------------------------
+        # frontier_state_controller.py 에게
+        # frontier_explorer START, STOP 신호 보내는 클라이언트
+        # -----------------------------
+        self.frontier_control_client = self.create_client(
+            ControlExploration,
+            "/frontier_state_controller/control_exploration",
+        )
+
+        # [None, STATE_RUNNING, STATE_IDLE, STATE_STOPPING] 중 하나
+        self._frontier_state = None
+        self._frontier_request_pending = False
+
     # =========================================================
     # Subscriptions
     # =========================================================
@@ -126,6 +141,15 @@ class MissionExecutor(Node):
                 f"[{self.state}] target={self._target_str()}",
                 throttle_duration_sec=1.0,
             )
+
+            # frontier 관련 추가 부분
+            if self._frontier_request_pending:
+                return
+
+            if self._frontier_state != ControlExploration.Request.STATE_IDLE:
+                self._request_frontier_stop()
+                return
+
             self._send_nav_goal(self.current_target)
 
     # =========================================================
@@ -137,6 +161,76 @@ class MissionExecutor(Node):
             "[EXPLORING]",
             throttle_duration_sec=1.0,
         )
+
+        # MissionExecutor가 이전에 보낸 fire/person/base goal이 남아 있으면 취소
+        self._cancel_nav_goal()
+
+        if self._frontier_request_pending:
+            return
+
+        if self._frontier_state == ControlExploration.Request.STATE_RUNNING:
+            return
+
+        self._request_frontier_start()
+
+        # if self.target_type == 'frontier':
+        #     self._send_nav_goal(self.current_target)
+        # else:
+        #     # target_type == 'idle' — 아직 갈 곳이 없다.
+        #     # self.current_target 에는 예전 frontier 좌표가 그대로
+        #     # 남아있을 수 있어 그걸 goal 로 쓰면 안 된다. 진행 중이던
+        #     # goal(예: 복귀하다 배터리가 회복된 경우)이 있으면 취소만
+        #     # 하고 다음 frontier 를 기다린다.
+        #     self._cancel_nav_goal()
+
+    # =========================================================
+    # Frontier Controller 관련 함수들
+    # =========================================================
+    def _request_frontier_control(self, action):
+        if self._frontier_request_pending:
+            return
+
+        if not self.frontier_control_client.service_is_ready():
+            self.get_logger().warn(
+                "frontier_state_controller 서비스가 준비되지 않음",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        request = ControlExploration.Request()
+        request.action = action
+        request.delay_seconds = 0.0
+        request.quit_after_stop = False
+
+        self._frontier_request_pending = True
+
+        future = self.frontier_control_client.call_async(request)
+        future.add_done_callback(self._frontier_control_done)
+
+    def _request_frontier_start(self):
+        self._request_frontier_control(ControlExploration.Request.ACTION_START)
+
+    def _request_frontier_stop(self):
+        self._request_frontier_control(ControlExploration.Request.ACTION_STOP)
+
+    def _frontier_control_done(self, future):
+        self._frontier_request_pending = False
+
+        try:
+            response = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"Frontier control failed: {exc}")
+            return
+
+        self._frontier_state = response.state
+
+        if not response.accepted:
+            self.get_logger().warn(f"Frontier control rejected: {response.message}")
+            return
+
+        self.get_logger().info(f"Frontier state={response.state}: {response.message}")
+
+    # =========================================================
 
     def _target_str(self):
 
