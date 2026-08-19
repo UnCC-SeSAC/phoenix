@@ -232,6 +232,15 @@ Orchestrator에 `(mission_id, action type, target_id)` semantic key guard를 추
 ACCEPTED/RUNNING 및 SUCCEEDED key는 같은 Mission에서 재-dispatch하지 않는다.
 FAILED, ABORTED, CANCELED, TIMED_OUT은 기존 retry semantics를 유지하며, 새 Mission과
 다른 action type은 허용한다. Validator, Nav2 Bridge, Qwen contract는 변경하지 않았다.
-Software regression은 PASS했으며 최신 guard의 Hardware 1-goal 재검증 전까지
-`DUPLICATE_NAV_GOAL_GUARD_PASS`, `REMOTE_QWEN_HARDWARE_E2E_PASS`,
-`ACTUAL_SHORT_NAV_PASS`는 모두 NO로 유지한다.
+Software regression 후 `51cf2ec`을 Pi Humble isolated overlay에 배포해 같은
+Hardware scenario를 Mission 1회로 재검증했다. Qwen `NAVIGATE_TO person_0001`,
+Resolver/Validator PASS, `/vla/navigation_goal` 1건, NavigateToPose 1건, non-zero
+cmd_vel, 실제 Robot 이동, Nav2 `SUCCEEDED`, `/vla/navigation_result` 1건을 확인했다.
+result 이후 decision loop는 허용된 `REPORT_PERSON person_0001`을 제출했으며,
+동일 navigation 재결정은 `DUPLICATE_ACTION_BLOCKED`로 막혀 추가 물리 goal은 없었다.
+최종 WorldModel은 `last_action=action_0001/NAVIGATE_TO/SUCCEEDED`, Mission은 후속
+보고가 남아 `RUNNING`이었다.
+
+- `DUPLICATE_NAV_GOAL_GUARD_PASS = YES`
+- `REMOTE_QWEN_HARDWARE_E2E_PASS = YES`
+- `ACTUAL_SHORT_NAV_PASS = YES`
