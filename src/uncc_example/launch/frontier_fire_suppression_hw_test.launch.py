@@ -16,11 +16,11 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     """
-    fire_suppression_node 의 실제 GPIO 모션(펌프/서보)과, frontier_explorer
-    기반 자율 탐사까지 함께 검증하는 하드웨어-인-더-루프 테스트용 launch.
-    full_chain_dummy_test.launch.py 와 달리 fire_suppression 은 더미로
-    대체하지 않고 실제 노드를 그대로 띄운다 — 라즈베리파이(GPIO13 펌프,
-    GPIO18 서보 배선)에서 실행해야 한다.
+    카메라 -> YOLO26 -> 탐사/이동 -> 진압(GPIO) -> YOLO26로 꺼짐 재확인까지
+    더미 없이 실제 노드로 도는 하드웨어-인-더-루프 테스트용 launch.
+    탐사용 감지와 진압 후 상태확인 둘 다 같은 YOLO26 결과를 쓴다
+    (fire_detections_bridge 가 /fire/detections 를 fire_status_service_node
+    용 포맷으로 재발행 — 모델을 두 번 안 띄움).
 
     Nav2 이동도 더미가 아니라 실제 스택을 띄운다 (uncc_frontier.launch.py
     와 동일한 조합):
@@ -52,11 +52,6 @@ def generate_launch_description():
         변환해 /vision/detections 로 재발행 (state_manager 가 구독)
       model_path 는 launch 인자로 반드시 넘겨야 한다 (.onnx 권장 — 로봇에서
       torch/ultralytics 불필요).
-
-    나머지 판정은 여전히 더미다:
-      - 불 꺼짐 판정(check_fire_status): fire_status_service_node_dummy_stub
-        이 1차 호출은 안꺼짐, 2차 호출부터는 꺼짐으로 응답 (파라미터
-        succeed_on_call 로 조절 가능)
 
     사용 예 (라즈베리파이에서):
         ros2 launch uncc_example frontier_fire_suppression_hw_test.launch.py \\
@@ -261,14 +256,27 @@ def generate_launch_description():
         output='both',
     )
 
-    fire_status_dummy = Node(
+    # detection_3d_node(/fire/detections, 실제 YOLO26 인식)를
+    # fire_status_service_node가 기대하는 형식(/yolo_result_fire,
+    # interfaces/msg/ObjectsInfo)으로 재발행 — 모델을 두 번 안 띄우고
+    # 같은 실제 인식 결과를 재사용한다.
+    fire_detections_bridge = Node(
         package='uncc_example',
-        executable='fire_status_service_node_dummy_stub',
+        executable='fire_detections_bridge',
+        name='fire_detections_bridge',
+        output='both',
+    )
+
+    # 더미 아닌 진짜 노드 — 위 브리지가 주는 실제 YOLO 인식 이력으로
+    # check_fire_status 를 판정한다.
+    fire_status_real = Node(
+        package='uncc_example',
+        executable='fire_status_service_node',
         name='fire_status_service_node',
         output='both',
     )
 
-    # 더미로 대체하지 않는 실제 노드 — GPIO13(펌프)/GPIO18(서보) 실물 구동
+    # 실제 GPIO13(펌프)/GPIO18(서보) 구동 노드.
     fire_suppression_real = Node(
         package='uncc_example',
         executable='fire_suppression_node',
@@ -281,7 +289,8 @@ def generate_launch_description():
         actions=[
             state_manager,
             mission_executor,
-            fire_status_dummy,
+            fire_detections_bridge,
+            fire_status_real,
             fire_suppression_real,
         ],
     )
