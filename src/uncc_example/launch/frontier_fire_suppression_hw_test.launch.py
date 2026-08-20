@@ -1,15 +1,16 @@
-import json
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import (
-    ExecuteProcess,
+    DeclareLaunchArgument,
     IncludeLaunchDescription,
+    SetEnvironmentVariable,
     TimerAction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -41,17 +42,26 @@ def generate_launch_description():
     정지시킨다 (avoidance_manager 는 프로덕션 기본값과 동일하게 뺐다 —
     회피는 Nav2 local planner 가 담당).
 
-    나머지 입력/판정은 여전히 더미다:
-      - 비전(불 감지): 카메라 상대좌표라 로봇이 접근하며 계속 값이
-        바뀌어 같은 불이 새 객체로 반복 인식되는 걸 피하려고,
-        image_pipeline 체인 대신 /vision/detections 에 고정 map 좌표로
-        'ros2 topic pub --once' 를 한 번만 실행한다.
+    비전도 실제 체인이다 (uncc_frontier.launch.py 의 start_vision:=true 와
+    같은 조합, full_chain_check.launch.py 의 더미 대신):
+      - peripherals/depth_camera.launch.py(ascamera) 가 rgb0/depth0 를
+        실제로 발행
+      - image_pipeline: preprocess_node -> yolo_node(실제 model_path) ->
+        detection_3d_node 가 /fire/detections 를 픽셀+depth 로 발행
+      - uncc_example/vision_detector 가 camera_info+TF 로 map 좌표로
+        변환해 /vision/detections 로 재발행 (state_manager 가 구독)
+      model_path 는 launch 인자로 반드시 넘겨야 한다 (.onnx 권장 — 로봇에서
+      torch/ultralytics 불필요).
+
+    나머지 판정은 여전히 더미다:
       - 불 꺼짐 판정(check_fire_status): fire_status_service_node_dummy_stub
         이 1차 호출은 안꺼짐, 2차 호출부터는 꺼짐으로 응답 (파라미터
         succeed_on_call 로 조절 가능)
 
     사용 예 (라즈베리파이에서):
-        ros2 launch uncc_example frontier_fire_suppression_hw_test.launch.py
+        ros2 launch uncc_example frontier_fire_suppression_hw_test.launch.py \\
+            model_path:=/절대/경로/fire_yolo26s.onnx \\
+            class_names:="['fire','person']"
 
     확인할 것:
         ros2 topic echo /mission/state
@@ -69,8 +79,14 @@ def generate_launch_description():
 
     uncc_share = get_package_share_directory('uncc_example')
     frontier_share = get_package_share_directory('frontier_exploration_ros2')
+    peripherals_share = get_package_share_directory('peripherals')
+    image_pipeline_share = get_package_share_directory('image_pipeline')
     launch_dir = os.path.join(uncc_share, 'launch')
     frontier_params = os.path.join(frontier_share, 'config', 'params.yaml')
+
+    # detection_3d.launch.py / full_chain_check.launch.py 와 동일한 실카메라
+    # 토픽 접두어 (ascamera 드라이버 기준).
+    ASCAMERA = '/ascamera/camera_publisher'
 
     def include_launch(name):
         return IncludeLaunchDescription(
@@ -85,6 +101,20 @@ def generate_launch_description():
 
     hardware = include_launch('hardware.launch.py')
 
+    # depth_camera.launch.py 는 os.environ['need_compile']/['DEPTH_CAMERA_TYPE']
+    # 를 읽는다 — need_compile 은 hardware.launch.py 가 이미 True 로 설정.
+    camera = TimerAction(
+        period=1.0,
+        actions=[
+            SetEnvironmentVariable(name='DEPTH_CAMERA_TYPE', value='ascamera'),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(peripherals_share, 'launch', 'depth_camera.launch.py')
+                ),
+            ),
+        ],
+    )
+
     slam = TimerAction(
         period=3.0,
         actions=[include_launch('slam_mapping.launch.py')],
@@ -93,6 +123,71 @@ def generate_launch_description():
     nav2 = TimerAction(
         period=7.0,
         actions=[include_launch('nav2_online.launch.py')],
+    )
+
+    # =========================================
+    # 비전 (image_pipeline 실제 체인 + vision_detector)
+    # 카메라(t=1)와 image_enhanced/camera_info 를 쓰는 preprocess 이후
+    # 단계라 nav2(t=7) 다음에 띄운다. mission_stack(t=13) 전에는 뜬다.
+    # =========================================
+
+    vision = TimerAction(
+        period=8.0,
+        actions=[
+            Node(
+                package='image_pipeline',
+                executable='preprocess_node',
+                name='rgb_preprocess_node',
+                output='screen',
+                parameters=[
+                    os.path.join(image_pipeline_share, 'config', 'preprocess.yaml'),
+                    {
+                        # YAML(더미 카메라 토픽)보다 나중에 와서 실카메라로 덮어씀.
+                        'input_topic': f'{ASCAMERA}/rgb0/image',
+                        'camera_info_topic': f'{ASCAMERA}/rgb0/camera_info',
+                        'output_topic': '/image_enhanced',
+                        'output_camera_info_topic': '/image_enhanced/camera_info',
+                    },
+                ],
+            ),
+            Node(
+                package='image_pipeline',
+                executable='yolo_node',
+                name='yolo_node',
+                output='screen',
+                parameters=[{
+                    'model_path': LaunchConfiguration('model_path'),
+                    'class_names': LaunchConfiguration('class_names'),
+                    'layout': LaunchConfiguration('layout'),
+                    'threads': LaunchConfiguration('threads'),
+                    'input_topic': '/image_enhanced',
+                    'detections_topic': '/yolo_result',
+                }],
+            ),
+            Node(
+                package='image_pipeline',
+                executable='detection_3d_node',
+                name='detection_3d_node',
+                output='screen',
+                parameters=[{
+                    'detections_topic': '/yolo_result',
+                    'depth_topic': f'{ASCAMERA}/depth0/image_raw',
+                    'depth_info_topic': f'{ASCAMERA}/depth0/camera_info',
+                    'color_info_topic': '/image_enhanced/camera_info',
+                    'rgb0_info_topic': f'{ASCAMERA}/rgb0/camera_info',
+                    'output_topic': '/fire/detections',
+                }],
+            ),
+            Node(
+                package='uncc_example',
+                executable='vision_detector',
+                name='vision_detector',
+                output='screen',
+                parameters=[{
+                    'camera_info_topic': '/image_enhanced/camera_info',
+                }],
+            ),
+        ],
     )
 
     # =========================================
@@ -191,33 +286,26 @@ def generate_launch_description():
         ],
     )
 
-    # vision_detector 가 실제로 publish 하는 것과 같은 스키마로,
-    # 고정 map 좌표(0.35, 0.0) 의 fire 감지를 딱 한 번만 흘려보낸다.
-    fire_detection_payload = json.dumps({
-        'frame_id': 'map',
-        'detections': [{'class': 'fire', 'x': 0.35, 'y': 0.0}],
-    })
-
-    fire_detection_once = TimerAction(
-        period=15.0,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    'ros2', 'topic', 'pub', '--once',
-                    '/vision/detections', 'std_msgs/msg/String',
-                    f"data: '{fire_detection_payload}'",
-                ],
-                output='both',
-            ),
-        ],
-    )
-
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'model_path', default_value='',
+            description='실제 YOLO 가중치 절대경로 (.onnx 권장 — 로봇에 torch 불필요). '
+                        '비우면 yolo_node 가 즉시 에러로 알림'),
+        DeclareLaunchArgument(
+            'class_names', default_value="['fire','person']",
+            description='★ 학습 때 순서 그대로. 순서가 틀리면 불을 사람으로 발행'),
+        DeclareLaunchArgument(
+            'layout', default_value='auto',
+            description='auto | v8 | end2end — 첫 실행 로그의 "레이아웃=" 확인 후 못박을 것'),
+        DeclareLaunchArgument(
+            'threads', default_value='3',
+            description='Pi 5(4코어) 기준 권장값 — ROS·다른 프로세스와 코어 분배'),
         hardware,
+        camera,
         slam,
         nav2,
+        vision,
         frontier,
         frontier_state_controller,
         mission_stack,
-        fire_detection_once,
     ])
