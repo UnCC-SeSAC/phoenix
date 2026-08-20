@@ -3,6 +3,7 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
+- Current verified code checkpoint: `e28491dacd8a591f0aaee6df4ac1640460eaa82f`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
@@ -20,11 +21,14 @@ Pi RemoteQwenBackend ↔ HTTP JSON ↔ PC Qwen/Qwen3-1.7B inference only
 ```
 
 The critical topics `/vla/robot_pose_json`, `/vla/navigation_goal`, and
-`/vla/navigation_result` are Pi-local. PC↔Pi ROS 2/Fast DDS user-data continuity
-repeatedly failed while Pi-local pose, TF, and Bridge paths were valid, so
-cross-machine DDS was removed from the Robot control critical path. The PC receives
-only compact semantic WorldModel/Mission data and returns the existing strict
-`ActionDecision` JSON contract.
+`/vla/navigation_result` are Pi-local. Camera, depth, TF, WorldModel, Resolver,
+Validator, Dispatcher, Nav2, `cmd_vel`, and motor control also remain Pi-local.
+PC↔Pi ROS 2/Fast DDS user-data continuity repeatedly failed while Pi-local pose, TF,
+and Bridge paths were valid, so cross-machine DDS was removed from the Robot control
+critical path. The Pi sends only compact semantic WorldModel/Mission data to the PC
+over HTTP/JSON. The PC runs Qwen inference only and returns the existing strict
+`action`/`target`/`reason` decision contract; raw camera/depth and Robot control data
+are never part of that HTTP boundary.
 
 ## Completed
 
@@ -130,64 +134,65 @@ WorldModel threshold do not create an unsafe entity/action.
 - `PERCEPTION_DOWNSTREAM_SW_E2E_PASS = YES`
 - `REMOTE_QWEN_PERCEPTION_SW_E2E_PASS = YES`
 
-Live Hardware perception has reached Camera and preprocessing; ONNX YOLO and downstream live stages remain unverified:
+Live Hardware perception checkpoint for Issue #88:
 
 ```text
-actual person → ASCAMERA RGB → YOLO → actual depth → /fire/detections
-→ actual CameraInfo/source-time TF → map (x,y) → person_0001 → WorldModel
+actual ASCAMERA RGB → preprocess → split HEF neural inference
+→ companion ONNX postprocess → person bbox/confidence
 ```
 
-### Live perception Hardware validation — 2026-08-19
+- Camera stream and passthrough preprocessing: PASS
+- Offline split-HEF detection: PASS
+- Live HEF person detection from actual ASCAMERA frame: PASS
+- Actual person confidence: `0.3979718685`
+- Actual person bbox `(x1,y1,x2,y2)`: `(347.33,157.15,472.93,315.16)`
+- `OFFLINE_HEF_DETECTION_PASS = YES`
+- `LIVE_HEF_PERSON_DETECTION_PASS = YES`
 
-After moving NOVATEK 3482:6723 to another Pi USB port, both Video interfaces enumerated with uvcvideo at 480 Mbps. A clean launch with exactly one ascamera_node produced actual Hardware data.
+The earlier live `detections: []` failure had two confirmed causes. First, the
+repository assumed a single `HAILO_NMS_BY_CLASS` output, while the deployed HEF emits
+six raw neural heads that require the hardware-team companion ONNX postprocess.
+Second, the ROS shell resolved a stale installed backend ahead of the isolated fixed
+backend. Commit `e28491dacd8a591f0aaee6df4ac1640460eaa82f` adds the measured split-HEF contract
+while retaining the existing single-output NMS HEF path.
 
-- Camera stream start: PASS
-- RGB Image and CameraInfo: PASS, frame ascamera_color_0
-- Depth Image and CameraInfo: PASS, frame ascamera_color_0
-- preprocess passthrough input: 14.7–14.9 Hz
-- /image_enhanced actual Image: PASS
-- LIVE_CAMERA_PASS = YES
+Issue #88 remains **OPEN**. Detection itself is no longer the blocker. The remaining
+stationary Hardware validation is:
 
-IntelPi used system NumPy 1.26.4, OpenCV 4.5.4, ONNX Runtime 1.23.2, and a working CvBridge. UID 1000 user-site NumPy 2.2.6 was incompatible with the Humble CvBridge binary. No package was installed or removed; a process-local PYTHONPATH selected system NumPy/OpenCV first while retaining user-site ONNX Runtime.
+```text
+person bbox → actual depth fusion → camera/Robot coordinates
+→ source-time TF → map (x,y) → SemanticObservation
+→ WorldModel → Firefighter UI/report
+```
 
-The installed /ros2_ws/phoenix/install/image_pipeline was older and routed explicit backend:=onnxruntime into OpenCV DNN. The verified source at /ros2_ws/phoenix_perception/src/image_pipeline contained OnnxRuntimeBackend; only image_pipeline was built in that isolated workspace. The team workspace was unchanged.
-
-The live attempt used /ros2_ws/models/best_base.onnx, backend onnxruntime, layout end2end, and class order fire=0/person=1. Immediately after startup, Pi SSH port 22 returned connection refused while ping still responded. The process state, inference output, and final log could not be recovered safely.
-
-- LIVE_ONNX_YOLO_PASS = NO
-- LIVE_DEPTH_FUSION_PASS = NOT_RUN
-- LIVE_MAP_LOCALIZATION_PASS = NOT_RUN
-- LIVE_PERCEPTION_WORLDMODEL_PASS = NOT_RUN
-- FIRST_FAILURE_STAGE = G. ONNX YOLO runtime
-
-LIVE_ONNX_YOLO_PASS = NO means the live inference result was not verifiable because runtime access was lost. It does not establish a model, decoder, or ONNX Runtime inference failure. OOM/resource exhaustion, sshd failure, and CPU or memory pressure remain unconfirmed hypotheses only. Mission, Qwen, Nav2, cmd_vel, Motor, Pump, and Servo were not run.
-
-Next session:
-
-1. Check kernel/OOM logs around the failure time.
-2. Check ssh.service and its journal.
-3. Record CPU and RAM before and during inference.
-4. Record docker stats for IntelPi.
-5. Measure ONNX Runtime thread/resource usage.
-6. Revalidate incrementally: YOLO alone, Camera plus YOLO, then the full perception chain.
+These remaining stages are `NOT_RUN`. They do not require Robot motion, but valid
+localization and camera-to-map TF must be available. Nav2 goals, `cmd_vel`, Motor,
+Pump, and Servo were not run during the live HEF person-detection validation.
 
 ## Hailo Status
 
-`HailoBackend` implements HailoRT `VDevice`/`InferVStreams` lifecycle, explicit sorted
-stream-name extraction, NCHW RGB float-to-NHWC RGB UINT8 conversion, and conversion of
-`HAILO_NMS_BY_CLASS` output into the existing end-to-end detection contract.
-`backend:=hailo` is available through `yolo.launch.py`.
+The current Raspberry Pi reference is read-only hardware-team content under
+`/home/lemma/Hailo`:
 
-Production candidate:
-
-- file: `best_filtered_hailo10h.hef`
-- SHA-256: `3f141f4604e4eec9c45c49fa17455fda29b78b3e5df2c550e9ee89d64d29063f`
+- HEF: `/home/lemma/Hailo/models/baseline_yolo26_neural_norm.hef`
+- reference inference: `/home/lemma/Hailo/yolo26_split_test.py`
+- input: `baseline_yolo26_neural/input_layer1`, `(640,640,3)`, UINT8 RGB NHWC
+- outputs: six FLOAT32-dequantized raw neural heads
+  (`conv61`, `conv77`, `conv91`, `conv64`, `conv80`, `conv94`)
+- postprocess: output name/shape mapping from `config_onnx_best_sim.json`
+  → `best_sim_postprocess.onnx` → `output0 [1,300,6]`
 - class contract: `0=fire`, `1=person`
-- input: `yolov26s/input_layer1`, `(640,640,3)`, UINT8 NHWC
-- output: `yolov26s/yolov8_nms_postprocess`, `HAILO_NMS_BY_CLASS`, embedded NMS
 
-Live HEF inference is `NOT_RUN` because Hailo device/runtime installation is not yet
-complete. The HEF binary is intentionally not committed.
+This HEF does **not** contain the final Hailo NMS layer. The reference path requests
+FLOAT32 outputs from HailoRT, maps NHWC heads to the exact ONNX NCHW input names, and
+parses `[x1,y1,x2,y2,score,class_id]`. Known-image Hardware inference produced
+`fire=0.7890` and `person=0.6020`; the captured live frame also produced person
+detections `0.7759` and `0.5000` through the unmodified reference script.
+
+`HailoBackend` now detects single-output NMS versus multi-output split HEFs. For the
+split artifact it uses the measured HailoRT 5.3 asynchronous binding lifecycle and
+companion postprocess inside the backend Adapter, leaving the downstream detection
+contract unchanged. HEF/ONNX binaries remain untracked.
 
 ## ONNX Runtime Model Validation
 
@@ -204,16 +209,16 @@ OpenCV DNN 4.6.0 still cannot import the model's attention `Split` node. An expl
 port and is selected with `backend:=onnxruntime`. The selected runtime must provide the
 optional `onnxruntime` Python package; absence is reported with an explicit installation
 error. Existing OpenCV, Ultralytics, Hailo, and Stub paths are unchanged; there is no
-silent fallback. Live Camera and preprocess testing now pass; live ONNX YOLO output remains unverified because Pi SSH access was lost after startup.
+silent fallback. The ONNX live attempt remains a historical `NOT_VERIFIED` result
+because Pi SSH access was lost after startup. It is not the current production
+inference path; the verified production candidate is the Hailo split HEF above.
 
 ## Current Pending
 
-- live ONNX YOLO detection (Camera and preprocess already PASS)
-- live RGB/depth synchronization and depth fusion
-- live `/fire/detections`
-- actual CameraInfo/source-time TF map localization
-- actual person/fire entity creation in WorldModel
-- Hailo HEF live inference
+- Issue #88: live person depth fusion and `/fire/detections`
+- Issue #88: actual CameraInfo/source-time TF map localization
+- Issue #88: actual `person_0001` creation in WorldModel and UI/report
+- actual fire detection/depth/map localization
 - full perception → Qwen → Nav2 Hardware E2E
 - full fire-suppression Pump/Servo Hardware E2E
 
@@ -296,15 +301,17 @@ tests cover this change. Actual Rule-based Robot driving and suppression remain
 
 ## Next Milestone
 
-Before Hailo installation completes, use the team-owned
-`albitro/phoenix_detection` PT or ONNX model to verify the same production live path:
+Continue Issue #88 from the first unverified stage, without repeating Camera or HEF
+person detection:
 
 ```text
-actual Camera → YOLO → Depth → /fire/detections
-→ camera-to-map conversion → WorldModel person/fire
+verified live person bbox → actual depth → /fire/detections
+→ CameraInfo/source-time TF → map (x,y)
+→ person_0001 → WorldModel → Firefighter UI/report
 ```
 
-No Mission or Robot motion is required until live perception localization is confirmed.
+Keep the Robot stationary. No Mission, Qwen action dispatch, Nav2 goal, `cmd_vel`,
+Motor, Pump, or Servo command is needed for this checkpoint.
 
 ## Do Not Repeat
 
@@ -319,7 +326,7 @@ No Mission or Robot motion is required until live perception localization is con
 
 ## Checkpoint Validation
 
-- image_pipeline pytest: 347 PASS
+- image_pipeline pytest: 351 PASS
 - focused fire_vla_core/perception/Remote-Qwen regression: 84 PASS
 - Python `py_compile`: PASS
 - colcon build: `image_pipeline`, `fire_vla_core`, `fire_vla_bringup` PASS
@@ -340,11 +347,12 @@ PASS:
 - navigation result propagation
 - duplicate navigation guard
 - perception downstream software E2E
-- HailoBackend implementation
+- HailoBackend split-HEF implementation
+- offline HEF fire/person detection
+- live ASCAMERA HEF person bbox/confidence detection
 
 PENDING:
 
-- live ONNX YOLO/depth/map/WorldModel perception
-- Hailo HEF live inference
+- Issue #88 live person depth/map/WorldModel/UI report
 - full perception-to-navigation Hardware E2E
 - fire suppression full Hardware E2E
