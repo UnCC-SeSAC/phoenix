@@ -3,7 +3,7 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Verified software baseline: `f526c733b32b8f768a5ac7b91a16dac81a0ca3e1`
+- Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
 - Model binaries and local runtime artifacts are not tracked.
@@ -216,6 +216,46 @@ silent fallback. Live Camera and preprocess testing now pass; live ONNX YOLO out
 - Hailo HEF live inference
 - full perception → Qwen → Nav2 Hardware E2E
 - full fire-suppression Pump/Servo Hardware E2E
+
+## Rule-based driving integration — Issue A
+
+The latest driving branches were compared against the integration baseline:
+
+- `state_manage` @ `3f2db36bced34287c48e8f9a8d193f46e015e209`
+- `nav_local_plan` @ `620e7a6268d3bcf802157a126ee5882683a4ecc5`
+- `caron2002/local_plan_avoidance` @
+  `daafb4b24a13c308251b49c47a9ba17ff180ee25`
+- `frontier_basic` @ `33140b6bb7f71035bd7ff952361e1dbdf8cb5841`
+
+The branches were not merged wholesale. Their histories share an older baseline and
+contain overlapping or obsolete Nav2, image-pipeline, dummy-test, and VLA bridge
+changes. The integration selectively imports the current Rule-based lineage from
+`state_manage`:
+
+- a `FrontierStateController` serializes START/STOP ownership and confirms the
+  Frontier-owned Nav2 goal has stopped before MissionExecutor dispatches a semantic
+  target;
+- `uncc_frontier.launch.py` preserves standalone Frontier autostart, but transfers
+  lifecycle ownership to MissionExecutor only when mission mode is explicitly enabled;
+- StateManager battery threshold transitions use a three-second debounce;
+- fire suppression uses the latest team-owned duplicate-goal rejection, cancel-safe
+  Pump/Servo shutdown, servo detach, SIGTERM cleanup, and GPIO release behavior.
+
+The current integration Nav2 settings remain authoritative. In particular, the
+verified 2D-LiDAR `ObstacleLayer`, conservative velocity smoother, footprint, and
+`ObstacleFootprint.scale` configuration were retained. The alternative branch
+versions would restore a VoxelLayer, relax verified velocity limits, or use an invalid
+critic parameter. The older ONNX/dummy Hardware launch and changes that delete the VLA
+Navigation Bridge or replace the production perception contract were also excluded.
+
+Software validation covers Python/launch syntax, the StateManager debounce regression,
+existing `uncc_example` tests, affected package builds, VLA regressions, and
+`git diff --check`. Actual Rule-based driving and suppression Hardware validation is
+`HARDWARE_PENDING`; no motion or actuator command was issued for Issue A.
+
+Issue B is the next step: formalize the Rule-based status, mission, navigation,
+detection, and suppression interface consumed by the Firefighter UI without changing
+the existing VLA contract.
 
 ## Next Milestone
 

@@ -20,6 +20,7 @@ from launch.launch_description_sources import (
 
 from launch.substitutions import (
     LaunchConfiguration,
+    PythonExpression,
 )
 
 from launch_ros.actions import Node
@@ -206,7 +207,14 @@ def generate_launch_description():
                         # STOP / START를 호출하기 위해 필수
                         'control_service_enabled': True,
 
-                        'autostart': True,
+                        # Keep standalone Frontier behavior, but hand lifecycle
+                        # ownership to MissionExecutor in deterministic mode.
+                        'autostart': ParameterValue(
+                            PythonExpression([
+                                "'", start_mission, "' != 'true'"
+                            ]),
+                            value_type=bool,
+                        ),
 
                         # Raspberry Pi 5에서는
                         # 먼저 가볍게 시작
@@ -264,6 +272,25 @@ def generate_launch_description():
                     }
                 ],
             )
+        ],
+    )
+
+    # Serialize MissionExecutor START/STOP requests and wait until the
+    # Frontier-owned Nav2 goal has actually been canceled.
+    frontier_state_controller = TimerAction(
+        period=12.0,
+        actions=[
+            Node(
+                package='uncc_example',
+                executable='frontier_state_controller',
+                name='frontier_state_controller',
+                output='screen',
+                condition=IfCondition(start_mission),
+                parameters=[{
+                    'frontier_control_service': '/control_exploration',
+                    'stop_timeout_sec': 5.0,
+                }],
+            ),
         ],
     )
 
@@ -426,6 +453,7 @@ def generate_launch_description():
         nav2,
         frontier,
         avoidance,
+        frontier_state_controller,
         vision,
         mission,
     ])
