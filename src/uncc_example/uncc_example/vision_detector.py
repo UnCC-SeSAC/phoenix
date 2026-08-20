@@ -61,8 +61,11 @@ class VisionDetector(Node):
         # 이 클래스들만 fire/person 감지로 취급
         self.declare_parameter('target_classes', ['fire', 'person'])
 
+        self.declare_parameter('tf_timeout_sec', 1.0)
+
         self.map_frame = self.get_parameter('map_frame').value
         self.depth_frame_id = self.get_parameter('depth_frame_id').value
+        self.tf_timeout_sec = self.get_parameter('tf_timeout_sec').value
         self.target_classes = set(
             self.get_parameter('target_classes').value
         )
@@ -188,7 +191,7 @@ class VisionDetector(Node):
             return self.tf_buffer.transform(
                 point,
                 self.map_frame,
-                timeout=Duration(seconds=0.2),
+                timeout=Duration(seconds=self.tf_timeout_sec),
             )
 
         except TransformException as e:
