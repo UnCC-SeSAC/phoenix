@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import math
 from typing import Any, Callable
 
@@ -223,5 +223,7 @@ def _finite_number(value: Any, field: str) -> float:
 
 
 def _iso_timestamp(seconds: int, nanoseconds: int) -> str:
-    base = datetime.fromtimestamp(seconds, tz=UTC)
+    # ``datetime.UTC`` was added in Python 3.11; ROS 2 Humble uses Python 3.10.
+    # ``timezone.utc`` has identical semantics and supports both runtimes.
+    base = datetime.fromtimestamp(seconds, tz=timezone.utc)
     return f"{base:%Y-%m-%dT%H:%M:%S}.{nanoseconds:09d}+00:00"
