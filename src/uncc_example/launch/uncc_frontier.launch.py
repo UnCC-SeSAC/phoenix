@@ -368,6 +368,13 @@ def generate_launch_description():
                     start_mission
                 ),
             ),
+            Node(
+                package='uncc_example',
+                executable='rule_based_ui_adapter',
+                name='rule_based_ui_adapter',
+                output='screen',
+                condition=IfCondition(start_mission),
+            ),
         ],
     )
 

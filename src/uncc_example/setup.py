@@ -63,6 +63,10 @@ setup(
                 'frontier_state_controller = '
                 'uncc_example.frontier_state_controller:main'
             ),
+            (
+                'rule_based_ui_adapter = '
+                'uncc_example.rule_based_ui_adapter:main'
+            ),
         ],
     },
 )

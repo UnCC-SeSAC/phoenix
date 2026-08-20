@@ -4,7 +4,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
@@ -32,6 +32,7 @@ class MissionExecutor(Node):
         self.state = None
         self.target_type = None
         self.current_target = None
+        self.mission_enabled = True
 
         # -----------------------------
         # Nav2 (fire/person target 로 이동)
@@ -44,6 +45,8 @@ class MissionExecutor(Node):
 
         self._nav_goal_handle = None
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
+        self._nav_goal_pending = False
+        self._nav_cancel_pending = False
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
@@ -59,6 +62,8 @@ class MissionExecutor(Node):
         )
 
         self._fire_goal_handle = None
+        self._fire_goal_pending = False
+        self._fire_cancel_pending = False
         # Nav2 도착부터 target_complete로 state가 갱신될 때까지 한 화점의
         # navigation/suppression cycle이 다시 시작되지 않게 한다.
         self._fire_cycle_active = False
@@ -84,6 +89,13 @@ class MissionExecutor(Node):
             PoseStamped,
             "/mission/current_target",
             self.target_callback,
+            10,
+        )
+
+        self.create_subscription(
+            Bool,
+            "/mission/enabled",
+            self.mission_enabled_callback,
             10,
         )
 
@@ -136,11 +148,24 @@ class MissionExecutor(Node):
     def target_callback(self, msg):
         self.current_target = msg
 
+    def mission_enabled_callback(self, msg):
+        self.mission_enabled = bool(msg.data)
+
     # =========================================================
     # Timer / State machine
     # =========================================================
 
     def timer_callback(self):
+
+        if not self.mission_enabled:
+            self._cancel_nav_goal()
+            self._cancel_fire_suppression()
+            if (
+                not self._frontier_request_pending
+                and self._frontier_state != ControlExploration.Request.STATE_IDLE
+            ):
+                self._request_frontier_stop()
+            return
 
         if self.state == StateManager.EXPLORING:
             self.process_exploring()
@@ -291,6 +316,8 @@ class MissionExecutor(Node):
         self._cancel_nav_goal()
 
         self._nav_goal_xy = target_xy
+        self._nav_goal_pending = True
+        self._nav_cancel_pending = False
 
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped
@@ -303,19 +330,26 @@ class MissionExecutor(Node):
         if self._nav_goal_handle is not None:
             self._nav_goal_handle.cancel_goal_async()
             self._nav_goal_handle = None
+        elif self._nav_goal_pending:
+            self._nav_cancel_pending = True
 
         self._nav_goal_xy = None
 
     def _nav_goal_response(self, future):
 
         goal_handle = future.result()
+        self._nav_goal_pending = False
 
         if not goal_handle.accepted:
             self.get_logger().warn("Nav2 goal 이 거부됨")
+            self._nav_cancel_pending = False
             self._nav_goal_xy = None
             return
 
         self._nav_goal_handle = goal_handle
+        if self._nav_cancel_pending:
+            self._nav_cancel_pending = False
+            goal_handle.cancel_goal_async()
 
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._nav_goal_result)
@@ -376,6 +410,8 @@ class MissionExecutor(Node):
             goal_msg,
             feedback_callback=self._suppress_feedback_callback,
         )
+        self._fire_goal_pending = True
+        self._fire_cancel_pending = False
         send_future.add_done_callback(self._suppress_goal_response)
 
     def _cancel_fire_suppression(self):
@@ -383,6 +419,8 @@ class MissionExecutor(Node):
         if self._fire_goal_handle is not None:
             self._fire_goal_handle.cancel_goal_async()
             self._fire_goal_handle = None
+        elif self._fire_goal_pending:
+            self._fire_cancel_pending = True
 
     def _suppress_feedback_callback(self, feedback_msg):
 
@@ -396,13 +434,18 @@ class MissionExecutor(Node):
     def _suppress_goal_response(self, future):
 
         goal_handle = future.result()
+        self._fire_goal_pending = False
 
         if not goal_handle.accepted:
             self.get_logger().warn("fire_suppression goal 이 거부됨")
+            self._fire_cancel_pending = False
             self._fire_cycle_active = False
             return
 
         self._fire_goal_handle = goal_handle
+        if self._fire_cancel_pending:
+            self._fire_cancel_pending = False
+            goal_handle.cancel_goal_async()
 
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._suppress_goal_result)
@@ -421,7 +464,8 @@ class MissionExecutor(Node):
 
         # RETURNING_TO_BASE 같은 상위 상태가 진압을 취소한 뒤 도착한
         # 이전 result로 새 target을 완료 처리하지 않는다.
-        if self.state != StateManager.FIRE_DETECTED:
+        if not self.mission_enabled or self.state != StateManager.FIRE_DETECTED:
+            self._fire_cycle_active = False
             self.get_logger().info("상태 전환 후 도착한 fire_suppression 결과를 무시함")
             return
 

@@ -253,9 +253,29 @@ existing `uncc_example` tests, affected package builds, VLA regressions, and
 `git diff --check`. Actual Rule-based driving and suppression Hardware validation is
 `HARDWARE_PENDING`; no motion or actuator command was issued for Issue A.
 
-Issue B is the next step: formalize the Rule-based status, mission, navigation,
-detection, and suppression interface consumed by the Firefighter UI without changing
-the existing VLA contract.
+Issue B formalizes the Rule-based status, mission, navigation, detection, and
+suppression interface consumed by the Firefighter UI without changing the existing
+VLA contract.
+
+### Rule-based UI contract — Issue B
+
+Issue B provides an integration-only Port–Adapter boundary:
+
+- `/rule_based/status`: versioned Rule-based status snapshot
+- `/rule_based/mission`: the shared UI mission envelope, restricted to strict
+  `START` and `STOP` commands
+- `/mission/enabled`: internal MissionExecutor enable boundary
+
+The snapshot covers FSM state/target, Nav2 action status, Frontier lifecycle,
+detection targets, battery, and SuppressFire action status. `STOP` cancels
+MissionExecutor-owned Nav2/SuppressFire work and serializes Frontier shutdown through
+the existing controller. It does not send direct actuator commands. The VLA
+`/vla/status` and `/vla/mission` contracts are unchanged. See
+`docs/RULE_BASED_UI_CONTRACT.md`.
+
+Hardware validation is `NOT_RUN`. Issue C can now connect the Firefighter UI mode
+selector to these two Rule-based topics without embedding backend/FSM logic in the
+frontend.
 
 ## Next Milestone
 
