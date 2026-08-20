@@ -53,7 +53,9 @@ HANDOVER 7-2가 "출력 텐서 레이아웃은 여전히 팀원5와 합의 대�
 
 from __future__ import annotations
 
+import json
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Sequence
@@ -523,7 +525,7 @@ class StubBackend:
 
 
 class HailoBackend:
-    """HailoRT adapter for the measured NHWC UINT8 / NMS-by-class HEFs."""
+    """HailoRT adapter for NMS HEFs and measured YOLO26 split HEFs."""
 
     kind = "hailo"
 
@@ -531,18 +533,25 @@ class HailoBackend:
         if not os.path.exists(hef_path):
             raise FileNotFoundError(f"HEF 모델 파일이 없습니다: {hef_path}")
         try:
-            from hailo_platform import (FormatType, HEF, InferVStreams,
-                                        InputVStreamParams, OutputVStreamParams,
-                                        VDevice)
+            from hailo_platform import FormatType, HEF, VDevice
         except ImportError as exc:
             raise ImportError("HailoRT Python runtime(hailo_platform)이 없습니다") from exc
         self.path = str(hef_path)
         self._hef = HEF(self.path)
-        self.input_names = list(self._hef.get_sorted_input_names())
-        self.output_names = list(self._hef.get_sorted_output_names())
-        if len(self.input_names) != 1 or len(self.output_names) != 1:
-            raise ValueError("실측된 단일 입력/단일 NMS 출력 HEF만 지원합니다: "
-                             f"inputs={self.input_names}, outputs={self.output_names}")
+        self.input_names = [
+            info.name for info in self._hef.get_input_vstream_infos()
+        ]
+        self.output_names = [
+            info.name for info in self._hef.get_output_vstream_infos()
+        ]
+        if len(self.input_names) != 1:
+            raise ValueError(f"Hailo 입력은 1개여야 합니다: {self.input_names}")
+        self._mode = "nms" if len(self.output_names) == 1 else "split"
+        if self._mode == "split":
+            self._init_split(FormatType, VDevice)
+            return
+        from hailo_platform import (InferVStreams, InputVStreamParams,
+                                    OutputVStreamParams)
         self._device = VDevice()
         self._device.__enter__()
         try:
@@ -563,6 +572,77 @@ class HailoBackend:
         except Exception:
             self.close()
             raise
+
+    def _init_split(self, format_type, vdevice_type) -> None:
+        """Configure the hardware-team split HEF plus its ONNX postprocess."""
+        model_dir = os.path.dirname(self.path)
+        config_path = os.path.join(model_dir, "config_onnx_best_sim.json")
+        post_path = os.path.join(model_dir, "best_sim_postprocess.onnx")
+        for companion in (config_path, post_path):
+            if not os.path.exists(companion):
+                raise FileNotFoundError(
+                    f"split HEF companion 파일이 없습니다: {companion}")
+        with open(config_path, encoding="utf-8") as stream:
+            self._tensor_mapping = json.load(stream)["output_tensor_mapping"]
+        missing = sorted(set(self._tensor_mapping) - set(self.output_names))
+        if missing:
+            raise ValueError(f"HEF/config output 이름 불일치: {missing}")
+
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise ImportError("split HEF postprocess에 onnxruntime이 필요합니다") from exc
+        self._post_session = ort.InferenceSession(
+            post_path, providers=["CPUExecutionProvider"])
+        self._post_input_names = {item.name for item in self._post_session.get_inputs()}
+        self._post_output_names = [item.name for item in self._post_session.get_outputs()]
+
+        try:
+            from hailo_platform import HailoSchedulingAlgorithm
+            params = vdevice_type.create_params()
+            params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
+            params.group_id = "SHARED"
+            self._device = vdevice_type(params)
+        except (ImportError, AttributeError):
+            self._device = vdevice_type()
+        self._device.__enter__()
+        try:
+            self._infer_model = self._device.create_infer_model(self.path)
+            self._infer_model.set_batch_size(1)
+            self._infer_model.input(self.input_names[0]).set_format_type(
+                format_type.UINT8)
+            for name in self.output_names:
+                self._infer_model.output(name).set_format_type(format_type.FLOAT32)
+            self._configure_ctx = self._infer_model.configure()
+            self._configured = self._configure_ctx.__enter__()
+        except Exception:
+            self.close()
+            raise
+
+    @staticmethod
+    def _map_split_outputs(outputs, tensor_mapping, required_inputs):
+        mapped = {}
+        for hef_name, (onnx_name, expected) in tensor_mapping.items():
+            if hef_name not in outputs:
+                raise KeyError(f"Hailo postprocess input이 없습니다: {hef_name}")
+            tensor = np.asarray(outputs[hef_name], dtype=np.float32)
+            if tensor.ndim == 3:
+                tensor = tensor[None, ...]
+            actual = list(tensor.shape)
+            if actual[1:] == expected:
+                pass
+            elif [actual[3], actual[1], actual[2]] == expected:
+                tensor = np.transpose(tensor, (0, 3, 1, 2))
+            else:
+                raise ValueError(
+                    f"Hailo/ONNX shape mismatch: {hef_name} "
+                    f"actual={actual} expected=[N,{expected}]")
+            if onnx_name in required_inputs:
+                mapped[onnx_name] = np.ascontiguousarray(tensor)
+        missing = sorted(set(required_inputs) - set(mapped))
+        if missing:
+            raise KeyError(f"ONNX postprocess input이 없습니다: {missing}")
+        return mapped
 
     @staticmethod
     def _nms_to_end2end(raw: np.ndarray) -> np.ndarray:
@@ -591,6 +671,40 @@ class HailoBackend:
             raise ValueError(f"NCHW RGB batch=1 blob을 기대했습니다: {arr.shape}")
         nhwc = np.transpose(arr, (0, 2, 3, 1))
         nhwc = np.clip(np.rint(nhwc * 255.0), 0, 255).astype(np.uint8)
+        if getattr(self, "_mode", "nms") == "split":
+            output_buffers = {
+                name: np.empty(self._infer_model.output(name).shape,
+                               dtype=np.float32)
+                for name in self.output_names
+            }
+            bindings = self._configured.create_bindings(
+                output_buffers=output_buffers)
+            bindings.input(self.input_names[0]).set_buffer(
+                np.ascontiguousarray(nhwc[0]))
+            done = threading.Event()
+            errors = []
+
+            def callback(completion_info):
+                if completion_info.exception is not None:
+                    errors.append(completion_info.exception)
+                done.set()
+
+            self._configured.wait_for_async_ready(timeout_ms=10000)
+            job = self._configured.run_async([bindings], callback)
+            job.wait(10000)
+            if not done.wait(timeout=10):
+                raise RuntimeError("Hailo inference callback timeout")
+            if errors:
+                raise RuntimeError(f"Hailo inference failed: {errors[0]}")
+            outputs = {
+                name: np.array(bindings.output(name).get_buffer(),
+                               dtype=np.float32, copy=True)
+                for name in self.output_names
+            }
+            post_inputs = self._map_split_outputs(
+                outputs, self._tensor_mapping, self._post_input_names)
+            return [np.asarray(item) for item in self._post_session.run(
+                self._post_output_names, post_inputs)]
         outputs = self._pipeline.infer({self.input_names[0]: nhwc})
         missing = [name for name in self.output_names if name not in outputs]
         if missing:
@@ -598,7 +712,7 @@ class HailoBackend:
         return [self._nms_to_end2end(outputs[name]) for name in self.output_names]
 
     def close(self) -> None:
-        for name in ("_pipeline", "_activation", "_device"):
+        for name in ("_pipeline", "_activation", "_configure_ctx", "_device"):
             obj = getattr(self, name, None)
             if obj is not None:
                 try:

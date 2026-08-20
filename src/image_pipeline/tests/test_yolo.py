@@ -545,6 +545,30 @@ class TestHailoNmsAdapter:
             [0.2, 0.1, 0.4, 0.3, 0.9, 1.0])
 
 
+class TestHailoSplitAdapter:
+    def test_maps_measured_nhwc_heads_to_named_onnx_inputs(self):
+        from image_pipeline.yolo import HailoBackend
+        outputs = {
+            "head_box": np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4),
+            "head_cls": np.arange(2 * 3 * 2, dtype=np.float32).reshape(2, 3, 2),
+        }
+        mapping = {
+            "head_box": ["box_input", [4, 2, 3]],
+            "head_cls": ["class_input", [2, 2, 3]],
+        }
+        mapped = HailoBackend._map_split_outputs(
+            outputs, mapping, {"box_input", "class_input"})
+        assert mapped["box_input"].shape == (1, 4, 2, 3)
+        assert mapped["class_input"].shape == (1, 2, 2, 3)
+        assert mapped["box_input"].dtype == np.float32
+
+    def test_rejects_missing_split_head(self):
+        from image_pipeline.yolo import HailoBackend
+        with pytest.raises(KeyError, match="postprocess input"):
+            HailoBackend._map_split_outputs(
+                {}, {"head": ["input", [2, 2, 2]]}, {"input"})
+
+
 class TestOnnxRuntimeBackend:
     def test_missing_model_is_not_a_silent_fallback(self):
         from image_pipeline.yolo import make_detector
