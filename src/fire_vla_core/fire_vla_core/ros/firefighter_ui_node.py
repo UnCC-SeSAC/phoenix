@@ -8,6 +8,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 try:
     import rclpy
@@ -21,27 +22,49 @@ except ImportError:
 
 _MAX_REQUEST_BYTES = 64 * 1024
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+_VLA_MODE = "VLA"
+_RULE_BASED_MODE = "RULE_BASED"
+_ALLOWED_MODES = {_VLA_MODE, _RULE_BASED_MODE}
+
+
+def normalize_mode(value: str | None) -> str:
+    if value is not None and not isinstance(value, str):
+        raise ValueError("mode는 문자열이어야 합니다.")
+    mode = (value or _VLA_MODE).strip().upper()
+    if mode not in _ALLOWED_MODES:
+        raise ValueError("mode는 VLA 또는 RULE_BASED여야 합니다.")
+    return mode
 
 
 class StatusStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._status: dict[str, Any] = {
-            "timestamp": None,
-            "world_model": {},
-            "decision": None,
-            "validation": None,
-            "submission": None,
-            "blocked_reason": "VLA status를 기다리는 중입니다.",
+        self._statuses: dict[str, dict[str, Any]] = {
+            _VLA_MODE: {
+                "timestamp": None,
+                "world_model": {},
+                "decision": None,
+                "validation": None,
+                "submission": None,
+                "blocked_reason": "VLA status를 기다리는 중입니다.",
+            },
+            _RULE_BASED_MODE: {
+                "schema_version": 1,
+                "mode": _RULE_BASED_MODE,
+                "timestamp": None,
+                "blocked_reason": "Rule-based status를 기다리는 중입니다.",
+            },
         }
 
-    def update(self, status: dict[str, Any]) -> None:
+    def update(self, status: dict[str, Any], mode: str = _VLA_MODE) -> None:
+        mode = normalize_mode(mode)
         with self._lock:
-            self._status = copy.deepcopy(status)
+            self._statuses[mode] = copy.deepcopy(status)
 
-    def get(self) -> dict[str, Any]:
+    def get(self, mode: str = _VLA_MODE) -> dict[str, Any]:
+        mode = normalize_mode(mode)
         with self._lock:
-            return copy.deepcopy(self._status)
+            return copy.deepcopy(self._statuses[mode])
 
 
 def validate_server_config(host: str, port: int) -> tuple[str, int]:
@@ -114,15 +137,28 @@ class FirefighterHTTPServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
-                if self.path == "/":
+                parsed = urlparse(self.path)
+                if parsed.path == "/":
                     self._send_bytes(
                         HTTPStatus.OK,
                         owner._index_html,
                         "text/html; charset=utf-8",
                     )
                     return
-                if self.path == "/api/status":
-                    self._send_json(HTTPStatus.OK, owner._status_store.get())
+                if parsed.path == "/api/status":
+                    try:
+                        query = parse_qs(parsed.query)
+                        mode = normalize_mode(
+                            (query.get("mode") or [_VLA_MODE])[0]
+                        )
+                    except ValueError as exc:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST, {"error": str(exc)}
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.OK, owner._status_store.get(mode)
+                    )
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
@@ -140,7 +176,12 @@ class FirefighterHTTPServer:
                     text = data.get("text", "")
                     if not isinstance(text, str):
                         raise ValueError("Mission text는 문자열이어야 합니다.")
-                    mission = owner._submit_mission(text)
+                    mode = normalize_mode(data.get("mode"))
+                    mission = (
+                        owner._submit_mission(text)
+                        if mode == _VLA_MODE
+                        else owner._submit_mission(text, mode)
+                    )
                 except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
                     self._send_json(
                         HTTPStatus.BAD_REQUEST,
@@ -179,15 +220,32 @@ class FirefighterUINode(Node):
         self.declare_parameter("ui_port", 8080)
         self.declare_parameter("status_topic", "/vla/status")
         self.declare_parameter("mission_topic", "/vla/mission")
+        self.declare_parameter(
+            "rule_based_status_topic", "/rule_based/status"
+        )
+        self.declare_parameter(
+            "rule_based_mission_topic", "/rule_based/mission"
+        )
 
         self._store = StatusStore()
         self._mission_pub = self.create_publisher(
             String, str(self.get_parameter("mission_topic").value), 10
         )
+        self._rule_based_mission_pub = self.create_publisher(
+            String,
+            str(self.get_parameter("rule_based_mission_topic").value),
+            10,
+        )
         self.create_subscription(
             String,
             str(self.get_parameter("status_topic").value),
             self._status_callback,
+            10,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("rule_based_status_topic").value),
+            self._rule_based_status_callback,
             10,
         )
         self._http = FirefighterHTTPServer(
@@ -201,20 +259,36 @@ class FirefighterUINode(Node):
         self.get_logger().info(f"Firefighter UI started: http://{host}:{port}")
 
     def _status_callback(self, msg: String) -> None:
+        self._update_status(msg, _VLA_MODE)
+
+    def _rule_based_status_callback(self, msg: String) -> None:
+        self._update_status(msg, _RULE_BASED_MODE)
+
+    def _update_status(self, msg: String, mode: str) -> None:
         try:
             data = json.loads(msg.data)
             if not isinstance(data, dict):
                 raise ValueError("status payload는 JSON object여야 합니다.")
-            self._store.update(data)
+            self._store.update(data, mode)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            self.get_logger().warning(f"VLA status parsing failed: {exc}")
+            self.get_logger().warning(
+                f"{mode} status parsing failed: {exc}"
+            )
 
-    def _publish_mission(self, text: str) -> dict[str, str]:
+    def _publish_mission(
+        self, text: str, mode: str = _VLA_MODE
+    ) -> dict[str, str]:
+        mode = normalize_mode(mode)
         payload = create_mission_payload(text)
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
-        self._mission_pub.publish(msg)
-        return payload
+        publisher = (
+            self._mission_pub
+            if mode == _VLA_MODE
+            else self._rule_based_mission_pub
+        )
+        publisher.publish(msg)
+        return payload if mode == _VLA_MODE else {**payload, "mode": mode}
 
     def destroy_node(self):
         self._http.close()

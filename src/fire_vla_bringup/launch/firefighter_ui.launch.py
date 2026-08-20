@@ -21,6 +21,8 @@ def generate_launch_description():
                 ),
                 "status_topic": "/vla/status",
                 "mission_topic": "/vla/mission",
+                "rule_based_status_topic": "/rule_based/status",
+                "rule_based_mission_topic": "/rule_based/mission",
             }],
         ),
     ])

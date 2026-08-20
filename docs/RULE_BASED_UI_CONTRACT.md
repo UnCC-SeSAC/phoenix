@@ -94,3 +94,19 @@ alter StateManager priority, bypass Nav2, or issue direct motor/Pump/Servo comma
 
 The Adapter is integration-owned. No Rule-based fields are added to the VLA
 WorldModel or VLA status schema.
+
+## Firefighter UI mode routing
+
+The shared Firefighter UI shell exposes a top-level selector with `VLA Brain`
+and `Rule-based` modes. The browser sends only the selected mode to the local UI
+HTTP boundary:
+
+- `GET /api/status?mode=VLA|RULE_BASED`
+- `POST /api/mission` with `{"text":"...","mode":"VLA|RULE_BASED"}`
+
+`firefighter_ui_node` owns ROS routing. VLA mode continues to use `/vla/status`
+and `/vla/mission` without changing its payload, while Rule-based mode uses the
+two topics defined above. The Rule-based view renders FSM/target, Nav2,
+Frontier exploration, detections, battery, suppression, and last command state.
+Its mission field is limited by the Rule-based Adapter to `START` or `STOP`.
+No StateManager, Nav2, Frontier, or actuator logic is embedded in the browser.

@@ -13,6 +13,9 @@
     * { box-sizing:border-box; }
     body { margin:0; background:radial-gradient(circle at 25% -10%,#17283b 0,transparent 38%),var(--bg); color:var(--text); font:14px/1.45 system-ui,sans-serif; }
     header { height:68px; padding:0 24px; border-bottom:1px solid var(--line); background:#0a111bcc; display:flex; align-items:center; justify-content:space-between; }
+    .header-tools { display:flex; align-items:center; gap:18px; }
+    .mode-picker { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+    select { min-height:36px; padding:0 10px; border:1px solid var(--line); border-radius:5px; background:#080f18; color:var(--text); font:inherit; }
     h1 { margin:0; font-size:18px; letter-spacing:.13em; }
     h2 { margin:0 0 14px; color:#aab8c8; font-size:11px; letter-spacing:.16em; text-transform:uppercase; }
     main { max-width:1440px; margin:auto; padding:16px; display:grid; grid-template-columns:1.15fr .85fr; gap:14px; }
@@ -64,7 +67,15 @@
 <body>
 <header>
   <h1>PHOENIX FIRE RESPONSE CONTROL CENTER</h1>
-  <div><span id="connection" class="status bad">DISCONNECTED</span><span id="updatedAt" class="meta">status: -</span></div>
+  <div class="header-tools">
+    <label class="mode-picker">MODE
+      <select id="modeSelector" aria-label="Operation mode">
+        <option value="VLA">VLA Brain</option>
+        <option value="RULE_BASED">Rule-based</option>
+      </select>
+    </label>
+    <div><span id="connection" class="status bad">DISCONNECTED</span><span id="updatedAt" class="meta">status: -</span></div>
+  </div>
 </header>
 <main>
   <section class="panel">
@@ -81,13 +92,13 @@
       <input id="missionInput" aria-label="Mission" placeholder="인명을 우선 확인해." required>
       <button type="submit">실행</button>
     </form>
-    <p id="missionResult" class="mission-note">POST /api/mission → /vla/mission</p>
+    <p id="missionResult" class="mission-note">VLA mission boundary</p>
     <p id="currentMission" class="secondary">current mission: -</p>
     <div class="status-grid">
       <div class="metric"><span class="label">Robot Status</span><p id="robotState" class="primary">-</p><p id="robotPose" class="secondary">pose: -</p></div>
-      <div class="metric"><span class="label">Current Action</span><p id="actionName" class="primary">-</p><p id="actionTarget" class="secondary">target: -</p></div>
+      <div class="metric"><span id="actionLabel" class="label">Current Action</span><p id="actionName" class="primary">-</p><p id="actionTarget" class="secondary">target: -</p></div>
     </div>
-    <div class="reason"><span class="label">VLA Decision / Reason</span><div id="decisionTitle">-</div><div id="decisionReason" class="secondary">판단 근거 없음</div></div>
+    <div class="reason"><span id="decisionLabel" class="label">VLA Decision / Reason</span><div id="decisionTitle">-</div><div id="decisionReason" class="secondary">판단 근거 없음</div></div>
     <div class="chips"><span id="validation" class="chip">VALIDATION -</span><span id="submission" class="chip">SUBMISSION -</span></div>
   </section>
 
@@ -119,6 +130,7 @@
 <script>
 const $=id=>document.getElementById(id);
 const svgNS='http://www.w3.org/2000/svg';
+let activeMode='VLA';
 const timelineEvents=[];
 const eventKeys=new Set();
 const dash=v=>(v===null||v===undefined||v==='')?'-':String(v);
@@ -136,9 +148,15 @@ function renderObjects(world){const body=$('objects');const people=(world.people
 function renderVision(world){const overlays=$('visionOverlays');overlays.replaceChildren();for(const item of [...(world.people||[]),...(world.fires||[])]){const tag=document.createElement('span');tag.className='overlay-tag';tag.textContent=`${dash(item.id)} · ${finite(item.confidence)?Math.round(Number(item.confidence)*100)+'%':'-'}`;overlays.append(tag);}}
 function svgElement(name,attrs={},text=''){const el=document.createElementNS(svgNS,name);for(const [key,value] of Object.entries(attrs))el.setAttribute(key,String(value));if(text)el.textContent=text;return el;}
 function renderMap(world){const svg=$('semanticMap');const empty=$('mapEmpty');svg.replaceChildren();const current=world.current_action||{};const markers=[];if(validPose(world.robot?.home_pose))markers.push({kind:'H',id:'Home',position:world.robot.home_pose,color:'#a78bfa'});if(validPose(world.robot?.pose))markers.push({kind:'R',id:'Robot',position:world.robot.pose,color:'#38bdf8'});for(const item of world.people||[])if(validPose(item.position))markers.push({kind:'P',id:item.id,position:item.position,color:'#4ade80'});for(const item of world.fires||[])if(validPose(item.position))markers.push({kind:'F',id:item.id,position:item.position,color:'#fb7185'});if(validPose(current.target_pose))markers.push({kind:'T',id:current.target||'Target',position:current.target_pose,color:'#fbbf24',target:true});empty.hidden=markers.length>0;if(!markers.length)return;const xs=markers.map(m=>Number(m.position.x)),ys=markers.map(m=>Number(m.position.y));let minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);if(maxX-minX<1){minX-=.5;maxX+=.5;}if(maxY-minY<1){minY-=.5;maxY+=.5;}const padX=(maxX-minX)*.18,padY=(maxY-minY)*.18;minX-=padX;maxX+=padX;minY-=padY;maxY+=padY;const width=600,height=300,project=p=>({x:28+(Number(p.x)-minX)/(maxX-minX)*(width-56),y:height-24-(Number(p.y)-minY)/(maxY-minY)*(height-48)});svg.setAttribute('viewBox',`0 0 ${width} ${height}`);for(let i=1;i<6;i++){svg.append(svgElement('line',{x1:i*100,y1:0,x2:i*100,y2:height,stroke:'#203449','stroke-width':1}));}for(let i=1;i<3;i++){svg.append(svgElement('line',{x1:0,y1:i*100,x2:width,y2:i*100,stroke:'#203449','stroke-width':1}));}const robot=markers.find(m=>m.kind==='R'),target=markers.find(m=>m.target);if(robot&&target){const a=project(robot.position),b=project(target.position);svg.append(svgElement('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:'#fbbf24','stroke-width':2,'stroke-dasharray':'7 6'}));}for(const marker of markers){const point=project(marker.position);svg.append(svgElement('circle',{cx:point.x,cy:point.y,r:marker.target?15:12,fill:marker.target?'none':marker.color,stroke:marker.color,'stroke-width':marker.target?3:1}));svg.append(svgElement('text',{x:point.x,y:point.y+4,'text-anchor':'middle',fill:marker.target?marker.color:'#07111b','font-size':11,'font-weight':900},marker.kind));svg.append(svgElement('text',{x:point.x+16,y:point.y-13,fill:'#cbd9e7','font-size':10},`${marker.id} ${pose(marker.position)}`));}}
-function render(status){const world=status.world_model||{},robot=world.robot||{},decision=status.decision||{},current=world.current_action||{},last=world.last_action||{},validation=status.validation||{},submission=status.submission||{};$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`current mission: ${dash(world.mission?.text)}`;$('robotState').textContent=dash(robot.navigation_status);$('robotPose').textContent=`pose: ${pose(robot.pose)}`;$('actionName').textContent=dash(current.action||decision.action);$('actionTarget').textContent=`target: ${dash(current.target||decision.target)}`;$('decisionTitle').textContent=decision.action?`${decision.action} ${dash(decision.target)}`:'-';$('decisionReason').textContent=decision.reason||'판단 근거 없음';$('validation').textContent=`VALIDATION ${validation.approved===true?'PASS':validation.approved===false?'REJECTED':'-'}`;$('submission').textContent=`SUBMISSION ${dash(submission.status)}`;$('resultAction').textContent=last.action?`${last.action} ${dash(last.target)}`:'-';$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`detail: ${dash(last.detail||last.reason)}`;renderVision(world);renderMap(world);renderObjects(world);updateTimeline(status,world);}
-async function refresh(){try{const response=await fetch('/api/status',{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();render(status);setConnection(Boolean(status.timestamp));}catch(_error){setConnection(false);}}
-$('missionForm').addEventListener('submit',async event=>{event.preventDefault();const text=$('missionInput').value.trim();if(!text)return;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});const data=await response.json();$('missionResult').textContent=response.ok?`전송됨: ${data.mission_id}`:`오류: ${data.error}`;if(response.ok)$('missionInput').value='';}catch(_error){$('missionResult').textContent='오류: mission boundary에 연결할 수 없습니다.';}});
+function renderVLA(status){const world=status.world_model||{},robot=world.robot||{},decision=status.decision||{},current=world.current_action||{},last=world.last_action||{},validation=status.validation||{},submission=status.submission||{};$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`current mission: ${dash(world.mission?.text)}`;$('robotState').textContent=dash(robot.navigation_status);$('robotPose').textContent=`pose: ${pose(robot.pose)}`;$('actionName').textContent=dash(current.action||decision.action);$('actionTarget').textContent=`target: ${dash(current.target||decision.target)}`;$('decisionTitle').textContent=decision.action?`${decision.action} ${dash(decision.target)}`:'-';$('decisionReason').textContent=decision.reason||'판단 근거 없음';$('validation').textContent=`VALIDATION ${validation.approved===true?'PASS':validation.approved===false?'REJECTED':'-'}`;$('submission').textContent=`SUBMISSION ${dash(submission.status)}`;$('resultAction').textContent=last.action?`${last.action} ${dash(last.target)}`:'-';$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`detail: ${dash(last.detail||last.reason)}`;renderVision(world);renderMap(world);renderObjects(world);updateTimeline(status,world);}
+function ruleWorld(status){const mission=status.mission||{},targets=status.detections?.targets||[],people=[],fires=[];let personIndex=0,fireIndex=0;for(const target of targets){const item={position:{x:target.x,y:target.y},confidence:target.confidence,state:target.type};if(String(target.type).startsWith('person'))people.push({...item,id:`person_${String(++personIndex).padStart(4,'0')}`});if(String(target.type).startsWith('fire'))fires.push({...item,id:`fire_${String(++fireIndex).padStart(4,'0')}`});}return{robot:{navigation_status:status.robot?.navigation_status},mission:{text:mission.last_command?.command},current_action:{action:mission.state,target:mission.target_type,target_pose:mission.current_target},people,fires};}
+function renderRuleBased(status){const mission=status.mission||{},robot=status.robot||{},exploration=status.exploration||{},suppression=status.suppression||{},last=mission.last_command||{},world=ruleWorld(status);$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`last command: ${dash(last.command)}`;$('robotState').textContent=dash(mission.state);$('robotPose').textContent=`battery: ${dash(robot.battery_raw)}`;$('actionName').textContent=dash(mission.target_type);$('actionTarget').textContent=`target: ${pose(mission.current_target)}`;$('decisionTitle').textContent=`EXPLORATION ${dash(exploration.status)}`;$('decisionReason').textContent=`Nav2: ${dash(robot.navigation_status)} · Suppression: ${dash(suppression.status)}`;$('validation').textContent=`NAV2 ${dash(robot.navigation_status)}`;$('submission').textContent=`SUPPRESSION ${dash(suppression.status)}`;$('resultAction').textContent=dash(last.command);$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`blocked: ${dash(status.blocked_reason)}`;renderVision(world);renderMap(world);renderObjects(world);addEvent(`rule:${mission.state}:${mission.target_type}:${status.timestamp}`,status.timestamp,`FSM ${dash(mission.state)} · target ${dash(mission.target_type)}`);}
+function render(status){if(activeMode==='RULE_BASED')renderRuleBased(status);else renderVLA(status);}
+function configureMode(){const rule=activeMode==='RULE_BASED';$('missionInput').placeholder=rule?'START 또는 STOP':'인명을 우선 확인해.';$('missionResult').textContent=rule?'Rule-based START/STOP boundary':'VLA mission boundary';$('actionLabel').textContent=rule?'FSM Target':'Current Action';$('decisionLabel').textContent=rule?'Exploration / Nav2 / Suppression':'VLA Decision / Reason';timelineEvents.splice(0);eventKeys.clear();renderTimeline();}
+async function refresh(){try{const response=await fetch(`/api/status?mode=${encodeURIComponent(activeMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();render(status);setConnection(Boolean(status.timestamp));}catch(_error){setConnection(false);}}
+$('modeSelector').addEventListener('change',event=>{activeMode=event.target.value;configureMode();refresh();});
+$('missionForm').addEventListener('submit',async event=>{event.preventDefault();const text=$('missionInput').value.trim();if(!text)return;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:activeMode})});const data=await response.json();$('missionResult').textContent=response.ok?`전송됨: ${data.mission_id}`:`오류: ${data.error}`;if(response.ok)$('missionInput').value='';}catch(_error){$('missionResult').textContent='오류: mission boundary에 연결할 수 없습니다.';}});
+configureMode();
 refresh();setInterval(refresh,1000);
 </script>
 </body>

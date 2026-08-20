@@ -277,6 +277,23 @@ Hardware validation is `NOT_RUN`. Issue C can now connect the Firefighter UI mod
 selector to these two Rule-based topics without embedding backend/FSM logic in the
 frontend.
 
+### Firefighter UI two-mode integration — Issue C
+
+The existing Firefighter UI now provides a shared-shell mode selector:
+
+- `VLA Brain` preserves the existing decision, reason, current action, semantic
+  map, WorldModel entities, validation, submission, and recent-result view.
+- `Rule-based` consumes the Issue B `/rule_based/status` contract and presents
+  FSM/target, Nav2, Frontier exploration, detections, battery, suppression, and
+  last-command state. Its mission boundary routes to `/rule_based/mission`.
+
+The browser selects a mode through the local HTTP API; ROS topic routing remains
+inside `firefighter_ui_node`. Therefore backend/FSM ownership is not duplicated in
+frontend code, and the original `/vla/status` and `/vla/mission` behavior remains
+the default. Software API, rendering-contract, launch syntax, and VLA regression
+tests cover this change. Actual Rule-based Robot driving and suppression remain
+`HARDWARE_PENDING` and were not run for Issue C.
+
 ## Next Milestone
 
 Before Hailo installation completes, use the team-owned
