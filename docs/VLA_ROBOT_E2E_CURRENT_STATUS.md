@@ -3,7 +3,7 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Current verified code checkpoint: `e28491dacd8a591f0aaee6df4ac1640460eaa82f`
+- Current verified code checkpoint: `8a6fece04210ac197423169ae68e8a0a4927570f`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
@@ -144,8 +144,9 @@ actual ASCAMERA RGB → preprocess → split HEF neural inference
 - Camera stream and passthrough preprocessing: PASS
 - Offline split-HEF detection: PASS
 - Live HEF person detection from actual ASCAMERA frame: PASS
-- Actual person confidence: `0.3979718685`
-- Actual person bbox `(x1,y1,x2,y2)`: `(347.33,157.15,472.93,315.16)`
+- Actual person confidence (latest downstream checkpoint): `0.500`
+- Actual person bbox `(x1,y1,x2,y2)`:
+  `(257.41,279.07,393.14,467.47)`
 - `OFFLINE_HEF_DETECTION_PASS = YES`
 - `LIVE_HEF_PERSON_DETECTION_PASS = YES`
 
@@ -156,18 +157,67 @@ Second, the ROS shell resolved a stale installed backend ahead of the isolated f
 backend. Commit `e28491dacd8a591f0aaee6df4ac1640460eaa82f` adds the measured split-HEF contract
 while retaining the existing single-output NMS HEF path.
 
-Issue #88 remains **OPEN**. Detection itself is no longer the blocker. The remaining
-stationary Hardware validation is:
+Live depth fusion also passed using that actual person detection:
+
+- `LIVE_PERSON_DEPTH_PASS = YES`
+- actual depth: `0.371 m`
+- camera XYZ: approximately `(-0.0047,0.0842,0.3710) m`
+
+The VLA perception Adapter continues to own CameraInfo backprojection and source-time
+TF conversion. Commit `8a6fece04210ac197423169ae68e8a0a4927570f` contains the
+Adapter compatibility correction used by this Hardware checkpoint.
+
+### LD19 and localization runtime checkpoint
+
+The first map-localization attempt had valid `base_link → ascamera_color_0` and
+`odom → base_link`, but no continuous `map → odom`: `/scan_raw` briefly appeared and
+then stopped, so SLAM could not maintain its transform.
+
+The authoritative runtime was confirmed as:
+
+- driver source:
+  `/home/ubuntu/third_party_ros2/third_party_ws/src/ldlidar_stl_ros2`
+- launch: `peripherals/launch/lidar.launch.py`
+  → `include/ldlidar_LD19.launch.py`
+- model / device / baud: `LDLiDAR_LD19`,
+  `/dev/ldlidar` → `/dev/ttyUSB0`, `230400`
+
+Serial input and the LD19 packet contract remained valid. After confirming exclusive
+serial ownership, fully stopping the driver, and cleanly restarting the authoritative
+launch, `/scan_raw` produced actual LaserScan messages for 35 seconds at an average
+of approximately `9.91 Hz`; continuous `map → odom` was then observed. No driver,
+configuration, SLAM, or TF source was changed.
+
+This is recorded as a **runtime transient issue**: an intermittent parser/scan-assembly
+stall. The detailed trigger was not reproduced and therefore is **not a confirmed
+root cause**. Model/protocol/baud mismatch and persistent USB/CRC failure were excluded
+by the captured stream; they must not be reported as the cause.
+
+Issue #88 remains **OPEN**. At the final available Hardware session, LiDAR and TF had
+recovered but no fresh person detection was available. The prior actual person/depth
+sample was outside the source-time TF buffer and was correctly not reused. This does
+not invalidate the earlier live HEF person detection PASS. The current first pending
+boundary is `fresh person observation unavailable`.
+
+Current Issue #88 status:
+
+- `LIVE_HEF_PERSON_DETECTION_PASS = YES`
+- `LIVE_PERSON_DEPTH_PASS = YES`
+- `LIVE_PERSON_MAP_LOCALIZATION_PASS = NOT_RUN`
+- `LIVE_PERSON_WORLDMODEL_PASS = NOT_RUN`
+- `LIVE_PERSON_UI_REPORT_PASS = NOT_RUN`
+
+The remaining stationary Hardware validation is:
 
 ```text
-person bbox → actual depth fusion → camera/Robot coordinates
-→ source-time TF → map (x,y) → SemanticObservation
+fresh person bbox/depth → camera/Robot coordinates
+→ recovered source-time TF → map (x,y) → SemanticObservation
 → WorldModel → Firefighter UI/report
 ```
 
-These remaining stages are `NOT_RUN`. They do not require Robot motion, but valid
-localization and camera-to-map TF must be available. Nav2 goals, `cmd_vel`, Motor,
-Pump, and Servo were not run during the live HEF person-detection validation.
+Map localization, WorldModel ingestion, and UI/report remain `NOT_RUN`. They do not
+require Robot motion. Nav2 goals, exploration, `cmd_vel`, Motor, Pump, Servo, and fire
+suppression were not run during this perception/localization validation.
 
 ## Hailo Status
 
@@ -215,8 +265,8 @@ inference path; the verified production candidate is the Hailo split HEF above.
 
 ## Current Pending
 
-- Issue #88: live person depth fusion and `/fire/detections`
-- Issue #88: actual CameraInfo/source-time TF map localization
+- Issue #88: acquire one fresh live HEF person observation and depth sample
+- Issue #88: use the recovered CameraInfo/source-time TF path for map localization
 - Issue #88: actual `person_0001` creation in WorldModel and UI/report
 - actual fire detection/depth/map localization
 - full perception → Qwen → Nav2 Hardware E2E
@@ -301,12 +351,14 @@ tests cover this change. Actual Rule-based Robot driving and suppression remain
 
 ## Next Milestone
 
-Continue Issue #88 from the first unverified stage, without repeating Camera or HEF
-person detection:
+Continue Issue #88 from the first unverified stage. Camera, split-HEF inference, live
+person detection, depth fusion, LD19 LaserScan, and `map → odom` have already passed
+and do not need a new benchmark:
 
 ```text
-verified live person bbox → actual depth → /fire/detections
-→ CameraInfo/source-time TF → map (x,y)
+place an actual person in front of the camera
+→ acquire one fresh HEF person detection and depth sample
+→ recovered CameraInfo/source-time TF → map (x,y)
 → person_0001 → WorldModel → Firefighter UI/report
 ```
 
@@ -350,9 +402,11 @@ PASS:
 - HailoBackend split-HEF implementation
 - offline HEF fire/person detection
 - live ASCAMERA HEF person bbox/confidence detection
+- live person depth fusion and finite camera XYZ
+- LD19 `/scan_raw` recovery and continuous `map → odom`
 
 PENDING:
 
-- Issue #88 live person depth/map/WorldModel/UI report
+- Issue #88 fresh person map localization/WorldModel/UI report
 - full perception-to-navigation Hardware E2E
 - fire suppression full Hardware E2E
