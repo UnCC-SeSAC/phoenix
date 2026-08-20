@@ -174,6 +174,9 @@ class VisionDetector(Node):
         v = detection['y']
         depth_m = detection['depth']
 
+        if depth_m is None:
+            return None
+
         point = PointStamped()
         point.header.frame_id = self.depth_frame_id
         point.header.stamp = stamp

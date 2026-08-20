@@ -53,7 +53,9 @@ HANDOVER 7-2가 "출력 텐서 레이아웃은 여전히 팀원5와 합의 대�
 
 from __future__ import annotations
 
+import json
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Sequence
@@ -65,7 +67,7 @@ __all__ = [
     "PAD_VALUE", "LAYOUTS", "Detection", "LetterboxInfo",
     "letterbox", "undo_letterbox", "make_blob",
     "normalize_output", "decode", "nms", "iou_matrix",
-    "OnnxCvBackend", "StubBackend", "HailoBackend",
+    "OnnxCvBackend", "OnnxRuntimeBackend", "StubBackend", "HailoBackend",
     "YoloDetector", "UltralyticsDetector",
     "make_detector", "describe_outputs",
 ]
@@ -449,6 +451,49 @@ class OnnxCvBackend:
         return list(outs)
 
 
+class OnnxRuntimeBackend:
+    """Explicit ONNX Runtime CPU adapter for OpenCV-incompatible models."""
+
+    kind = "onnxruntime"
+
+    def __init__(self, onnx_path: str, threads: int = 0):
+        if not os.path.exists(onnx_path):
+            raise FileNotFoundError(f"ONNX 모델 파일이 없습니다: {onnx_path}")
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise ImportError(
+                "backend=onnxruntime에는 onnxruntime이 필요합니다: "
+                "python3 -m pip install onnxruntime"
+            ) from exc
+        options = ort.SessionOptions()
+        if threads > 0:
+            options.intra_op_num_threads = int(threads)
+        self.session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        inputs = self.session.get_inputs()
+        if len(inputs) != 1 or inputs[0].type != "tensor(float)":
+            raise ValueError(
+                "단일 float tensor 입력을 기대합니다: "
+                f"{[(item.name, item.shape, item.type) for item in inputs]}"
+            )
+        self.input_name = inputs[0].name
+        self.output_names = [item.name for item in self.session.get_outputs()]
+        if not self.output_names:
+            raise ValueError("ONNX 모델에 output이 없습니다.")
+        self.path = str(onnx_path)
+
+    def infer(self, blob: np.ndarray) -> list[np.ndarray]:
+        array = np.asarray(blob, dtype=np.float32)
+        outputs = self.session.run(
+            self.output_names, {self.input_name: array}
+        )
+        return [np.asarray(output) for output in outputs]
+
+
 class StubBackend:
     """가중치 없이 **배선만** 확인하기 위한 가짜 백엔드.
 
@@ -480,42 +525,204 @@ class StubBackend:
 
 
 class HailoBackend:
-    """Hailo-10H 온디바이스 추론 — **팀원5의 `.hef`가 와야 완성됩니다.**
-
-    ★ 지금 구현하지 않은 것은 게을러서가 아닙니다. `hailo_platform`의
-      스트림 이름·양자화 스케일·출력 순서는 **컴파일된 .hef마다 다르고**,
-      확인 없이 짜면 "도는데 좌표가 틀린" 코드가 됩니다. 그게 이 저장소에서
-      가장 비싼 실패 유형입니다.
-
-    받아야 하는 것 (HANDOVER 7-2 「남는 것」):
-      - `.hef` 파일과 입력 해상도(`imgsz`)
-      - 출력 텐서 레이아웃 — v8(4+nc, A)인지 end2end(N, 6)인지
-      - 클래스 번호 ↔ 이름 순서
-      - 입력 전처리 규약 — 레터박스 여부, 정규화(0~1인지 0~255인지), RGB/BGR
-
-    받으면 `infer()`만 채우면 됩니다. 나머지(디코딩·NMS·좌표 복원)는 이 파일이
-    이미 백엔드와 무관하게 처리합니다. 구현 골자:
-
-        from hailo_platform import VDevice, HEF, ConfigureParams, \\
-            InputVStreamParams, OutputVStreamParams, InferVStreams
-        # 1) HEF 로드 -> VDevice.configure -> network_group.activate()
-        # 2) InferVStreams 로 {입력스트림이름: blob} 을 넣고 dict 를 받음
-        # 3) 받은 dict 를 **합의된 순서대로** list 로 세워 반환
-        #    ★ dict 순서에 의존하지 마세요. 이름으로 꺼내세요.
-    """
+    """HailoRT adapter for NMS HEFs and measured YOLO26 split HEFs."""
 
     kind = "hailo"
 
     def __init__(self, hef_path: str, **_kwargs):
-        raise NotImplementedError(
-            "Hailo 백엔드는 아직 비어 있습니다 — 팀원5의 .hef 와 출력 레이아웃 "
-            "합의가 필요합니다 (HANDOVER 7-2).\n"
-            "  지금 개발용으로는 ONNX 백엔드를 쓰세요:\n"
-            "    ros2 run image_pipeline yolo_node --ros-args "
-            "-p model_path:=models/fire_yolo26s.onnx")
+        if not os.path.exists(hef_path):
+            raise FileNotFoundError(f"HEF 모델 파일이 없습니다: {hef_path}")
+        try:
+            from hailo_platform import FormatType, HEF, VDevice
+        except ImportError as exc:
+            raise ImportError("HailoRT Python runtime(hailo_platform)이 없습니다") from exc
+        self.path = str(hef_path)
+        self._hef = HEF(self.path)
+        self.input_names = [
+            info.name for info in self._hef.get_input_vstream_infos()
+        ]
+        self.output_names = [
+            info.name for info in self._hef.get_output_vstream_infos()
+        ]
+        if len(self.input_names) != 1:
+            raise ValueError(f"Hailo 입력은 1개여야 합니다: {self.input_names}")
+        self._mode = "nms" if len(self.output_names) == 1 else "split"
+        if self._mode == "split":
+            self._init_split(FormatType, VDevice)
+            return
+        from hailo_platform import (InferVStreams, InputVStreamParams,
+                                    OutputVStreamParams)
+        self._device = VDevice()
+        self._device.__enter__()
+        try:
+            groups = self._device.configure(self._hef)
+            if len(groups) != 1:
+                raise ValueError(f"HEF network group이 1개가 아닙니다: {len(groups)}")
+            self._network_group = groups[0]
+            inputs = InputVStreamParams.make_from_network_group(
+                self._network_group, quantized=True, format_type=FormatType.UINT8)
+            outputs = OutputVStreamParams.make_from_network_group(
+                self._network_group, quantized=False, format_type=FormatType.FLOAT32)
+            self._activation = self._network_group.activate(
+                self._network_group.create_params())
+            self._activation.__enter__()
+            self._pipeline = InferVStreams(self._network_group, inputs, outputs,
+                                           tf_nms_format=True)
+            self._pipeline.__enter__()
+        except Exception:
+            self.close()
+            raise
 
-    def infer(self, blob: np.ndarray) -> list[np.ndarray]:  # pragma: no cover
-        raise NotImplementedError
+    def _init_split(self, format_type, vdevice_type) -> None:
+        """Configure the hardware-team split HEF plus its ONNX postprocess."""
+        model_dir = os.path.dirname(self.path)
+        config_path = os.path.join(model_dir, "config_onnx_best_sim.json")
+        post_path = os.path.join(model_dir, "best_sim_postprocess.onnx")
+        for companion in (config_path, post_path):
+            if not os.path.exists(companion):
+                raise FileNotFoundError(
+                    f"split HEF companion 파일이 없습니다: {companion}")
+        with open(config_path, encoding="utf-8") as stream:
+            self._tensor_mapping = json.load(stream)["output_tensor_mapping"]
+        missing = sorted(set(self._tensor_mapping) - set(self.output_names))
+        if missing:
+            raise ValueError(f"HEF/config output 이름 불일치: {missing}")
+
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise ImportError("split HEF postprocess에 onnxruntime이 필요합니다") from exc
+        self._post_session = ort.InferenceSession(
+            post_path, providers=["CPUExecutionProvider"])
+        self._post_input_names = {item.name for item in self._post_session.get_inputs()}
+        self._post_output_names = [item.name for item in self._post_session.get_outputs()]
+
+        try:
+            from hailo_platform import HailoSchedulingAlgorithm
+            params = vdevice_type.create_params()
+            params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
+            params.group_id = "SHARED"
+            self._device = vdevice_type(params)
+        except (ImportError, AttributeError):
+            self._device = vdevice_type()
+        self._device.__enter__()
+        try:
+            self._infer_model = self._device.create_infer_model(self.path)
+            self._infer_model.set_batch_size(1)
+            self._infer_model.input(self.input_names[0]).set_format_type(
+                format_type.UINT8)
+            for name in self.output_names:
+                self._infer_model.output(name).set_format_type(format_type.FLOAT32)
+            self._configure_ctx = self._infer_model.configure()
+            self._configured = self._configure_ctx.__enter__()
+        except Exception:
+            self.close()
+            raise
+
+    @staticmethod
+    def _map_split_outputs(outputs, tensor_mapping, required_inputs):
+        mapped = {}
+        for hef_name, (onnx_name, expected) in tensor_mapping.items():
+            if hef_name not in outputs:
+                raise KeyError(f"Hailo postprocess input이 없습니다: {hef_name}")
+            tensor = np.asarray(outputs[hef_name], dtype=np.float32)
+            if tensor.ndim == 3:
+                tensor = tensor[None, ...]
+            actual = list(tensor.shape)
+            if actual[1:] == expected:
+                pass
+            elif [actual[3], actual[1], actual[2]] == expected:
+                tensor = np.transpose(tensor, (0, 3, 1, 2))
+            else:
+                raise ValueError(
+                    f"Hailo/ONNX shape mismatch: {hef_name} "
+                    f"actual={actual} expected=[N,{expected}]")
+            if onnx_name in required_inputs:
+                mapped[onnx_name] = np.ascontiguousarray(tensor)
+        missing = sorted(set(required_inputs) - set(mapped))
+        if missing:
+            raise KeyError(f"ONNX postprocess input이 없습니다: {missing}")
+        return mapped
+
+    @staticmethod
+    def _nms_to_end2end(raw: np.ndarray) -> np.ndarray:
+        """(1, classes, 5, max_det) yxyx NMS -> (1, N, 6) xyxy."""
+        arr = np.asarray(raw, dtype=np.float32)
+        if arr.ndim != 4 or arr.shape[0] != 1 or arr.shape[2] != 5:
+            raise ValueError("HAILO_NMS_BY_CLASS layout (1,C,5,N)을 기대했습니다: "
+                             f"actual={arr.shape}")
+        rows = []
+        for class_id in range(arr.shape[1]):
+            boxes = arr[0, class_id].T
+            boxes = boxes[boxes[:, 4] > 0.0]
+            if boxes.size == 0:
+                continue
+            converted = np.empty((boxes.shape[0], 6), dtype=np.float32)
+            converted[:, :4] = boxes[:, [1, 0, 3, 2]]
+            converted[:, 4] = boxes[:, 4]
+            converted[:, 5] = float(class_id)
+            rows.append(converted)
+        result = np.concatenate(rows, axis=0) if rows else np.empty((0, 6), np.float32)
+        return result[None, ...]
+
+    def infer(self, blob: np.ndarray) -> list[np.ndarray]:
+        arr = np.asarray(blob)
+        if arr.ndim != 4 or arr.shape[0] != 1 or arr.shape[1] != 3:
+            raise ValueError(f"NCHW RGB batch=1 blob을 기대했습니다: {arr.shape}")
+        nhwc = np.transpose(arr, (0, 2, 3, 1))
+        nhwc = np.clip(np.rint(nhwc * 255.0), 0, 255).astype(np.uint8)
+        if getattr(self, "_mode", "nms") == "split":
+            output_buffers = {
+                name: np.empty(self._infer_model.output(name).shape,
+                               dtype=np.float32)
+                for name in self.output_names
+            }
+            bindings = self._configured.create_bindings(
+                output_buffers=output_buffers)
+            bindings.input(self.input_names[0]).set_buffer(
+                np.ascontiguousarray(nhwc[0]))
+            done = threading.Event()
+            errors = []
+
+            def callback(completion_info):
+                if completion_info.exception is not None:
+                    errors.append(completion_info.exception)
+                done.set()
+
+            self._configured.wait_for_async_ready(timeout_ms=10000)
+            job = self._configured.run_async([bindings], callback)
+            job.wait(10000)
+            if not done.wait(timeout=10):
+                raise RuntimeError("Hailo inference callback timeout")
+            if errors:
+                raise RuntimeError(f"Hailo inference failed: {errors[0]}")
+            outputs = {
+                name: np.array(bindings.output(name).get_buffer(),
+                               dtype=np.float32, copy=True)
+                for name in self.output_names
+            }
+            post_inputs = self._map_split_outputs(
+                outputs, self._tensor_mapping, self._post_input_names)
+            return [np.asarray(item) for item in self._post_session.run(
+                self._post_output_names, post_inputs)]
+        outputs = self._pipeline.infer({self.input_names[0]: nhwc})
+        missing = [name for name in self.output_names if name not in outputs]
+        if missing:
+            raise KeyError(f"Hailo output stream이 없습니다: {missing}")
+        return [self._nms_to_end2end(outputs[name]) for name in self.output_names]
+
+    def close(self) -> None:
+        for name in ("_pipeline", "_activation", "_configure_ctx", "_device"):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                try:
+                    obj.__exit__(None, None, None)
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    def __del__(self):
+        self.close()
 
 
 # ------------------------------------------------------------------- 검출기
@@ -635,12 +842,20 @@ class UltralyticsDetector:
         self.iou = float(iou)
         # 모델이 이름을 알고 있으면 그걸 씁니다 — 손으로 적은 순서보다 안전합니다.
         names = getattr(self.model, "names", None)
-        if class_names:
-            self.class_names = tuple(str(n) for n in class_names)
-        elif isinstance(names, dict):
-            self.class_names = tuple(names[i] for i in sorted(names))
+        if isinstance(names, dict):
+            model_class_names = tuple(str(names[i]) for i in sorted(names))
         else:
-            self.class_names = tuple(names or ())
+            model_class_names = tuple(str(name) for name in (names or ()))
+        if class_names:
+            configured_class_names = tuple(str(n) for n in class_names)
+            if model_class_names and configured_class_names != model_class_names:
+                raise ValueError(
+                    "class_names가 .pt 모델 metadata와 다릅니다: "
+                    f"configured={configured_class_names}, model={model_class_names}"
+                )
+            self.class_names = configured_class_names
+        else:
+            self.class_names = model_class_names
         self.detected_layout = "ultralytics"
         self.timings = {"pre": 0.0, "infer": 0.0, "post": 0.0, "total": 0.0}
 
@@ -677,6 +892,11 @@ def make_detector(model_path: str, *, backend: str = "auto", **kwargs):
     if backend == "onnx":
         threads = int(kwargs.pop("threads", 0))
         return YoloDetector(OnnxCvBackend(model_path, threads=threads), **kwargs)
+    if backend == "onnxruntime":
+        threads = int(kwargs.pop("threads", 0))
+        return YoloDetector(
+            OnnxRuntimeBackend(model_path, threads=threads), **kwargs
+        )
     if backend == "ultralytics":
         kwargs.pop("threads", None)
         kwargs.pop("layout", None)

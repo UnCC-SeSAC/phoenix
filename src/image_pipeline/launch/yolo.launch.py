@@ -27,7 +27,8 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument(
             'model_path', default_value='',
-            description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo, 미구현)'),
+            description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo — 후처리 '
+                        'onnx/config json은 같은 폴더에서 자동으로 찾습니다)'),
         DeclareLaunchArgument(
             'input_topic', default_value='/image_enhanced',
             description='태스크①의 출력. 원본 rgb0 가 아닙니다'),

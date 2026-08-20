@@ -53,10 +53,12 @@ def generate_launch_description():
       model_path 는 launch 인자로 반드시 넘겨야 한다 (.onnx 권장 — 로봇에서
       torch/ultralytics 불필요).
 
-    사용 예 (라즈베리파이에서):
+    사용 예 (라즈베리파이에서, Hailo):
         ros2 launch uncc_example frontier_fire_suppression_hw_test.launch.py \\
-            model_path:=/절대/경로/fire_yolo26s.onnx \\
+            model_path:=/home/lemma/Hailo/models/baseline_yolo26_neural_norm.hef \\
             class_names:="['fire','person']"
+    (.hef 후처리용 onnx/config json은 같은 폴더에서 자동으로 찾습니다 —
+     config_onnx_best_sim.json / best_sim_postprocess.onnx 라는 이름이어야 함)
 
     확인할 것:
         ros2 topic echo /mission/state
@@ -180,6 +182,7 @@ def generate_launch_description():
                 output='screen',
                 parameters=[{
                     'camera_info_topic': '/image_enhanced/camera_info',
+                    'depth_frame_id': 'ascamera_color_0',
                 }],
             ),
         ],
@@ -298,7 +301,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'model_path', default_value='',
-            description='실제 YOLO 가중치 절대경로 (.onnx 권장 — 로봇에 torch 불필요). '
+            description='실제 YOLO 가중치 절대경로 (.onnx | .hef). '
                         '비우면 yolo_node 가 즉시 에러로 알림'),
         DeclareLaunchArgument(
             'class_names', default_value="['fire','person']",

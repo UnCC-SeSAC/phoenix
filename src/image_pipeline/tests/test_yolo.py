@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 
 import numpy as np
 import pytest
@@ -37,6 +38,32 @@ from image_pipeline.yolo import (  # noqa: E402
     normalize_output,
     undo_letterbox,
 )
+
+
+class TestUltralyticsDetectorClassContract:
+    class _FakeYOLO:
+        names = {0: "fire", 1: "person"}
+
+        def __init__(self, _weights):
+            pass
+
+    def test_rejects_configured_names_that_disagree_with_pt_metadata(
+            self, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules, "ultralytics", types.SimpleNamespace(YOLO=self._FakeYOLO))
+        from image_pipeline.yolo import UltralyticsDetector
+
+        with pytest.raises(ValueError, match="metadata"):
+            UltralyticsDetector("model.pt", class_names=["fire"])
+
+    def test_accepts_exact_model_class_order(self, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules, "ultralytics", types.SimpleNamespace(YOLO=self._FakeYOLO))
+        from image_pipeline.yolo import UltralyticsDetector
+
+        detector = UltralyticsDetector(
+            "model.pt", class_names=["fire", "person"])
+        assert detector.class_names == ("fire", "person")
 
 
 # --------------------------------------------------------------- 합성 출력
@@ -458,8 +485,129 @@ class TestBackendSelection:
         with pytest.raises(FileNotFoundError, match="fake_detection_node"):
             make_detector("/nonexistent/model.onnx")
 
-    def test_hailo_is_an_explicit_stub_not_a_silent_pass(self):
-        """★ 조용히 통과하면 로봇에서 "검출 0개"로 나타납니다."""
+    def test_missing_hef_is_not_a_silent_fallback(self):
         from image_pipeline.yolo import make_detector
-        with pytest.raises(NotImplementedError, match="팀원5"):
+        with pytest.raises(FileNotFoundError, match="HEF"):
             make_detector("model.hef")
+
+
+class TestHailoNmsAdapter:
+    def test_converts_nms_layout_to_existing_end2end_contract(self):
+        from image_pipeline.yolo import HailoBackend, decode
+        raw = np.zeros((1, 2, 5, 3), dtype=np.float32)
+        raw[0, 0, :, 0] = (0.1, 0.2, 0.4, 0.6, 0.8)
+        raw[0, 1, :, 0] = (0.3, 0.1, 0.9, 0.5, 0.7)
+        converted = HailoBackend._nms_to_end2end(raw)
+        assert converted.shape == (1, 2, 6)
+        dets, layout = decode(converted, conf=0.25, num_classes=2,
+                              input_size=(640, 640))
+        assert layout == "end2end"
+        assert [d.class_id for d in dets] == [0, 1]
+        assert dets[0].box == pytest.approx((128, 64, 384, 256))
+
+    def test_rejects_unmeasured_hailo_layout(self):
+        from image_pipeline.yolo import HailoBackend
+        with pytest.raises(ValueError, match="HAILO_NMS_BY_CLASS"):
+            HailoBackend._nms_to_end2end(np.zeros((1, 100, 6), np.float32))
+
+    def test_empty_nms_has_stable_shape(self):
+        from image_pipeline.yolo import HailoBackend
+        converted = HailoBackend._nms_to_end2end(
+            np.zeros((1, 2, 5, 100), np.float32))
+        assert converted.shape == (1, 0, 6)
+
+    def test_infer_converts_blob_and_uses_explicit_stream_name(self):
+        from image_pipeline.yolo import HailoBackend
+
+        class Pipeline:
+            def __init__(self):
+                self.input_data = None
+
+            def infer(self, input_data):
+                self.input_data = input_data
+                nms = np.zeros((1, 2, 5, 1), np.float32)
+                nms[0, 1, :, 0] = (0.1, 0.2, 0.3, 0.4, 0.9)
+                return {"ignored": np.ones((1,)), "out": nms}
+
+        backend = HailoBackend.__new__(HailoBackend)
+        backend.input_names = ["in"]
+        backend.output_names = ["out"]
+        backend._pipeline = Pipeline()
+        blob = np.zeros((1, 3, 2, 2), np.float32)
+        blob[:, 0] = 1.0
+        output = backend.infer(blob)
+        sent = backend._pipeline.input_data["in"]
+        assert sent.shape == (1, 2, 2, 3)
+        assert sent.dtype == np.uint8
+        assert sent[0, 0, 0].tolist() == [255, 0, 0]
+        assert len(output) == 1
+        assert output[0][0, 0].tolist() == pytest.approx(
+            [0.2, 0.1, 0.4, 0.3, 0.9, 1.0])
+
+
+class TestHailoSplitAdapter:
+    def test_maps_measured_nhwc_heads_to_named_onnx_inputs(self):
+        from image_pipeline.yolo import HailoBackend
+        outputs = {
+            "head_box": np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4),
+            "head_cls": np.arange(2 * 3 * 2, dtype=np.float32).reshape(2, 3, 2),
+        }
+        mapping = {
+            "head_box": ["box_input", [4, 2, 3]],
+            "head_cls": ["class_input", [2, 2, 3]],
+        }
+        mapped = HailoBackend._map_split_outputs(
+            outputs, mapping, {"box_input", "class_input"})
+        assert mapped["box_input"].shape == (1, 4, 2, 3)
+        assert mapped["class_input"].shape == (1, 2, 2, 3)
+        assert mapped["box_input"].dtype == np.float32
+
+    def test_rejects_missing_split_head(self):
+        from image_pipeline.yolo import HailoBackend
+        with pytest.raises(KeyError, match="postprocess input"):
+            HailoBackend._map_split_outputs(
+                {}, {"head": ["input", [2, 2, 2]]}, {"input"})
+
+
+class TestOnnxRuntimeBackend:
+    def test_missing_model_is_not_a_silent_fallback(self):
+        from image_pipeline.yolo import make_detector
+        with pytest.raises(FileNotFoundError, match="ONNX"):
+            make_detector("/nonexistent/model.onnx", backend="onnxruntime")
+
+    def test_uses_explicit_input_and_output_names(self, monkeypatch, tmp_path):
+        import sys
+        from types import SimpleNamespace
+        from image_pipeline.yolo import OnnxRuntimeBackend
+
+        model = tmp_path / "model.onnx"
+        model.write_bytes(b"test-only")
+
+        class Session:
+            def __init__(self, path, sess_options, providers):
+                self.calls = []
+
+            def get_inputs(self):
+                return [SimpleNamespace(
+                    name="images", shape=[1, 3, 640, 640], type="tensor(float)")]
+
+            def get_outputs(self):
+                return [SimpleNamespace(
+                    name="output0", shape=[1, 300, 6], type="tensor(float)")]
+
+            def run(self, output_names, inputs):
+                self.calls.append((output_names, inputs))
+                return [np.zeros((1, 300, 6), np.float32)]
+
+        fake_ort = SimpleNamespace(
+            SessionOptions=lambda: SimpleNamespace(intra_op_num_threads=0),
+            InferenceSession=Session,
+        )
+        monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+        backend = OnnxRuntimeBackend(str(model), threads=2)
+        output = backend.infer(np.zeros((1, 3, 640, 640), np.float64))
+        names, inputs = backend.session.calls[0]
+        assert names == ["output0"]
+        assert list(inputs) == ["images"]
+        assert inputs["images"].dtype == np.float32
+        assert output[0].shape == (1, 300, 6)
