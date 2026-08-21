@@ -5,3 +5,4 @@ src/log
 __pycache__
 *.pyc
 /docs/private/
+/AGENTS.md
