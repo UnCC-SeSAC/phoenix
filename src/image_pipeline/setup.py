@@ -30,6 +30,7 @@ setup(
             'fake_detection_node = image_pipeline.fake_detection_node:main',
             'yolo_node = image_pipeline.yolo_node:main',
             'detection_3d_node = image_pipeline.detection_3d_node:main',
+            'ui_stream_node = image_pipeline.ui_stream_node:main',
         ],
     },
 )
