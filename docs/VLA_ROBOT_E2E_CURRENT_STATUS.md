@@ -414,6 +414,26 @@ the default. Software API, rendering-contract, launch syntax, and VLA regression
 tests cover this change. Actual Rule-based Robot driving and suppression remain
 `HARDWARE_PENDING` and were not run for Issue C.
 
+Final software-only verification at commit
+`626626b850ff046912ef6f8c17f74f69b12f803b` confirmed:
+
+- `VLA_MODE_PASS = YES` and `RULE_BASED_MODE_PASS = YES`;
+- `VLA → Rule-based → VLA` selects isolated snapshots and clears the previous mode's
+  object, map, timeline, and current-state display before fetching the next snapshot;
+- an in-flight response for the previous mode is ignored after a selector change;
+- one VLA Mission routes only to `/vla/mission`;
+- one Rule-based `START` and one `STOP` route only to `/rule_based/mission`;
+- Rule-based free text is rejected at the HTTP boundary instead of being acknowledged
+  and rejected later by the ROS consumer;
+- the Rule-based UI uses explicit `START` and `STOP` controls while VLA retains its
+  natural-language Mission form.
+
+Focused HTTP, StatusStore, frontend-contract, mission-routing, and Rule-based producer
+tests: 41 PASS. Python compile, JavaScript syntax, `image_pipeline`/`fire_vla_core`
+build, and `git diff --check`: PASS. Local mock snapshots were also published to both
+status topics and read back through their separate HTTP mode endpoints. Hardware UI
+validation remains `NOT_RUN`.
+
 ## Next Milestone
 
 Resume Issue #89 only after Pi SSH/Docker runtime continuity is restored. Reuse the

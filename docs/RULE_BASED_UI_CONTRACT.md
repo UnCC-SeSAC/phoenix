@@ -73,3 +73,34 @@ Pump/Servo를 우회하지 않는다.
 
 VLA mode의 `/vla/status`, `/vla/mission` contract와 WorldModel은 변경하지 않는다.
 Frontend에는 FSM, Nav2, Frontier 또는 actuator logic을 넣지 않는다.
+
+## Local software mock 실행
+
+이 절차는 Ubuntu ROS 2 Jazzy PC에서만 실행하며 Pi/Robot은 필요하지 않다.
+`integration/vla-robot-e2e`의 commit `626626b` 이상을 사용한다.
+
+UI server:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+PYTHONPATH="$PWD/src/fire_vla_core:$PYTHONPATH" \
+python3 -c 'from fire_vla_core.ros.firefighter_ui_node import main; main()'
+```
+
+다른 terminal에서 최소 VLA snapshot을 발행한다:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2 topic pub --once /vla/status std_msgs/msg/String \
+'data: "{\"timestamp\":\"2026-08-21T15:30:00+09:00\",\"world_model\":{\"mission\":{\"id\":\"mission_mock_vla\",\"text\":\"인명을 우선 확인해\"},\"robot\":{\"pose\":{\"x\":0.2,\"y\":-0.1},\"navigation_status\":\"SUCCEEDED\"},\"people\":[{\"id\":\"person_0001\",\"position\":{\"x\":1.4,\"y\":0.5},\"confidence\":0.93}],\"fires\":[]},\"decision\":{\"action\":\"REPORT_PERSON\",\"target\":\"person_0001\",\"reason\":\"mock decision\"},\"validation\":{\"approved\":true},\"submission\":{\"status\":\"ACCEPTED\"}}"'
+```
+
+최소 Rule-based snapshot을 발행한다:
+
+```bash
+ros2 topic pub --once /rule_based/status std_msgs/msg/String \
+'data: "{\"schema_version\":1,\"mode\":\"RULE_BASED\",\"timestamp\":\"2026-08-21T15:30:01+09:00\",\"mission\":{\"state\":\"FIRE_DETECTED\",\"target_type\":\"fire\",\"current_target\":{\"frame_id\":\"map\",\"x\":2.3,\"y\":-0.7},\"last_command\":{\"mission_id\":\"mission_mock_rule\",\"command\":\"START\",\"status\":\"ACCEPTED\"}},\"robot\":{\"battery_raw\":7210,\"navigation_status\":\"RUNNING\"},\"exploration\":{\"status\":\"RUNNING\"},\"detections\":{\"targets\":[{\"type\":\"fire_unvisited\",\"x\":2.3,\"y\":-0.7}],\"counts\":{\"person\":0,\"fire\":1}},\"suppression\":{\"status\":\"IDLE\"},\"blocked_reason\":\"\"}"'
+```
+
+Browser는 `http://127.0.0.1:8080/`을 연다. Snapshot은 UI process의
+`StatusStore`에 유지되며 UI server를 재시작하면 다시 발행해야 한다.
