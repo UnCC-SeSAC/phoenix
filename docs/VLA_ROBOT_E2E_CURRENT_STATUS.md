@@ -340,6 +340,43 @@ Issue B formalizes the Rule-based status, mission, navigation, detection, and
 suppression interface consumed by the Firefighter UI without changing the existing
 VLA contract.
 
+### Latest team-branch audit (2026-08-21)
+
+The remote branches were fetched with pruning and compared by merge-base, unique
+commits, and file-level semantics against integration baseline
+`66033723cc049da7800a507ce8f450b448581ffe`. No new team commit was imported:
+
+- `state_manage` @ `12d7befafb525f261adf0376ca32249fd27d8d38`: **SKIP**. Its useful
+  Frontier/StateManager/suppression lineage is already selectively present. The new
+  vision variant removes current confidence, source timestamp, and malformed-input
+  validation, while its Hailo implementation predates the verified split-HEF fixes.
+- `edit_nav2_params` @ `5cfedff691079bcc7ba1ef61ec752f4d3283b276`: **SKIP**. It is already
+  merged into `state_manage`; importing it would revert verified costmap publication
+  and velocity-smoother values and replace `ObstacleFootprint.scale` with a non-matching
+  parameter key.
+- `img_grpc_protocol` @ `a1c105a00167702aa76f50784ddff8abc5f6a0d8`: **SKIP**. The added raw
+  image gRPC path is outside the Pi-local perception architecture, and the final servo
+  edit uses an undefined `NONE` token. Neither change is production-ready here.
+- `nav_local_plan` @ `620e7a6268d3bcf802157a126ee5882683a4ecc5` and
+  `caron2002/local_plan_avoidance` @ `daafb4b24a13c308251b49c47a9ba17ff180ee25`:
+  **SKIP** as older overlapping navigation lineages. Their compatible 2D obstacle and
+  Frontier ownership changes are already represented by the current integration.
+- `frontier_basic` @ `33140b6bb7f71035bd7ff952361e1dbdf8cb5841`:
+  **ALREADY_INCLUDED** by ancestry.
+- `albitro/image_processing` @ `0bf507e`: **SKIP** as an older video-capture prototype;
+  current `image_pipeline` remains the upstream perception contract.
+- `feature/vla-brain` @ `c75c65b`: **ALREADY_INCLUDED** semantically through the newer
+  integration VLA/UI lineage; its separate standalone history is not merged wholesale.
+
+Focused VLA #88/#89, Rule-based state/contract, perception, and UI regression produced
+88 PASS. Temporary Jazzy builds of `interfaces`, `image_pipeline`, `fire_vla_core`, and
+`fire_vla_bringup` PASS. `uncc_example` build is `NOT_RUNNABLE` in isolation on this PC
+because the Robot/vendor packages `controller`, `frontier_exploration_ros2`,
+`navigation`, and `peripherals` are not installed in the local underlay; production
+code was not changed to bypass that environment limitation. Hardware validation was
+`NOT_RUN`, and the existing Rule-based UI contract did not change. The next task may
+proceed directly with two-mode UI software verification/completion.
+
 ### Rule-based UI contract — Issue B
 
 Issue B provides an integration-only Port–Adapter boundary:
