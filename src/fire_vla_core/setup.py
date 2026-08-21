@@ -24,6 +24,7 @@ setup(
             "vla_orchestrator = fire_vla_core.ros.orchestrator_node:main",
             "mock_demo = fire_vla_core.mock_demo:main",
             "vla_demo_input = fire_vla_core.ros.demo_input_node:main",
+            "vla_mock_slam = fire_vla_core.ros.mock_slam_node:main",
             "firefighter_ui = fire_vla_core.ros.firefighter_ui_node:main",
             "vla_perception_bridge = fire_vla_core.ros.perception_bridge_node:main",
             "vla_short_nav_preflight = fire_vla_core.short_nav_preflight:main",

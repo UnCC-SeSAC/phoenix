@@ -237,6 +237,9 @@ def test_http_root_serves_required_v2_panels(http_server):
     assert status == 200 and content_type.startswith("text/html")
     for text in (
         "Mission", "Robot Status", "Current Action", "Live Vision",
+        "slamMap", "/api/map.png", "mapProject", "render_step",   
+        "visionStream", "visionBoxes", "/api/vision/stream",
+        "/api/vision/detections",        
         "Semantic Map", "Situation Timeline", "Detected Objects",
         "Recent Result", "VLA Decision / Reason", "CONNECTED", "DISCONNECTED",
         "VLA Brain", "Rule-based", "modeSelector",
