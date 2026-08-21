@@ -36,6 +36,8 @@ from interfaces.action import SuppressFire
 from interfaces.srv import CheckFireStatus
 from frontier_exploration_ros2.srv import ControlExploration
 
+from .log_utils import make_event_logger
+
 from gpiozero import PWMOutputDevice, AngularServo, Device
 from gpiozero.pins.lgpio import LGPIOFactory
 
@@ -77,6 +79,7 @@ CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
 class FireSuppressionNode(Node):
     def __init__(self):
         super().__init__('fire_suppression_node')
+        self._event_logger = make_event_logger(self)
         self._busy = False
 
         self.pump = PWMOutputDevice(
@@ -248,13 +251,15 @@ class FireSuppressionNode(Node):
             feedback_msg = SuppressFire.Feedback()
             result = SuppressFire.Result()
 
-            self.get_logger().info(f'진압 시작. 최대 {max_attempts}회 시도.')
+            self._event_logger.info(f'진압 시작. 최대 {max_attempts}회 시도.')
             await self.set_exploration_running(False)
 
             try:
                 for attempt in range(1, max_attempts + 1):
                     if goal_handle.is_cancel_requested:
                         return await self._handle_cancel(goal_handle, attempt - 1)
+
+                    self._event_logger.info(f'{attempt}차 진압 시도 시작')
 
                     feedback_msg.current_attempt = attempt
                     feedback_msg.status = f'{attempt}차 진압 로직 수행 중'
@@ -274,7 +279,7 @@ class FireSuppressionNode(Node):
                         is_extinguished = False
                     else:
                         is_extinguished = status.is_extinguished
-                        self.get_logger().info(
+                        self._event_logger.info(
                             f'{attempt}차 판별 결과: {"꺼짐" if is_extinguished else "안꺼짐"} '
                             f'(확신도 {status.confidence:.2f})'
                         )

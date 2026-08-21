@@ -14,6 +14,8 @@ from std_msgs.msg import String, UInt16
 from geometry_msgs.msg import PoseStamped
 from interfaces.srv import SetString
 
+from .log_utils import make_event_logger
+
 
 class StateManager(Node):
 
@@ -35,6 +37,8 @@ class StateManager(Node):
 
     def __init__(self):
         super().__init__('state_manager')
+
+        self._event_logger = make_event_logger(self)
 
         # -----------------------------
         # Parameters
@@ -464,7 +468,7 @@ class StateManager(Node):
         state_changed = self.state != self._last_published_state
 
         if state_changed:
-            self.get_logger().info(f'State -> {self.state}')
+            self._event_logger.info(f'State -> {self.state}')
 
             state_msg = String()
             state_msg.data = self.state

@@ -24,6 +24,8 @@ from rclpy.node import Node
 from interfaces.msg import ObjectsInfo
 from interfaces.srv import CheckFireStatus
 
+from .log_utils import make_event_logger
+
 FIRE_DETECTION_TOPIC = 'yolo_result_fire'   # YOLO 팀의 화재 모델 노드가 발행하는 토픽
 FIRE_CLASS_NAME = 'fire'                     # TODO: YOLO 팀이 실제 쓴 라벨 문자열로 확인/수정
 HISTORY_WINDOW_SECONDS = 5.0                 # 이보다 오래된 감지 기록은 버림
@@ -33,6 +35,8 @@ EXTINGUISHED_RATIO_THRESHOLD = 0.3            # 관찰 구간 내 불꽃 감지 
 class FireStatusServiceNode(Node):
     def __init__(self):
         super().__init__('fire_status_service_node')
+
+        self._event_logger = make_event_logger(self)
 
         self._history = deque()  # (timestamp, fire_detected: bool, score: float)
 
@@ -84,7 +88,7 @@ class FireStatusServiceNode(Node):
         response.is_extinguished = ratio < EXTINGUISHED_RATIO_THRESHOLD
         response.confidence = sum(s for _, _, s in recent) / len(recent)
 
-        self.get_logger().info(
+        self._event_logger.info(
             f'{len(recent)}건 관찰, 불꽃 감지 비율 {ratio:.2f} -> '
             f'{"꺼짐" if response.is_extinguished else "안꺼짐"}'
         )

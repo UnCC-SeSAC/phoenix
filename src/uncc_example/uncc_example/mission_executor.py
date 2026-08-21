@@ -12,6 +12,7 @@ from interfaces.action import SuppressFire
 from interfaces.srv import SetString
 
 from .state_manager import StateManager
+from .log_utils import make_event_logger
 
 from frontier_exploration_ros2.srv import ControlExploration
 
@@ -20,6 +21,8 @@ class MissionExecutor(Node):
 
     def __init__(self):
         super().__init__("mission_executor")
+
+        self._event_logger = make_event_logger(self)
 
         # -----------------------------
         # Parameters
@@ -111,7 +114,10 @@ class MissionExecutor(Node):
 
     def state_callback(self, msg):
 
-        if self.state == StateManager.FIRE_DETECTED and msg.data != StateManager.FIRE_DETECTED:
+        if (
+            self.state == StateManager.FIRE_DETECTED
+            and msg.data != StateManager.FIRE_DETECTED
+        ):
             # FIRE_DETECTED 를 벗어나면 진압이 안 끝났어도 무조건 멈춘다.
             self._cancel_fire_suppression()
 
@@ -274,6 +280,8 @@ class MissionExecutor(Node):
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped
 
+        self._event_logger.info(f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})")
+
         send_future = self._nav_client.send_goal_async(goal)
         send_future.add_done_callback(self._nav_goal_response)
 
@@ -306,7 +314,7 @@ class MissionExecutor(Node):
         status = future.result().status
 
         if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info("Nav2 목적지 도착")
+            self._event_logger.info("Nav2 목적지 도착")
 
             # 도착 시점의 state 로 분기한다 — target 이 진행 중인 동안엔
             # state_manager 가 state 를 안 바꾸므로 이 값을 그대로 믿어도 된다.
@@ -324,9 +332,7 @@ class MissionExecutor(Node):
                 f"Nav2 goal 이 실패함 — 도달 불가로 보고 다음 목적지로 "
                 f"넘어감 (status={status})"
             )
-            self.notify_target_complete(
-                status=StateManager.TARGET_STATUS_UNREACHABLE
-            )
+            self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
 
     # =========================================================
     # 진압 동작 (fire_suppression_node 호출)
@@ -411,9 +417,11 @@ class MissionExecutor(Node):
             )
 
         self.notify_target_complete(
-            status=StateManager.TARGET_STATUS_SUCCESS
-            if result.success
-            else StateManager.TARGET_STATUS_FAILED
+            status=(
+                StateManager.TARGET_STATUS_SUCCESS
+                if result.success
+                else StateManager.TARGET_STATUS_FAILED
+            )
         )
 
     # =========================================================
@@ -428,9 +436,7 @@ class MissionExecutor(Node):
             )
             return
 
-        future = self.target_complete_client.call_async(
-            SetString.Request(data=status)
-        )
+        future = self.target_complete_client.call_async(SetString.Request(data=status))
 
         future.add_done_callback(self.target_complete_done)
 

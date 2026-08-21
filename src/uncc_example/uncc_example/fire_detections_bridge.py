@@ -28,6 +28,8 @@ from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 from interfaces.msg import ObjectsInfo, ObjectInfo
 
+from .log_utils import silence_default_logger
+
 INPUT_TOPIC = '/fire/detections'
 OUTPUT_TOPIC = '/yolo_result_fire'
 BOX_HALF_SIZE = 20  # /fire/detections에는 중심 픽셀만 있어 임의 크기로 감쌈 (판정에 미사용)
@@ -36,6 +38,8 @@ BOX_HALF_SIZE = 20  # /fire/detections에는 중심 픽셀만 있어 임의 크�
 class FireDetectionsBridge(Node):
     def __init__(self):
         super().__init__('fire_detections_bridge')
+
+        silence_default_logger(self)
 
         self.declare_parameter('input_topic', INPUT_TOPIC)
         self.declare_parameter('output_topic', OUTPUT_TOPIC)
