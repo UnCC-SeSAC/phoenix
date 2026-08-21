@@ -29,4 +29,11 @@ def generate_launch_description():
             name='fire_suppression_node',
             output='screen',
         ),
+        Node(
+            package='uncc_example',
+            executable='vla_spray_bridge',
+            name='vla_spray_bridge',
+            output='screen',
+            parameters=[{'max_attempts_per_command': 1}],
+        ),
     ])

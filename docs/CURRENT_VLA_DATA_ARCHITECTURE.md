@@ -126,6 +126,12 @@ Navigation action
 | Person report | `/vla/person_report`, `/vla/person_report_result` |
 | Suppression | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` |
 
+Pi의 `vla_spray_bridge`는 validated `/vla/spray_command`를 기존
+`SuppressFire` action으로 변환하고 terminal result를 동일한 `action_id`와
+`fire_id`로 `/vla/spray_result`에 반환한다. 이 bridge는
+`fire_extinguisher.launch.py`에 포함되며, 기본 한 command당 물리 분사 시도는
+1회다.
+
 terminal result는 `SUCCEEDED`, `FAILED`, `ABORTED`, `CANCELED`,
 `TIMED_OUT`으로 correlation한다. report는 correlated `SUCCEEDED`에서만
 reported 상태가 된다. spray `SUCCEEDED`는 `PENDING_VERIFICATION` 전이이며
