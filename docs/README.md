@@ -1,9 +1,9 @@
-# VLA Documentation
+# Phoenix 공개 문서
 
-- [System Architecture Guide](VLA_SYSTEM_ARCHITECTURE_GUIDE.md)
-- [Current VLA Data Architecture](CURRENT_VLA_DATA_ARCHITECTURE.md)
-- [Integration Report](INTEGRATION_REPORT.md)
-- [Verification Report](VERIFICATION_REPORT.md)
-- [Robot Runtime Hands-on](VLA_ROBOT_RUNTIME_HANDSON.md)
+- [현재 VLA 데이터 아키텍처](CURRENT_VLA_DATA_ARCHITECTURE.md): Pi/PC 역할,
+  Perception, WorldModel, Qwen, Action, ROS 2/HTTP boundary를 설명한다.
+- [Rule-based UI 계약](RULE_BASED_UI_CONTRACT.md): Firefighter UI의
+  Rule-based mode 상태·제어 경계를 설명한다.
 
-개인/Codex 작업지시서와 세션 handoff는 `private/` 아래에서 로컬로만 관리하며 Git에 포함하지 않습니다.
+실행 이력, 상세 검증 결과, Hardware runbook과 troubleshooting은 내부 운영
+문서로 관리한다.

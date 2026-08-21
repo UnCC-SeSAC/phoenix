@@ -1,19 +1,23 @@
-# Rule-based Firefighter UI Contract
+# Rule-based Firefighter UI 계약
 
-## Boundary
+Firefighter UI는 `VLA Brain`과 `Rule-based` 두 mode를 같은 Browser shell에서
+제공한다. Browser는 backend 내부 topic을 직접 구독하지 않고 local HTTP API만
+사용한다.
 
-The Rule-based UI uses one read topic and one write topic:
+## 공개 boundary
 
-- read: `/rule_based/status` (`std_msgs/msg/String`, JSON)
-- write: `/rule_based/mission` (`std_msgs/msg/String`, JSON)
+| 방향 | Boundary | 역할 |
+|---|---|---|
+| Browser read | `GET /api/status?mode=RULE_BASED` | Rule-based snapshot 조회 |
+| Browser write | `POST /api/mission` | `{"text":"START|STOP","mode":"RULE_BASED"}` |
+| ROS read | `/rule_based/status` | versioned JSON snapshot |
+| ROS write | `/rule_based/mission` | mission JSON envelope |
 
-`rule_based_ui_adapter` owns this translation boundary. The UI must not subscribe
-directly to StateManager, Nav2, Frontier, detection, or suppression internals.
-The VLA boundary remains unchanged at `/vla/status` and `/vla/mission`.
+`rule_based_ui_adapter`가 StateManager, Nav2, Frontier, detection, battery,
+suppression 상태를 `schema_version=1` snapshot으로 변환한다. 모든 위치는
+authoritative 2D `map` 좌표다.
 
-## Status schema
-
-`schema_version=1` snapshots are published at 2 Hz by default:
+## Status 구성
 
 ```json
 {
@@ -24,89 +28,48 @@ The VLA boundary remains unchanged at `/vla/status` and `/vla/mission`.
     "state": "EXPLORING|PERSON_DETECTED|FIRE_DETECTED|RETURNING_TO_BASE|UNKNOWN",
     "target_type": "idle|frontier|person|fire|base",
     "current_target": {"frame_id": "map", "x": 1.2, "y": -0.3},
-    "last_command": {
-      "mission_id": "mission_ui_...",
-      "command": "START|STOP",
-      "status": "ACCEPTED"
-    }
+    "last_command": {"mission_id": "mission_ui_...", "command": "START|STOP", "status": "ACCEPTED"}
   },
   "robot": {
     "battery_raw": 7200,
     "navigation_status": "IDLE|ACCEPTED|RUNNING|CANCELING|SUCCEEDED|CANCELED|ABORTED|UNKNOWN"
   },
-  "exploration": {
-    "status": "IDLE|RUNNING|START_SCHEDULED|STOP_SCHEDULED|STOPPING|SHUTDOWN_PENDING|UNKNOWN"
-  },
+  "exploration": {"status": "IDLE|RUNNING|START_SCHEDULED|STOP_SCHEDULED|STOPPING|UNKNOWN"},
   "detections": {
-    "targets": [
-      {"type": "person_unconfirmed", "x": 0.5, "y": 0.0},
-      {"type": "fire_unvisited", "x": 1.2, "y": -0.3}
-    ],
-    "counts": {"person": 1, "fire": 1}
+    "targets": [{"type": "person_unconfirmed", "x": 0.5, "y": 0.0}],
+    "counts": {"person": 1, "fire": 0}
   },
-  "suppression": {
-    "status": "IDLE|ACCEPTED|RUNNING|CANCELING|SUCCEEDED|CANCELED|ABORTED|UNKNOWN"
-  },
+  "suppression": {"status": "IDLE|ACCEPTED|RUNNING|CANCELING|SUCCEEDED|CANCELED|ABORTED|UNKNOWN"},
   "blocked_reason": ""
 }
 ```
 
-`current_target` can be `null`. Positions are authoritative 2D `map`
-coordinates. Detection target categories are the existing StateManager contract:
-`person_unconfirmed`, `person_confirmed`, `fire_unvisited`, `fire_failed`,
-and `fire_extinguished`.
+`current_target`은 `null`일 수 있다. detection category는 기존 StateManager
+contract의 `person_unconfirmed`, `person_confirmed`, `fire_unvisited`,
+`fire_failed`, `fire_extinguished`를 사용한다.
 
-## Mission/control input
+## Mission control
 
-The envelope intentionally matches the existing UI mission boundary:
+Rule-based mode는 `START`와 `STOP`만 허용한다.
 
-```json
-{"mission_id":"mission_ui_001","text":"START"}
-```
+- `START`: MissionExecutor를 활성화하고 기존 FSM에 따라 탐색 또는 semantic target을 처리한다.
+- `STOP`: MissionExecutor의 Nav2/SuppressFire goal을 cancel하고 Frontier stop을 직렬화한다.
 
-Rule-based mode accepts only:
+잘못된 JSON, unknown command, 중복 `mission_id`는 control command를 발행하지 않는다.
+이 boundary는 자연어 planner가 아니며 StateManager 우선순위, Nav2, Motor,
+Pump/Servo를 우회하지 않는다.
 
-- `START`: enable MissionExecutor; it resumes Frontier exploration or handles the
-  current semantic target according to the existing FSM.
-- `STOP`: disable MissionExecutor, cancel its active Nav2 and SuppressFire goals,
-  and request a serialized Frontier stop.
+## 내부 source mapping
 
-Unknown commands, missing/extra fields, empty mission IDs, and malformed JSON are
-rejected without publishing a control command. Duplicate `mission_id` values are
-idempotently ignored.
-
-This is not a free-text planner. It does not translate natural language into goals,
-alter StateManager priority, bypass Nav2, or issue direct motor/Pump/Servo commands.
-
-## Internal adapter mapping
-
-| UI field | Existing production source |
+| UI field | Production source |
 |---|---|
-| `mission.state` | `/mission/state` |
-| `mission.target_type` | `/mission/target_type` |
-| `mission.current_target` | `/mission/current_target` |
-| `detections.targets` | `/mission/found_targets` |
-| `robot.battery_raw` | `/ros_robot_controller/battery` |
-| `robot.navigation_status` | `/navigate_to_pose/_action/status` |
-| `exploration.status` | `/rule_based/exploration_state` |
-| `suppression.status` | `/suppress_fire/_action/status` |
+| mission state/target | `/mission/state`, `/mission/target_type`, `/mission/current_target` |
+| detections | `/mission/found_targets` |
+| battery | `/ros_robot_controller/battery` |
+| navigation | `/navigate_to_pose/_action/status` |
+| exploration | `/rule_based/exploration_state` |
+| suppression | `/suppress_fire/_action/status` |
 | START/STOP output | `/mission/enabled` |
 
-The Adapter is integration-owned. No Rule-based fields are added to the VLA
-WorldModel or VLA status schema.
-
-## Firefighter UI mode routing
-
-The shared Firefighter UI shell exposes a top-level selector with `VLA Brain`
-and `Rule-based` modes. The browser sends only the selected mode to the local UI
-HTTP boundary:
-
-- `GET /api/status?mode=VLA|RULE_BASED`
-- `POST /api/mission` with `{"text":"...","mode":"VLA|RULE_BASED"}`
-
-`firefighter_ui_node` owns ROS routing. VLA mode continues to use `/vla/status`
-and `/vla/mission` without changing its payload, while Rule-based mode uses the
-two topics defined above. The Rule-based view renders FSM/target, Nav2,
-Frontier exploration, detections, battery, suppression, and last command state.
-Its mission field is limited by the Rule-based Adapter to `START` or `STOP`.
-No StateManager, Nav2, Frontier, or actuator logic is embedded in the browser.
+VLA mode의 `/vla/status`, `/vla/mission` contract와 WorldModel은 변경하지 않는다.
+Frontend에는 FSM, Nav2, Frontier 또는 actuator logic을 넣지 않는다.

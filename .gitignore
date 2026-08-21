@@ -6,3 +6,12 @@ __pycache__
 *.pyc
 /docs/private/
 /AGENTS.md
+
+# Local-only development and Hardware operation documents
+/docs/INTEGRATION_REPORT.md
+/docs/VERIFICATION_REPORT.md
+/docs/VLA_HARDWARE_RESUME_RUNBOOK.md
+/docs/VLA_ROBOT_E2E_CURRENT_STATUS.md
+/docs/VLA_ROBOT_RUNTIME_HANDSON.md
+/docs/VLA_ROBOT_RUNTIME_TROUBLESHOOTING.md
+/docs/VLA_SYSTEM_ARCHITECTURE_GUIDE.md
