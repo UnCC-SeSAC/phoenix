@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 
 from datetime import datetime
 from itertools import count
@@ -47,6 +48,7 @@ class CanonicalPerceptionNormalizer:
 
         observed_at = str(data["timestamp"])
         observed_time = self._parse_timestamp(observed_at)
+        observed_at = observed_time.isoformat()
         frame_valid = data.get("frame_valid", True)
         detector_healthy = data.get("detector_healthy", True)
         if not isinstance(frame_valid, bool) or not isinstance(detector_healthy, bool):
@@ -168,8 +170,12 @@ class CanonicalPerceptionNormalizer:
 
     @staticmethod
     def _parse_timestamp(value: str) -> datetime:
+        match = re.fullmatch(
+            r"(.+\.\d{6})\d+([+-]\d{2}:\d{2})", value
+        )
+        parseable = f"{match.group(1)}{match.group(2)}" if match else value
         try:
-            parsed = datetime.fromisoformat(value)
+            parsed = datetime.fromisoformat(parseable)
         except (TypeError, ValueError) as exc:
             raise ValueError("timestamp는 유효한 ISO-8601이어야 합니다.") from exc
         if parsed.tzinfo is None or parsed.utcoffset() is None:

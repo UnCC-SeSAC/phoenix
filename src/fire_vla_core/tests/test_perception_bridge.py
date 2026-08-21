@@ -202,6 +202,14 @@ def test_empty_detection_event_can_be_healthy():
     assert canonical["detector_healthy"] is True
 
 
+def test_canonical_timestamp_is_python310_iso_compatible():
+    canonical = adapt(envelope(detection(), stamp_ns=1_786_340_000_123_456_789))
+    assert canonical["timestamp"].endswith(".123456789+00:00")
+    assert CanonicalPerceptionNormalizer._parse_timestamp(canonical["timestamp"]).tzinfo is not None
+    batch = CanonicalPerceptionNormalizer(WorldModel()).normalize(canonical)
+    assert batch.observed_at.endswith(".123456+00:00")
+
+
 def test_apply_transform_handles_rotation_and_translation():
     transform = SimpleNamespace(
         translation=SimpleNamespace(x=1.0, y=2.0, z=3.0),
