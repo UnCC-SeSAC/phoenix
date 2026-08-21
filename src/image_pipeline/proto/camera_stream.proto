@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package camera_stream;
+
+message EmptyRequest {}
+
+message CameraFrame {
+  uint64 sequence_id = 1;
+
+  int64 stamp_sec = 2;
+  uint32 stamp_nanosec = 3;
+
+  string frame_id = 4;
+
+  uint32 width = 5;
+  uint32 height = 6;
+
+  string encoding = 7;
+
+  bytes jpeg_data = 8;
+}
+
+service CameraStream {
+  rpc StreamFrames(EmptyRequest) returns (stream CameraFrame);
+}
