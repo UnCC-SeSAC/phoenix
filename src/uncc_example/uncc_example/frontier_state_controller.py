@@ -14,6 +14,8 @@ from action_msgs.msg import GoalStatus, GoalStatusArray
 
 from frontier_exploration_ros2.srv import ControlExploration
 
+from .log_utils import silence_default_logger
+
 
 class FrontierStateController(Node):
     """Forward START/STOP commands and wait for complete Frontier shutdown."""
@@ -21,6 +23,8 @@ class FrontierStateController(Node):
     def __init__(self):
         """Create the mission-facing service and Frontier service client."""
         super().__init__('frontier_state_controller')
+
+        silence_default_logger(self)
 
         self.declare_parameter(
             'frontier_control_service',

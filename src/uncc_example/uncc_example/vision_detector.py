@@ -14,6 +14,8 @@ from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import String
 from geometry_msgs.msg import PointStamped
 
+from .log_utils import make_event_logger
+
 
 class VisionDetector(Node):
     """
@@ -35,6 +37,8 @@ class VisionDetector(Node):
 
     def __init__(self):
         super().__init__('vision_detector')
+
+        self._event_logger = make_event_logger(self)
 
         # -----------------------------
         # Parameters
@@ -210,6 +214,8 @@ class VisionDetector(Node):
         msg = String()
         msg.data = json.dumps(payload)
 
+        classes = ', '.join(r['class'] for r in results)
+        self._event_logger.info(f'객체 인식: {classes}')
         self.detection_pub.publish(msg)
 
 
