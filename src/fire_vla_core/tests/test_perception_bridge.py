@@ -260,6 +260,31 @@ def test_bridge_callback_publishes_status_separately():
     assert json.loads(messages[0].data)["detector_healthy"] is False
 
 
+def test_source_time_transform_waits_for_matching_tf():
+    class Buffer:
+        def __init__(self):
+            self.call = None
+
+        def lookup_transform(self, target, source, stamp, *, timeout):
+            self.call = (target, source, stamp, timeout)
+            return SimpleNamespace(
+                transform=SimpleNamespace(
+                    translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                )
+            )
+
+    node = VLAPerceptionBridgeNode.__new__(VLAPerceptionBridgeNode)
+    node._tf_buffer = Buffer()
+    node._tf_lookup_timeout = SimpleNamespace(nanoseconds=2_000_000_000)
+
+    result = node._transform_point((1.0, 2.0, 3.0), (10, 20), "camera")
+    assert result == (1.0, 2.0, 3.0)
+    _, _, stamp, timeout = node._tf_buffer.call
+    assert stamp.nanoseconds == 10_000_000_020
+    assert timeout.nanoseconds == 2_000_000_000
+
+
 @pytest.mark.parametrize("message_data", ["not-json", "[]"])
 def test_bridge_callback_safely_drops_malformed_payload(message_data):
     messages, logger = bridge_callback(message_data)

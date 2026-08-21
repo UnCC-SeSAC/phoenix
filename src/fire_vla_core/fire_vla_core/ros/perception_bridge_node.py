@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 import rclpy
+from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -26,7 +28,11 @@ class VLAPerceptionBridgeNode(Node):
         self.declare_parameter("status_topic", "/fire/detections/status")
         self.declare_parameter("camera_info_topic", "/ascamera/camera_publisher/rgb0/camera_info")
         self.declare_parameter("output_topic", "/vla/perception_observation")
+        self.declare_parameter("tf_lookup_timeout_sec", 2.0)
         self._camera: CameraModel | None = None
+        self._tf_lookup_timeout = Duration(
+            seconds=float(self.get_parameter("tf_lookup_timeout_sec").value)
+        )
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._publisher = self.create_publisher(
@@ -84,6 +90,7 @@ class VLAPerceptionBridgeNode(Node):
                 "map",
                 source_frame,
                 Time(seconds=stamp[0], nanoseconds=stamp[1]),
+                timeout=self._tf_lookup_timeout,
             )
         except TransformException as exc:
             self.get_logger().warning(
@@ -101,11 +108,14 @@ class VLAPerceptionBridgeNode(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = VLAPerceptionBridgeNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
