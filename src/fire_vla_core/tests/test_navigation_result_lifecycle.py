@@ -244,6 +244,22 @@ def test_failed_navigation_keeps_existing_retry_semantics():
     assert len(node.publishers["/vla/navigation_goal"].messages) == 2
 
 
+def test_aborted_navigation_is_not_redispatched_for_same_mission_target():
+    world, node, navigation, orchestrator = make_system()
+    action = orchestrator.decide_once().validation.action
+    publish_result(node, action.action_id, "ABORTED")
+
+    assert orchestrator.process_results(navigation) == 1
+    retry = orchestrator.decide_once()
+
+    assert world.current_action is None
+    assert world.last_action is action
+    assert world.last_action.status == ActionLifecycleStatus.ABORTED
+    assert retry.submission is None
+    assert retry.blocked_reason.startswith("DUPLICATE_ACTION_BLOCKED:")
+    assert len(node.publishers["/vla/navigation_goal"].messages) == 1
+
+
 class FakeNavigator:
     def __init__(self):
         self.cancel_calls = 0

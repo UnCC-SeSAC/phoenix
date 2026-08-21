@@ -120,7 +120,11 @@ class VLAOrchestrator:
                 semantic_key = self._semantic_action_keys.pop(result.action_id, None)
                 if (
                     semantic_key is not None
-                    and result.status != ActionResultStatus.SUCCEEDED
+                    and result.status
+                    not in {
+                        ActionResultStatus.SUCCEEDED,
+                        ActionResultStatus.ABORTED,
+                    }
                 ):
                     self._non_retryable_semantic_keys.discard(semantic_key)
         if physical_action_completed:
