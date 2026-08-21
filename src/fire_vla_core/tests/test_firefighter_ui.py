@@ -24,6 +24,7 @@ from fire_vla_core.ros.firefighter_ui_node import (
     StatusStore,
     create_mission_payload,
     normalize_mode,
+    normalize_rule_based_command,
     validate_server_config,
 )
 from fire_vla_core.status import VLAStatusTracker
@@ -133,6 +134,13 @@ def test_empty_mission_is_rejected():
         create_mission_payload("   ")
 
 
+def test_rule_based_command_is_limited_to_start_stop():
+    assert normalize_rule_based_command(" start ") == "START"
+    assert normalize_rule_based_command("STOP") == "STOP"
+    with pytest.raises(ValueError, match="START 또는 STOP"):
+        normalize_rule_based_command("인명을 찾아")
+
+
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.0.3", "example.com"])
 def test_non_loopback_host_is_rejected(host):
     with pytest.raises(ValueError, match="ui_host"):
@@ -232,10 +240,18 @@ def test_http_root_serves_required_v2_panels(http_server):
         "Semantic Map", "Situation Timeline", "Detected Objects",
         "Recent Result", "VLA Decision / Reason", "CONNECTED", "DISCONNECTED",
         "VLA Brain", "Rule-based", "modeSelector",
+        'data-rule-command="START"', 'data-rule-command="STOP"',
     ):
         assert text in html
     for excluded in ("cmd_vel", "NavigateToPose", "Pump", "motor control"):
         assert excluded not in html
+    for switching_guard in (
+        "requestedMode!==activeMode",
+        "render(rule?{}:{world_model:{}})",
+        "$('missionForm').hidden=rule",
+        "$('ruleControls').hidden=!rule",
+    ):
+        assert switching_guard in html
     for canonical_field in (
         "world.people", "world.fires", "world.current_action",
         "world.last_action", "decision.reason", "current.target_pose",
@@ -270,6 +286,21 @@ def test_status_api_selects_rule_based_snapshot(http_server):
     assert payload["detections"]["counts"] == {"person": 1, "fire": 0}
 
 
+def test_status_api_switches_vla_rule_vla_without_cross_mode_data(http_server):
+    server, _ = http_server
+    _, _, first_vla_body = request(server, "/api/status?mode=VLA")
+    _, _, rule_body = request(server, "/api/status?mode=RULE_BASED")
+    _, _, second_vla_body = request(server, "/api/status?mode=VLA")
+
+    first_vla = json.loads(first_vla_body)
+    rule = json.loads(rule_body)
+    second_vla = json.loads(second_vla_body)
+    assert first_vla == second_vla
+    assert "world_model" in first_vla and "mission" not in first_vla
+    assert rule["mode"] == "RULE_BASED"
+    assert "mission" in rule and "world_model" not in rule
+
+
 def test_status_api_rejects_unknown_mode(http_server):
     server, _ = http_server
     with pytest.raises(HTTPError) as error:
@@ -294,13 +325,46 @@ def test_mission_api_routes_rule_based_mode(http_server):
     status, _, body = request(
         server,
         "/api/mission",
-        body=json.dumps({"text": "START", "mode": "RULE_BASED"}),
+        body=json.dumps({"text": " start ", "mode": "RULE_BASED"}),
     )
     response = json.loads(body)
     assert status == 202
     assert len(missions) == 1
     assert response["text"] == "START"
     assert response["mode"] == "RULE_BASED"
+
+
+def test_mission_api_cross_routing_counts_are_isolated(http_server):
+    server, missions = http_server
+    request(
+        server, "/api/mission",
+        body=json.dumps({"text": "인명을 찾아", "mode": "VLA"}),
+    )
+    request(
+        server, "/api/mission",
+        body=json.dumps({"text": "START", "mode": "RULE_BASED"}),
+    )
+    request(
+        server, "/api/mission",
+        body=json.dumps({"text": "STOP", "mode": "RULE_BASED"}),
+    )
+
+    vla = [mission for mission in missions if mission.get("mode") is None]
+    rule = [mission for mission in missions if mission.get("mode") == "RULE_BASED"]
+    assert len(vla) == 1
+    assert [mission["text"] for mission in rule] == ["START", "STOP"]
+
+
+def test_mission_api_rejects_rule_based_free_text(http_server):
+    server, missions = http_server
+    with pytest.raises(HTTPError) as error:
+        request(
+            server,
+            "/api/mission",
+            body=json.dumps({"text": "인명을 찾아", "mode": "RULE_BASED"}),
+        )
+    assert error.value.code == 400
+    assert missions == []
 
 
 @pytest.mark.parametrize("body", ["not-json", "[]", '{"text":"  "}', '{"text":null}'])

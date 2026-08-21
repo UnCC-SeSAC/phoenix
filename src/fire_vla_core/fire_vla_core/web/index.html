@@ -32,7 +32,8 @@
     .vision-copy span { color:var(--muted); }
     #visionOverlays { position:absolute; inset:12px; z-index:2; display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; pointer-events:none; }
     .overlay-tag { padding:5px 8px; border:1px solid var(--accent); background:#40170dcc; color:#ffd8cc; font:700 11px/1 monospace; }
-    form { display:flex; gap:8px; }
+    form,.rule-controls { display:flex; gap:8px; }
+    [hidden] { display:none !important; }
     input,button { min-height:42px; border-radius:5px; border:1px solid var(--line); font:inherit; }
     input { flex:1; min-width:0; padding:0 12px; background:#080f18; color:var(--text); }
     button { padding:0 20px; background:var(--accent); border-color:var(--accent); color:white; font-weight:800; cursor:pointer; }
@@ -92,6 +93,10 @@
       <input id="missionInput" aria-label="Mission" placeholder="인명을 우선 확인해." required>
       <button type="submit">실행</button>
     </form>
+    <div id="ruleControls" class="rule-controls" hidden>
+      <button type="button" data-rule-command="START">START</button>
+      <button type="button" data-rule-command="STOP">STOP</button>
+    </div>
     <p id="missionResult" class="mission-note">VLA mission boundary</p>
     <p id="currentMission" class="secondary">current mission: -</p>
     <div class="status-grid">
@@ -152,10 +157,12 @@ function renderVLA(status){const world=status.world_model||{},robot=world.robot|
 function ruleWorld(status){const mission=status.mission||{},targets=status.detections?.targets||[],people=[],fires=[];let personIndex=0,fireIndex=0;for(const target of targets){const item={position:{x:target.x,y:target.y},confidence:target.confidence,state:target.type};if(String(target.type).startsWith('person'))people.push({...item,id:`person_${String(++personIndex).padStart(4,'0')}`});if(String(target.type).startsWith('fire'))fires.push({...item,id:`fire_${String(++fireIndex).padStart(4,'0')}`});}return{robot:{navigation_status:status.robot?.navigation_status},mission:{text:mission.last_command?.command},current_action:{action:mission.state,target:mission.target_type,target_pose:mission.current_target},people,fires};}
 function renderRuleBased(status){const mission=status.mission||{},robot=status.robot||{},exploration=status.exploration||{},suppression=status.suppression||{},last=mission.last_command||{},world=ruleWorld(status);$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`last command: ${dash(last.command)}`;$('robotState').textContent=dash(mission.state);$('robotPose').textContent=`battery: ${dash(robot.battery_raw)}`;$('actionName').textContent=dash(mission.target_type);$('actionTarget').textContent=`target: ${pose(mission.current_target)}`;$('decisionTitle').textContent=`EXPLORATION ${dash(exploration.status)}`;$('decisionReason').textContent=`Nav2: ${dash(robot.navigation_status)} · Suppression: ${dash(suppression.status)}`;$('validation').textContent=`NAV2 ${dash(robot.navigation_status)}`;$('submission').textContent=`SUPPRESSION ${dash(suppression.status)}`;$('resultAction').textContent=dash(last.command);$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`blocked: ${dash(status.blocked_reason)}`;renderVision(world);renderMap(world);renderObjects(world);addEvent(`rule:${mission.state}:${mission.target_type}:${status.timestamp}`,status.timestamp,`FSM ${dash(mission.state)} · target ${dash(mission.target_type)}`);}
 function render(status){if(activeMode==='RULE_BASED')renderRuleBased(status);else renderVLA(status);}
-function configureMode(){const rule=activeMode==='RULE_BASED';$('missionInput').placeholder=rule?'START 또는 STOP':'인명을 우선 확인해.';$('missionResult').textContent=rule?'Rule-based START/STOP boundary':'VLA mission boundary';$('actionLabel').textContent=rule?'FSM Target':'Current Action';$('decisionLabel').textContent=rule?'Exploration / Nav2 / Suppression':'VLA Decision / Reason';timelineEvents.splice(0);eventKeys.clear();renderTimeline();}
-async function refresh(){try{const response=await fetch(`/api/status?mode=${encodeURIComponent(activeMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();render(status);setConnection(Boolean(status.timestamp));}catch(_error){setConnection(false);}}
+function configureMode(){const rule=activeMode==='RULE_BASED';$('missionForm').hidden=rule;$('ruleControls').hidden=!rule;$('missionResult').textContent=rule?'Rule-based START/STOP boundary':'VLA mission boundary';$('actionLabel').textContent=rule?'FSM Target':'Current Action';$('decisionLabel').textContent=rule?'Exploration / Nav2 / Suppression':'VLA Decision / Reason';render(rule?{}:{world_model:{}});timelineEvents.splice(0);eventKeys.clear();renderTimeline();setConnection(false);}
+async function refresh(){const requestedMode=activeMode;try{const response=await fetch(`/api/status?mode=${encodeURIComponent(requestedMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();if(requestedMode!==activeMode)return;render(status);setConnection(Boolean(status.timestamp));}catch(_error){if(requestedMode===activeMode)setConnection(false);}}
+async function submitMission(text){const requestedMode=activeMode;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:requestedMode})});const data=await response.json();if(requestedMode!==activeMode)return;$('missionResult').textContent=response.ok?`전송됨: ${data.mission_id}`:`오류: ${data.error}`;if(response.ok&&requestedMode==='VLA')$('missionInput').value='';}catch(_error){if(requestedMode===activeMode)$('missionResult').textContent='오류: mission boundary에 연결할 수 없습니다.';}}
 $('modeSelector').addEventListener('change',event=>{activeMode=event.target.value;configureMode();refresh();});
-$('missionForm').addEventListener('submit',async event=>{event.preventDefault();const text=$('missionInput').value.trim();if(!text)return;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:activeMode})});const data=await response.json();$('missionResult').textContent=response.ok?`전송됨: ${data.mission_id}`:`오류: ${data.error}`;if(response.ok)$('missionInput').value='';}catch(_error){$('missionResult').textContent='오류: mission boundary에 연결할 수 없습니다.';}});
+$('missionForm').addEventListener('submit',event=>{event.preventDefault();const text=$('missionInput').value.trim();if(text&&activeMode==='VLA')submitMission(text);});
+for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
 configureMode();
 refresh();setInterval(refresh,1000);
 </script>

@@ -25,6 +25,7 @@ _ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 _VLA_MODE = "VLA"
 _RULE_BASED_MODE = "RULE_BASED"
 _ALLOWED_MODES = {_VLA_MODE, _RULE_BASED_MODE}
+_RULE_BASED_COMMANDS = {"START", "STOP"}
 
 
 def normalize_mode(value: str | None) -> str:
@@ -88,6 +89,15 @@ def create_mission_payload(text: str) -> dict[str, str]:
         "mission_id": f"mission_ui_{uuid.uuid4().hex[:12]}",
         "text": normalized,
     }
+
+
+def normalize_rule_based_command(text: str) -> str:
+    if not isinstance(text, str):
+        raise ValueError("Rule-based command는 문자열이어야 합니다.")
+    command = text.strip().upper()
+    if command not in _RULE_BASED_COMMANDS:
+        raise ValueError("Rule-based mode는 START 또는 STOP만 지원합니다.")
+    return command
 
 
 class FirefighterHTTPServer:
@@ -177,6 +187,8 @@ class FirefighterHTTPServer:
                     if not isinstance(text, str):
                         raise ValueError("Mission text는 문자열이어야 합니다.")
                     mode = normalize_mode(data.get("mode"))
+                    if mode == _RULE_BASED_MODE:
+                        text = normalize_rule_based_command(text)
                     mission = (
                         owner._submit_mission(text)
                         if mode == _VLA_MODE
