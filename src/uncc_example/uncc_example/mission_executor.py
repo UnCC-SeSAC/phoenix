@@ -1,3 +1,5 @@
+import functools
+
 import rclpy
 
 from rclpy.action import ActionClient
@@ -46,6 +48,9 @@ class MissionExecutor(Node):
 
         self._nav_goal_handle = None
         self._nav_goal_xy = None  # 지금 보내둔 goal 좌표 (x, y)
+        # goal 을 보낼 때마다 증가 — 취소된 이전 goal 의 뒤늦은 결과
+        # 콜백이 지금 goal 의 상태를 덮어쓰지 못하게 막는 용도.
+        self._nav_goal_token = 0
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
@@ -276,6 +281,8 @@ class MissionExecutor(Node):
         self._cancel_nav_goal()
 
         self._nav_goal_xy = target_xy
+        self._nav_goal_token += 1
+        token = self._nav_goal_token
 
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped
@@ -283,7 +290,9 @@ class MissionExecutor(Node):
         self._event_logger.info(f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})")
 
         send_future = self._nav_client.send_goal_async(goal)
-        send_future.add_done_callback(self._nav_goal_response)
+        send_future.add_done_callback(
+            functools.partial(self._nav_goal_response, token=token)
+        )
 
     def _cancel_nav_goal(self):
 
@@ -292,8 +301,15 @@ class MissionExecutor(Node):
             self._nav_goal_handle = None
 
         self._nav_goal_xy = None
+        # 취소만 하고 새 goal 을 안 보내는 경우(EXPLORING 진입)에도, 남아
+        # 있던 콜백이 stale 로 인식되도록 토큰을 올려둔다.
+        self._nav_goal_token += 1
 
-    def _nav_goal_response(self, future):
+    def _nav_goal_response(self, future, token):
+
+        if token != self._nav_goal_token:
+            # 이미 취소/대체된 goal 의 뒤늦은 응답 — 지금 상태를 건드리지 않는다.
+            return
 
         goal_handle = future.result()
 
@@ -305,9 +321,15 @@ class MissionExecutor(Node):
         self._nav_goal_handle = goal_handle
 
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._nav_goal_result)
+        result_future.add_done_callback(
+            functools.partial(self._nav_goal_result, token=token)
+        )
 
-    def _nav_goal_result(self, future):
+    def _nav_goal_result(self, future, token):
+
+        if token != self._nav_goal_token:
+            # 이미 취소/대체된 goal 의 뒤늦은 결과 — unreachable 로 오보하지 않는다.
+            return
 
         self._nav_goal_handle = None
 
