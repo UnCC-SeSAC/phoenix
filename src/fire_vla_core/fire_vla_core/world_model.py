@@ -163,8 +163,8 @@ class WorldModel:
 
         if result.source == ExecutionSource.SPRAY and result.target_id in self.fires:
             fire = self.fires[result.target_id]
+            fire.spray_count += 1
             if result.status == ActionResultStatus.SUCCEEDED:
-                fire.spray_count += 1
                 fire.state = FireState.PENDING_VERIFICATION
                 fire.verification_started_at = result.timestamp
                 fire.verification_valid_observations = 0

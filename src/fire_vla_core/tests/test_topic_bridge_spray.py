@@ -180,7 +180,7 @@ def test_non_success_terminal_result_keeps_fire_active(status):
 
     fire = world.fires["fire_0001"]
     assert fire.state == FireState.ACTIVE
-    assert fire.spray_count == 0
+    assert fire.spray_count == 1
     assert world.current_action is None
     assert world.last_action.status.value == status
 
