@@ -88,7 +88,7 @@ class FireSuppressionNode(Node):
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
             min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
-            initial_angle=SERVO_CENTER_ANGLE,
+            initial_angle=None,
         )
 
         self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)
