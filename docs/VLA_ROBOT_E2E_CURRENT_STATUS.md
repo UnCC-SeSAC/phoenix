@@ -48,6 +48,62 @@ import, ONNX validation workspace, Stub backend는 production 후보가 아니�
 - suppression bridge/action server: `ros2 launch uncc_example fire_extinguisher.launch.py`; starting it does not actuate Hardware, but an actual suppress goal still requires explicit operator approval
 - production thresholds: fire confidence `>= 0.60`, spray range `<= 0.80 m`
 
+### Suppression Hardware runtime contract
+
+The stationary Hardware PASS and the subsequent minimal graph reproduction used the
+container default user `root` and default working directory `/`. The working directory
+is part of the `lgpio` runtime contract because its notification FIFO is created as
+`/.lgd-nfy0`. Run the suppression layer with:
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
+source /home/ubuntu/ros2_ws/install/setup.bash
+source /ros2_ws/phoenix/install/setup.bash
+export MACHINE_TYPE=MentorPi_Mecanum need_compile=True DEPTH_CAMERA_TYPE=ascamera
+export ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=0 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export PYTHONPATH=/usr/local/lib/python3.10/dist-packages:${PYTHONPATH}:/home/ubuntu/.local/lib/python3.10/site-packages
+cd /
+ros2 launch uncc_example fire_extinguisher.launch.py
+```
+
+Expected readiness is one `/fire_suppression_node`, one `/vla_spray_bridge`, and
+exactly one `/suppress_fire` action server. Launching centers the Servo at startup;
+never send a suppression goal without explicit Hardware authorization.
+
+`AngularServo(initial_angle=90)` can cause a brief startup center alignment. Persistent
+Servo buzzing is different: possible causes include failure to reach the target angle,
+a mechanical stop, nozzle/hose load, or center/PWM calibration mismatch. If stopping
+the suppression node immediately stops the sound, do not classify it as a Pump command.
+
+### Ethernet to Wi-Fi transition contract
+
+Use `lemma@192.168.100.128` for fixed preparation. Before Robot motion, remove
+Ethernet and verify Wi-Fi connectivity. In the final Issue #89 attempt, the processes
+remained alive after cable removal, but Fast DDS participants retained the old
+interface and the VLA navigation client and suppression server disappeared from the
+ROS graph. Refreshing only the ROS daemon was insufficient.
+
+The verified transition recovery is:
+
+```text
+remove Ethernet
+→ verify Wi-Fi and current Qwen endpoint connectivity
+→ clean-stop only topic_bridge_vla.launch.py,
+  vla_navigation_bridge.launch.py, and fire_extinguisher.launch.py
+→ restart those three launch trees exactly once with Wi-Fi active
+→ refresh the ROS daemon
+→ require NavigateToPose server/client = 1 and /suppress_fire server/client = 1
+```
+
+Do not restart Base, Camera, YOLO, SLAM, or Nav2 for this interface transition. The
+remote-Qwen launch contract is `llm_backend:=remote_qwen`,
+`remote_qwen_endpoint:=http://<CURRENT_PC_IP>:8088/infer`, and
+`remote_qwen_timeout_sec:=10.0`. Resolve the endpoint from the current PC network;
+do not embed a historical address. During the verified transition, disabling power
+save on the active PC Wi-Fi interface restored three consecutive Pi-to-Qwen HTTP 200
+health checks.
+
 The default test flow is:
 
 ```text
@@ -389,6 +445,46 @@ The stationary test temporarily used fire confidence `>= 0.20` and spray range
 `<= 1.00 m` for one fixed-position E2E observation. That temporary parameter wiring
 was removed after the test. Both current production source and the Pi production
 install use the authoritative `>= 0.60` and `<= 0.80 m` values.
+
+### Final Full E2E attempt checkpoint (2026-08-22)
+
+The production stack reached readiness, transitioned from Ethernet to Wi-Fi using the
+procedure above, and reached the live fire/Qwen boundary:
+
+```text
+production readiness
+→ Ethernet removal and Wi-Fi runtime recovery
+→ fresh fire detection
+→ confidence 0.659 at about 2.14 m
+→ WorldModel accepted (robot_within_spray_range=false)
+→ mission delivery
+→ Qwen inference
+```
+
+The first fire observation was `0.582`, below the production confidence threshold;
+the threshold was not changed. Subsequent fresh observations reached `0.659`. A first
+one-shot mission CLI command printed locally but left WorldModel mission null and
+dispatched zero goals. After semantic non-delivery was confirmed, using
+`ros2 topic pub --once -w 1 /vla/mission ...` explicitly waited for its subscriber.
+
+The first inference attempt timed out because the Wi-Fi VLA launch omitted the verified
+`remote_qwen_timeout_sec:=10.0` argument. After restoring it, the next inference returned
+HTTP 503. The XPU probe still passed on Intel Arc B580, but Qwen shutdown reported
+`invalid device pointer` in `XPUCachingAllocator`. Treat this as the existing Intel XPU
+runtime-corruption family: do not repeatedly restart Qwen; clean reboot the PC, rerun
+the XPU probe, then start authoritative Qwen once and require HTTP 200.
+
+Physical dispatch never started in this attempt:
+
+- `NAV2_GOAL_COUNT = 0`
+- `ROBOT_MOTION = 0`
+- `SUPPRESSION_REQUEST = 0`
+- `PUMP = 0`
+- `FULL_E2E_RESULT = BLOCKED_AT_QWEN_XPU_RUNTIME`
+
+This is not a Nav2 or suppression failure. Resume after the PC clean reboot at XPU
+probe → authoritative Qwen clean start → existing Pi runtime inspection → the verified
+Ethernet/Wi-Fi transition and final Full E2E.
 
 The Pi checkpoint was inspected read-only after the test. Production source was on
 `add-map-camera` at `1d8a471`, with only the fire-status sensor-data QoS diff present
