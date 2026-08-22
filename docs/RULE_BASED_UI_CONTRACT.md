@@ -10,7 +10,14 @@ Firefighter UI는 `VLA Brain`과 `Rule-based` 두 mode를 같은 Browser shell�
 |---|---|---|
 | Browser read | `GET /api/status?mode=RULE_BASED` | Rule-based snapshot 조회 |
 | Browser write | `POST /api/mission` | `{"text":"START|STOP","mode":"RULE_BASED"}` |
+| Browser read | `GET /api/vision/stream` | MJPEG live camera (`multipart/x-mixed-replace`) |
+| Browser read | `GET /api/vision/detections` | 0..1 정규화 YOLO 박스 (mode 무관) |
+| Browser read | `GET /api/map` | occupancy grid 메타 + live robot pose |
+| Browser read | `GET /api/map.png` | occupancy grid raster (ETag = map version) |
 | ROS read | `/rule_based/status` | versioned JSON snapshot |
+| ROS read | `/ui/camera/compressed` | JPEG frame (`sensor_msgs/CompressedImage`) |
+| ROS read | `/ui/camera/overlay` | 정규화 박스 JSON (`std_msgs/String`) |
+| ROS read | `/map` | `nav_msgs/OccupancyGrid` (TRANSIENT_LOCAL) |
 | ROS write | `/rule_based/mission` | mission JSON envelope |
 
 `rule_based_ui_adapter`가 StateManager, Nav2, Frontier, detection, battery,
@@ -47,6 +54,63 @@ authoritative 2D `map` 좌표다.
 `current_target`은 `null`일 수 있다. detection category는 기존 StateManager
 contract의 `person_unconfirmed`, `person_confirmed`, `fire_unvisited`,
 `fire_failed`, `fire_extinguished`를 사용한다.
+
+## Vision / Map 경계
+
+영상과 검출 좌표는 **분리해서** 전달한다. MJPEG은 원본 프레임만 보내고 박스는
+Browser가 겹친다. Pi가 프레임마다 박스를 굽지 않아도 되고, `stream_max_width`로
+화질을 낮춰도 박스가 따라 틀어지지 않는다.
+
+이 경계는 mode와 무관하다 — 카메라와 지도는 하나뿐이므로 VLA ↔ Rule-based
+전환 시에도 유지된다.
+
+`GET /api/vision/detections`:
+
+```json
+{
+  "available": true,
+  "seq": 2936,
+  "stamp_sec": 1787317398,
+  "stamp_nanosec": 635246962,
+  "width": 640,
+  "height": 480,
+  "boxes": [
+    {"class_name": "fire", "confidence": 0.9,
+     "cx": 0.5, "cy": 0.5, "w": 0.125, "h": 0.1667}
+  ]
+}
+```
+
+`cx,cy,w,h`는 `/image_enhanced` 프레임 기준 **0..1 정규화** 값이며 화면 밖으로
+나간 박스는 잘려서 나온다. `available:false`면 `boxes`는 빈 배열이다.
+
+`GET /api/map`:
+
+```json
+{
+  "available": true,
+  "version": 11,
+  "width": 160, "height": 120,
+  "resolution": 0.05,
+  "origin": {"x": -4.0, "y": -3.0, "yaw": 0.0},
+  "render_step": 1,
+  "png_width": 160, "png_height": 120,
+  "frame_id": "map",
+  "stamp_sec": 1787313892, "stamp_nanosec": 367725577,
+  "robot": {"x": 1.76, "y": -0.95, "yaw": 1.077}
+}
+```
+
+★ PNG는 `render_step`배 축소돼 있다. world→pixel 변환은 `resolution`이 아니라
+**`resolution * render_step`**을 써야 한다. `render_step=1`인 작은 지도에서는
+드러나지 않고 큰 지도에서만 마커가 어긋난다.
+
+`robot`은 `map → base_footprint` TF에서 5 Hz로 읽으며, TF가 끊기면 `null`이 된다.
+마지막 pose를 유지하지 않는다 — 죽은 로봇이 살아 있는 것처럼 보이면 안 된다.
+지도가 없어도(`available:false`) `robot`은 제공된다.
+
+`version`은 1부터 증가하며 `/api/map.png`의 ETag로 쓰인다. 0은 "지도 없음"이라
+실제 지도와 겹치지 않는다.
 
 ## Mission control
 

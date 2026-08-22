@@ -59,12 +59,34 @@ YOLO node는 `/yolo_result` `vision_msgs/Detection2DArray`를 발행한다.
 | `/fire/detections` | `std_msgs/String` JSON | 원본 pixel, depth, score, source stamp |
 | `/fire/detections/status` | `std_msgs/String` JSON | 독립 health heartbeat |
 | `/vla/perception_observation` | `std_msgs/String` JSON | canonical person/fire `map(x,y)` |
+| `/ui/camera/compressed` | `sensor_msgs/CompressedImage` | 관제 UI용 JPEG frame |
+| `/ui/camera/overlay` | `std_msgs/String` JSON | 정규화 bbox와 class/score |
 
 VLA ROS Adapter가 rgb0 CameraInfo로 역투영하고 원본 source timestamp의 TF를 조회한다.
 `score`는 scaling 없이 `confidence`로 이름만 바꾼다. `depth_status=unknown`,
 invalid CameraInfo, non-finite depth·좌표, TF failure는 fail-closed한다.
 `fallback_bottom`, `fallback_below`, `fallback_ring`은 유효한 depth일 때
 provenance를 보존한다. 일반 obstacle avoidance는 Nav2 costmap 책임이다.
+
+## 관제 UI stream 경계                          ← 여기부터 새로 추가
+
+`ui_stream_node`는 `/image_enhanced`와 `/yolo_result`를 묶어 위 두 UI 경계를
+만든다. bbox는 `/image_enhanced` 픽셀 좌표이므로 화면에 띄우는 영상도 같은
+stream이어야 한다 — 원본 `rgb0`를 띄우면 전처리 축소 배율만큼 조용히 어긋난다.
+영상과 좌표를 분리해 보내므로 `stream_max_width`로 화질을 낮춰도 박스는 맞는다.
+
+SLAM `/map`은 `nav_msgs/OccupancyGrid`(TRANSIENT_LOCAL)로 구독해 palette PNG로
+굽고, robot pose는 `map → base_footprint` TF에서 읽는다. 둘 다 Pi의 HTTP
+boundary가 소유한다.
+
+★ 위 "raw image·OccupancyGrid·TF를 PC로 보내지 않는다"(28~30행)는 제약은
+**Qwen inference PC 경계**에 대한 것이다. 관제 UI의 MJPEG stream과 map raster는
+운영자용 별도 채널이며, LLM에는 여전히 compact WorldModel만 전달된다. 두 경계를
+혼동하면 "UI가 영상을 보내니 LLM 경계도 열렸다"는 잘못된 결론에 이른다.
+
+UI stream은 기본적으로 loopback에만 열린다. LAN 관제 PC에서 열려면
+`ui_allow_remote`를 명시해야 하며, 이때 Mission/START·STOP 제어 경계도 함께
+노출된다.
 
 ## Semantic WorldModel
 
