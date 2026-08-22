@@ -1,0 +1,240 @@
+# Issue #89 Next Session Handoff
+
+Date: 2026-08-22 KST
+
+이 문서는 새 Codex session이 workspace 복원이나 기존 PASS 항목 재진단 없이 Final
+Full E2E를 바로 이어가기 위한 authoritative handoff다. 먼저
+`docs/VLA_ROBOT_E2E_CURRENT_STATUS.md`와
+`docs/VLA_ROBOT_RUNTIME_TROUBLESHOOTING.md`를 읽고 이 절차를 따른다.
+
+## Git and isolated deployment checkpoint
+
+- branch: `integration/vla-robot-e2e`
+- runtime/model checkpoint before this handoff commit:
+  `fc44b2b4cdabce3db4f4675616f479b6b1e068d8`
+- session 시작 시 local HEAD와 `origin/integration/vla-robot-e2e`가 일치하는지만
+  확인한다. SHA가 docs-only 후속 commit이면 rebuild하지 않는다.
+- team/legacy workspace: `/ros2_ws/phoenix`
+- VLA production workspace: `/ros2_ws/phoenix_vla`
+- VLA production overlay: `/ros2_ws/phoenix_vla/install`
+- `/ros2_ws/phoenix`는 팀원 환경이며 VLA production overlay로 사용하지 않는다.
+- `/ros2_ws/phoenix_vla`는 `integration/vla-robot-e2e` 전용이다. 두 workspace 사이에서
+  branch를 전환하거나 `build/`, `install/`, `log/`를 공유하지 않는다.
+- build user: normal user `ubuntu`; `sudo colcon build` 금지.
+- suppression runtime의 root + `/` 실행 경계는 build user 계약과 별개다.
+
+Fresh isolated workspace verification:
+
+```text
+image_pipeline: PASS
+fire_vla_core: PASS
+uncc_example: PASS
+fire_vla_bringup: PASS
+vla_spray_bridge: PRESENT
+production prefix: /ros2_ws/phoenix_vla/install
+cross-workspace install: NONE
+root-owned build/install/log artifacts: 0
+```
+
+새 clone이나 rebuild를 반복하지 않는다. 현재 isolated workspace와 build/install/log를
+그대로 사용한다.
+
+## Production model artifacts
+
+두 파일은 Git-untracked production artifact이며 `ubuntu:ubuntu` 소유다. 기존 검증
+artifact와 byte-identical PASS했다. Git에 추가하지 않는다.
+
+```text
+HEF:
+/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef
+size: 11288576 bytes
+SHA-256: 67496fe3eefb710bef56ce9fd30af0102520c234f697f715ed0935a881e75aad
+
+Postprocess:
+/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx
+size: 106676 bytes
+SHA-256: b05022e4741258840e48143e7dc0f88cc676d11a842e6950623c59cf189f60b4
+```
+
+## Authoritative production and suppression contract
+
+```text
+Container: IntelPi
+Suppression run user: root
+Suppression working directory: /
+MACHINE_TYPE=MentorPi_Mecanum
+need_compile=True
+DEPTH_CAMERA_TYPE=ascamera
+ROS_DOMAIN_ID=42
+ROS_LOCALHOST_ONLY=0
+RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+```
+
+Setup order:
+
+```text
+/opt/ros/humble/setup.bash
+→ /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
+→ /home/ubuntu/ros2_ws/install/setup.bash
+→ /ros2_ws/phoenix_vla/install/setup.bash
+```
+
+Suppression Happy Path:
+
+```bash
+cd /
+ros2 launch uncc_example fire_extinguisher.launch.py
+```
+
+Expected readiness:
+
+```text
+fire_suppression_node: PRESENT
+vla_spray_bridge: PRESENT
+/suppress_fire action server: 1
+Pump active goal: 0
+```
+
+`AngularServo(initial_angle=90)`의 짧은 startup center alignment는 정상이다. 지속적인
+buzzing은 mechanical/PWM load 문제일 수 있으며 Pump activation으로 해석하지 않는다.
+
+## Ethernet to Wi-Fi transition
+
+고정 준비 단계는 Ethernet `lemma@192.168.100.128`을 사용한다. 실제 motion 직전에
+Ethernet을 제거한다. Fast DDS participant가 이전 Ethernet interface를 유지하면
+process는 살아 있어도 VLA navigation client와 suppression server가 graph에서 이탈할
+수 있고 ROS daemon refresh만으로는 부족하다.
+
+Verified transition:
+
+```text
+Ethernet 제거
+→ Wi-Fi connectivity와 현재 Qwen endpoint 확인
+→ topic_bridge_vla.launch.py, vla_navigation_bridge.launch.py,
+  fire_extinguisher.launch.py만 clean stop
+→ Wi-Fi가 활성화된 상태에서 세 launch를 정확히 1회 재시작
+→ ROS daemon refresh
+→ NavigateToPose server/client = 1
+→ /suppress_fire server/client = 1
+```
+
+이 transition 때문에 Base, Camera, YOLO, SLAM, Nav2를 재시작하지 않는다. Timeout 후
+side-effect launch를 blind retry하지 않고 process 존재 여부를 한 번 확인한다.
+
+## Qwen contract and recovery
+
+Authoritative VLA arguments:
+
+```text
+llm_backend:=remote_qwen
+remote_qwen_endpoint:=http://<CURRENT_PC_IP>:8088/infer
+remote_qwen_timeout_sec:=10.0
+```
+
+Endpoint는 고정 IP로 재사용하지 않고 현재 PC network에서 확인한다. Known XPU failure:
+
+```text
+Qwen HTTP 503
+UR_RESULT_ERROR_DEVICE_LOST
+UR_RESULT_ERROR_UNKNOWN
+invalid device pointer
+XPUCachingAllocator
+```
+
+Verified recovery:
+
+```text
+Qwen 반복 restart 금지
+→ PC clean reboot
+→ XPU probe PASS
+→ authoritative Qwen clean start exactly once
+→ Qwen HTTP 200
+```
+
+## Already verified PASS
+
+- LD19 `/scan_raw` and `map→odom` continuity
+- Camera, HEF/YOLO, depth observation, and WorldModel acceptance
+- Qwen/VLA `EXTINGUISH fire_0001`
+- `/vla/spray_command → vla_spray_bridge → /suppress_fire`
+- Servo execution, Pump execution, and Pump OFF
+- stationary suppression Hardware E2E with Robot motion 0
+- isolated VLA clone, focused build, package prefix, ownership, and model fingerprints
+
+Stationary terminal `ABORTED` was caused by no water being loaded, not by a suppression
+pipeline failure. Actual extinguish verification remains pending.
+
+## Last actual Full E2E position
+
+```text
+Production runtime readiness: PASS
+Ethernet → Wi-Fi runtime rebinding: PASS
+Qwen HTTP: 200
+NavigateToPose server: 1
+VLA navigation client: 1
+/suppress_fire server: 1
+vla_spray_bridge client: 1
+VLA/Perception: ACTIVE
+Fire detection: YES
+fresh confidence: 0.659
+WorldModel: ACCEPTED
+distance: about 2.14 m
+robot_within_spray_range: false
+```
+
+Mission delivery reached Qwen inference, then Intel XPU/Qwen runtime failed before
+physical dispatch:
+
+```text
+NAV2_GOAL_COUNT: 0
+ROBOT_MOTION: 0
+SUPPRESSION_REQUEST: 0
+PUMP: 0
+FIRST_REAL_FAILURE: Intel XPU / Qwen runtime stability
+```
+
+This is not a Nav2 or suppression failure. At end of day, all identified production
+launch/process groups were stopped; no new goal or actuator command was sent during
+shutdown. Physical fire-target OFF must still be confirmed by the operator.
+
+## Exact next-session start
+
+```text
+1. Read this handoff, current-status, and troubleshooting docs.
+2. Verify /ros2_ws/phoenix_vla branch/HEAD and the two artifact paths only.
+3. PC XPU probe.
+4. Authoritative Qwen clean start exactly once.
+5. Require Qwen HTTP 200.
+6. Authoritative production clean start using phoenix_vla overlay.
+7. Minimum readiness only.
+8. At PRE_MOTION_READY, remove Ethernet and place/clear the Robot safely.
+9. Apply the verified Wi-Fi participant rebinding procedure.
+10. Require minimum readiness, then request READY_FOR_FIRE_TARGET.
+11. Continue the Final Full E2E once.
+```
+
+Do not start with source analysis, workspace recreation, rebuild, or completed preflight
+diagnostics unless the SHA/artifacts changed or a direct failure points there.
+
+## Final Full E2E success criteria
+
+```text
+FIRE_DETECTED: YES
+WORLDMODEL_ACCEPTED: YES
+VLA_DECISION: EXTINGUISH
+
+NAV2_GOAL_COUNT: 1
+NAV2_RESULT: SUCCEEDED
+ROBOT_STOPPED: YES
+
+SUPPRESSION_REQUEST: 1
+SERVO: EXECUTED
+PUMP: EXECUTED
+PUMP_OFF: YES
+
+FIRE_AFTER_SUPPRESSION: NOT_DETECTED
+TERMINAL_RESULT: SUCCESS
+```
+
+Issue #89 remains OPEN until the actual Nav2 approach, safe stop, water suppression,
+flame disappearance, and terminal SUCCESS are all observed.

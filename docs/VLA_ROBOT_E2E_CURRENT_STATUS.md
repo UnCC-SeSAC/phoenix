@@ -48,6 +48,11 @@ VLA production source/build/install은 팀 workspace와 분리한다.
 - model binaries remain Git-untracked. The VLA copies were provisioned from the
   previously verified production artifacts and verified byte-identical; do not
   resolve or load them from the team workspace at runtime.
+- isolated VLA deployment verification (2026-08-22): focused builds for
+  `image_pipeline`, `fire_vla_core`, `uncc_example`, and `fire_vla_bringup` PASS;
+  `vla_spray_bridge` PRESENT; all four package prefixes resolve from
+  `/ros2_ws/phoenix_vla/install`; cross-workspace install NONE; root-owned
+  `build/`/`install/`/`log/` artifacts 0.
 - LiDAR: `LDLiDAR_LD19`, `/dev/ldlidar → /dev/ttyUSB0`, `230400`
 - Robot/LiDAR/SLAM/Nav2 base entrypoint:
   `ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false`
@@ -654,10 +659,11 @@ validation remains `NOT_RUN`.
 
 ## Next Milestone
 
-The post-test Pi runtime is partially terminated. Only `fire_status_service_node`,
-`vla_perception_bridge`, and the ROS 2 daemon were live when inspected; Camera, YOLO,
-SLAM, LD19, Nav2, VLA Orchestrator, Navigation Bridge, suppression, and spray bridge
-processes were terminated or defunct. Do not reuse or repair this partial runtime.
+At the 2026-08-22 end-of-day checkpoint, all identified production launch/process
+groups, including Base/Nav2/Camera, VLA/Navigation Bridge, and Suppression, were
+stopped. No Nav2 goal, suppression request, Pump command, or Servo suppression command
+was sent during shutdown. Start the authoritative production stack cleanly from the
+isolated VLA overlay next session; do not reuse historical defunct processes.
 
 For the next Issue #89 Hardware test, reuse the verified Camera/HEF/depth/map and
 stationary suppression results without benchmarking them again:
