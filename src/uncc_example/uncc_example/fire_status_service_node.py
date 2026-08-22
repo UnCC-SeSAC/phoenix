@@ -21,6 +21,7 @@ from collections import deque
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 
 from interfaces.srv import CheckFireStatus
 from std_msgs.msg import String
@@ -38,7 +39,10 @@ class FireStatusServiceNode(Node):
         self._history = deque()  # (timestamp, fire_detected: bool, score: float)
 
         self.create_subscription(
-            String, FIRE_DETECTION_TOPIC, self.on_detections, 10
+            String,
+            FIRE_DETECTION_TOPIC,
+            self.on_detections,
+            qos_profile_sensor_data,
         )
         self.create_service(
             CheckFireStatus, 'check_fire_status', self.on_check_fire_status
