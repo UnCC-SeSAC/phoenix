@@ -16,6 +16,15 @@ Issue #88/#89에서 실제 장비로 확인된 조합을 이 Robot의 단일 pro
 runtime으로 사용한다. `/tmp` 아래의 과거 isolated/test overlay, source-tree 직접
 import, ONNX validation workspace, Stub backend는 production 후보가 아니다.
 
+VLA production source/build/install은 팀 workspace와 분리한다.
+
+- VLA workspace: `/ros2_ws/phoenix_vla`
+- VLA branch: `integration/vla-robot-e2e`
+- VLA production overlay: `/ros2_ws/phoenix_vla/install`
+- team/rule-based workspace: `/ros2_ws/phoenix` (VLA production overlay로 사용 금지)
+- 두 workspace 사이에서 branch를 전환하거나 `build/`, `install/`, `log/`를 공유하지 않는다.
+- `colcon build`는 normal build user로 실행하며 `sudo colcon build`를 사용하지 않는다.
+
 - Robot: `MentorPi_Mecanum`
 - container: `IntelPi` (`ubuntu` user, ROS 2 Humble)
 - environment: `MACHINE_TYPE=MentorPi_Mecanum`, `need_compile=True`,
@@ -26,12 +35,15 @@ import, ONNX validation workspace, Stub backend는 production 후보가 아니�
   `/opt/ros/humble/setup.bash` →
   `/home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash` →
   `/home/ubuntu/ros2_ws/install/setup.bash` →
-  `/ros2_ws/phoenix/install/setup.bash`
-- authoritative overlay: `/ros2_ws/phoenix/install`
+  `/ros2_ws/phoenix_vla/install/setup.bash`
+- authoritative overlay: `/ros2_ws/phoenix_vla/install`
 - inference module:
-  `/ros2_ws/phoenix/install/image_pipeline/lib/python3.10/site-packages/image_pipeline/yolo.py`
-- HEF: `/ros2_ws/phoenix/Hailo/models/baseline_yolo26_neural_norm.hef`
-- postprocess: `/ros2_ws/phoenix/Hailo/models/best_sim_postprocess.onnx`
+  `/ros2_ws/phoenix_vla/install/image_pipeline/lib/python3.10/site-packages/image_pipeline/yolo.py`
+- HEF: `/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef`
+- postprocess: `/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx`
+- model binaries are untracked and are not supplied by a fresh clone. Provision and
+  verify both exact files in the VLA workspace before the next production launch;
+  do not silently resolve them from the team workspace.
 - LiDAR: `LDLiDAR_LD19`, `/dev/ldlidar → /dev/ttyUSB0`, `230400`
 - Robot/LiDAR/SLAM/Nav2 base entrypoint:
   `ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false`
@@ -59,7 +71,7 @@ is part of the `lgpio` runtime contract because its notification FIFO is created
 source /opt/ros/humble/setup.bash
 source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
 source /home/ubuntu/ros2_ws/install/setup.bash
-source /ros2_ws/phoenix/install/setup.bash
+source /ros2_ws/phoenix_vla/install/setup.bash
 export MACHINE_TYPE=MentorPi_Mecanum need_compile=True DEPTH_CAMERA_TYPE=ascamera
 export ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=0 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export PYTHONPATH=/usr/local/lib/python3.10/dist-packages:${PYTHONPATH}:/home/ubuntu/.local/lib/python3.10/site-packages
@@ -648,7 +660,8 @@ stationary suppression results without benchmarking them again:
 
 ```text
 authoritative production stack clean stop
-→ load the authoritative environment and /ros2_ws/phoenix/install
+→ verify the untracked production HEF/postprocess in /ros2_ws/phoenix_vla
+→ load the authoritative environment and /ros2_ws/phoenix_vla/install
 → start the authoritative production stack exactly once
 → minimum readiness
 → fire detection → Nav2 approach → safe stop
