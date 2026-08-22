@@ -3,7 +3,8 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Current verified code checkpoint: `59d0b91b179e4ef7e4f3626a37635f07d71af950`
+- Source checkpoint before this documentation update:
+  `eaa26d4156f70e3b48d7759bab1c838ca27c89ac`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
@@ -43,8 +44,9 @@ import, ONNX validation workspace, Stub backend는 production 후보가 아니�
 - depth fusion: `ros2 launch image_pipeline detection_3d.launch.py`
 - SLAM: `uncc_example/launch/slam_mapping.launch.py` (included by the entrypoint)
 - Nav2: `uncc_example/launch/nav2_online.launch.py` (included by the entrypoint)
-- VLA: `ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://10.42.0.211:8088/infer` plus `ros2 launch uncc_example vla_navigation_bridge.launch.py`
+- VLA: `ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<CURRENT_PC_IP>:8088/infer` plus `ros2 launch uncc_example vla_navigation_bridge.launch.py`. The last successful stationary suppression test used `192.168.100.124:8088`; confirm the current PC address instead of treating it as a fixed endpoint.
 - suppression bridge/action server: `ros2 launch uncc_example fire_extinguisher.launch.py`; starting it does not actuate Hardware, but an actual suppress goal still requires explicit operator approval
+- production thresholds: fire confidence `>= 0.60`, spray range `<= 0.80 m`
 
 The default test flow is:
 
@@ -63,6 +65,15 @@ lifecycle state, and absence of duplicate/stale processes are all clear. Otherwi
 restart only the affected production launch tree. OS reboot and Docker restart are
 not default recovery steps. A side-effect command that times out is never resent
 until process existence has been checked once.
+
+### Remote Qwen / Intel XPU recovery
+
+The verified PC uses Intel Arc B580 with the `xe` driver and `torch 2.7.1+xpu`. If
+Qwen returns HTTP 503 with `UR_RESULT_ERROR_DEVICE_LOST`, and a Qwen-only clean
+restart then reports `UR_RESULT_ERROR_UNKNOWN`, do not repeat server restarts. Run the
+XPU probe first; if device state remains unavailable, clean reboot the PC, require the
+XPU probe to pass, then start the authoritative Qwen server exactly once. This recovery
+restored HTTP 200 during the stationary suppression test.
 
 ## Architecture
 
@@ -346,14 +357,54 @@ Software fixes and validation:
 - Suppression FAILED: one permitted retry, then Validator blocks further commands at
   the existing two-attempt limit.
 
-Issue #89 remains OPEN because actual Nav2 terminal delivery/zero redispatch and actual
-Pump/Servo suppression have not yet been revalidated on Hardware.
+Stationary suppression Hardware E2E subsequently passed with no Robot motion:
+
+```text
+Camera → split HEF / YOLO → fire observation → WorldModel → Qwen
+→ VLA EXTINGUISH fire_0001 → /vla/spray_command → vla_spray_bridge
+→ /suppress_fire → Servo → Pump
+```
+
+- fire confidence: `0.659`
+- fire depth: `0.843 m`
+- WorldModel accepted: YES
+- VLA decision: `EXTINGUISH fire_0001`
+- suppression request: 1
+- Servo: EXECUTED
+- Pump: EXECUTED
+- Pump OFF: CONFIRMED
+- Robot motion: 0
+- `STATIONARY_SUPPRESSION_HW_E2E_PASS = YES`
+
+The terminal result was `ABORTED` because no extinguishing water was loaded during
+this stationary test. The Pump and Servo executed correctly, but the flame remained,
+so continued fire detection correctly prevented terminal success. This is not a
+suppression software/Hardware path failure:
+
+- Stationary suppression Hardware path: PASS
+- Actual extinguish verification: NOT YET VALIDATED
+- `ABORTED` cause: no extinguishing water was loaded during the test
+
+The stationary test temporarily used fire confidence `>= 0.20` and spray range
+`<= 1.00 m` for one fixed-position E2E observation. That temporary parameter wiring
+was removed after the test. Both current production source and the Pi production
+install use the authoritative `>= 0.60` and `<= 0.80 m` values.
+
+The Pi checkpoint was inspected read-only after the test. Production source was on
+`add-map-camera` at `1d8a471`, with only the fire-status sensor-data QoS diff present
+as a tracked modification. The suppression action, `vla_spray_bridge`, entry point,
+launch wiring, QoS implementation, and production VLA config were byte-identical to
+PC integration `eaa26d4`; no missing production source change needed importing.
+
+Issue #89 remains OPEN because the complete moving and actual-extinguish path has not
+yet been validated.
 
 ## Current Pending
 
-- Issue #89: one actual Nav2 goal with terminal result delivered to VLA and no repeat
-- Issue #89: actual safe stop followed by one production Pump/Servo suppression cycle
-- full fire perception → Qwen → Nav2 → suppression Hardware E2E result/UI confirmation
+- Issue #89: actual Nav2 approach and goal arrival
+- Issue #89: safe stop followed by suppression with water
+- Issue #89: actual flame removal and terminal `SUCCESS`
+- full fire perception → Nav2 → suppression → extinguished result/UI confirmation
 
 ## Rule-based driving integration — Issue A
 
@@ -491,17 +542,21 @@ validation remains `NOT_RUN`.
 
 ## Next Milestone
 
-Resume Issue #89 only after Pi SSH/Docker runtime continuity is restored. Reuse the
-verified Camera/HEF/depth/map and software lifecycle; do not benchmark them again:
+The post-test Pi runtime is partially terminated. Only `fire_status_service_node`,
+`vla_perception_bridge`, and the ROS 2 daemon were live when inspected; Camera, YOLO,
+SLAM, LD19, Nav2, VLA Orchestrator, Navigation Bridge, suppression, and spray bridge
+processes were terminated or defunct. Do not reuse or repair this partial runtime.
+
+For the next Issue #89 Hardware test, reuse the verified Camera/HEF/depth/map and
+stationary suppression results without benchmarking them again:
 
 ```text
-deploy 31fec79580a81093a59858da3d9339128cd89b51
-→ submit exactly one production NAVIGATE_TO fire_0001
-→ verify terminal result reaches VLA
-→ verify additional same-target goals = 0
-→ confirm safe stop
-→ only then run one production suppression cycle
-→ verify Pump/Servo result and Firefighter UI
+authoritative production stack clean stop
+→ load the authoritative environment and /ros2_ws/phoenix/install
+→ start the authoritative production stack exactly once
+→ minimum readiness
+→ fire detection → Nav2 approach → safe stop
+→ suppression with water → actual extinguish → terminal SUCCESS
 ```
 
 If Nav2 returns `ABORTED`, stop after confirming terminal delivery, zero redispatch,
@@ -549,11 +604,13 @@ PASS:
 - Issue #88 live person Camera/HEF/depth/map/WorldModel/UI Hardware E2E
 - LD19 `/scan_raw` recovery and continuous `map → odom`
 - Issue #89 actual fire HEF/depth/map/WorldModel and VLA decision
+- Issue #89 stationary Camera-to-Qwen-to-Servo/Pump Hardware E2E
+- Issue #89 Pump OFF confirmation with Robot motion 0
 - Issue #89 software navigation-success → suppression-success → status/UI lifecycle
 - Issue #89 bounded suppression failure retry at the existing two-attempt limit
 
 PENDING:
 
-- Issue #89 actual single Nav2 terminal result and same-target redispatch count zero
-- Issue #89 actual safe stop and production Pump/Servo suppression result
-- full fire perception-to-navigation-to-suppression Hardware E2E
+- Issue #89 actual Nav2 approach, goal arrival, and safe stop
+- Issue #89 suppression with water and actual flame extinguish verification
+- full fire perception-to-navigation-to-suppression terminal `SUCCESS`
