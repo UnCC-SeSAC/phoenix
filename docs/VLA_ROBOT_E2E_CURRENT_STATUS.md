@@ -3,11 +3,66 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Current verified code checkpoint: `31fec79580a81093a59858da3d9339128cd89b51`
+- Current verified code checkpoint: `59d0b91b179e4ef7e4f3626a37635f07d71af950`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
 - Model binaries and local runtime artifacts are not tracked.
+
+## Authoritative Production Hardware Test Runtime
+
+Issue #88/#89에서 실제 장비로 확인된 조합을 이 Robot의 단일 production test
+runtime으로 사용한다. `/tmp` 아래의 과거 isolated/test overlay, source-tree 직접
+import, ONNX validation workspace, Stub backend는 production 후보가 아니다.
+
+- Robot: `MentorPi_Mecanum`
+- container: `IntelPi` (`ubuntu` user, ROS 2 Humble)
+- environment: `MACHINE_TYPE=MentorPi_Mecanum`, `need_compile=True`,
+  `DEPTH_CAMERA_TYPE=ascamera`, `ROS_DOMAIN_ID=42`,
+  `ROS_LOCALHOST_ONLY=0`, `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`
+- Python runtime order after sourcing: prepend `/usr/local/lib/python3.10/dist-packages` to the existing `PYTHONPATH`, then append `/home/ubuntu/.local/lib/python3.10/site-packages`; this preserves ROS `rclpy`, selects NumPy 1.26.4, and keeps HailoRT available
+- underlay/source order:
+  `/opt/ros/humble/setup.bash` →
+  `/home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash` →
+  `/home/ubuntu/ros2_ws/install/setup.bash` →
+  `/ros2_ws/phoenix/install/setup.bash`
+- authoritative overlay: `/ros2_ws/phoenix/install`
+- inference module:
+  `/ros2_ws/phoenix/install/image_pipeline/lib/python3.10/site-packages/image_pipeline/yolo.py`
+- HEF: `/ros2_ws/phoenix/Hailo/models/baseline_yolo26_neural_norm.hef`
+- postprocess: `/ros2_ws/phoenix/Hailo/models/best_sim_postprocess.onnx`
+- LiDAR: `LDLiDAR_LD19`, `/dev/ldlidar → /dev/ttyUSB0`, `230400`
+- Robot/LiDAR/SLAM/Nav2 base entrypoint:
+  `ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false`
+- LiDAR authoritative launch:
+  `peripherals/launch/lidar.launch.py` → `include/ldlidar_LD19.launch.py`
+- Camera: `ros2 launch peripherals depth_camera.launch.py`
+- preprocessing: `ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough`
+- inference: `ros2 launch image_pipeline yolo.launch.py` with the HEF path above,
+  `backend:=hailo`, `layout:=end2end`, and `class_names:="['fire','person']"`
+- depth fusion: `ros2 launch image_pipeline detection_3d.launch.py`
+- SLAM: `uncc_example/launch/slam_mapping.launch.py` (included by the entrypoint)
+- Nav2: `uncc_example/launch/nav2_online.launch.py` (included by the entrypoint)
+- VLA: `ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://10.42.0.211:8088/infer` plus `ros2 launch uncc_example vla_navigation_bridge.launch.py`
+- suppression bridge/action server: `ros2 launch uncc_example fire_extinguisher.launch.py`; starting it does not actuate Hardware, but an actual suppress goal still requires explicit operator approval
+
+The default test flow is:
+
+```text
+known production launch tree clean stop
+→ verify no duplicate production process once
+→ source the authoritative environment
+→ start the authoritative launch sequence exactly once
+→ minimum readiness for the pending test
+→ test
+→ result
+```
+
+An existing runtime is reused only when its launch owner, production environment,
+lifecycle state, and absence of duplicate/stale processes are all clear. Otherwise
+restart only the affected production launch tree. OS reboot and Docker restart are
+not default recovery steps. A side-effect command that times out is never resent
+until process existence has been checked once.
 
 ## Architecture
 
