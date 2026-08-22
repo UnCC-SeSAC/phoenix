@@ -162,6 +162,7 @@ function renderObjects(world){const body=$('objects');const people=(world.people
 function svgElement(name,attrs={},text=''){const el=document.createElementNS(svgNS,name);for(const [key,value] of Object.entries(attrs))el.setAttribute(key,String(value));if(text)el.textContent=text;return el;}
 const visionState={streaming:false};
 function setVisionAvailable(available){
+  const stream=$('visionStream');
   $('visionFallback').hidden=available;
   stream.hidden=!available;
   if(available){
