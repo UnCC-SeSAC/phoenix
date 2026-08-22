@@ -40,10 +40,14 @@ VLA production source/build/install은 팀 workspace와 분리한다.
 - inference module:
   `/ros2_ws/phoenix_vla/install/image_pipeline/lib/python3.10/site-packages/image_pipeline/yolo.py`
 - HEF: `/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef`
+  - size: `11288576` bytes
+  - SHA-256: `67496fe3eefb710bef56ce9fd30af0102520c234f697f715ed0935a881e75aad`
 - postprocess: `/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx`
-- model binaries are untracked and are not supplied by a fresh clone. Provision and
-  verify both exact files in the VLA workspace before the next production launch;
-  do not silently resolve them from the team workspace.
+  - size: `106676` bytes
+  - SHA-256: `b05022e4741258840e48143e7dc0f88cc676d11a842e6950623c59cf189f60b4`
+- model binaries remain Git-untracked. The VLA copies were provisioned from the
+  previously verified production artifacts and verified byte-identical; do not
+  resolve or load them from the team workspace at runtime.
 - LiDAR: `LDLiDAR_LD19`, `/dev/ldlidar → /dev/ttyUSB0`, `230400`
 - Robot/LiDAR/SLAM/Nav2 base entrypoint:
   `ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false`
