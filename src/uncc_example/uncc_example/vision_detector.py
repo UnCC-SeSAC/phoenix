@@ -36,43 +36,35 @@ class VisionDetector(Node):
     """
 
     def __init__(self):
-        super().__init__('vision_detector')
+        super().__init__("vision_detector")
 
         self._event_logger = make_event_logger(self)
 
         # -----------------------------
         # Parameters
         # -----------------------------
-        self.declare_parameter('map_frame', 'map')
+        self.declare_parameter("map_frame", "map")
 
         # image_pipeline(fire_suppression 팀 vision 파이프라인)이
         # publish 하는 2D 감지 결과 (JSON, class_name/x/y/depth)
-        self.declare_parameter(
-            'detections_topic', '/fire/detections'
-        )
+        self.declare_parameter("detections_topic", "/fire/detections")
         # full_chain_dummy_test.launch.py 와 동일한 값 — 카메라 관련
         # 설정은 그 launch 파일 기준을 따른다.
-        self.declare_parameter(
-            'camera_info_topic', '/image_enhanced/camera_info'
-        )
+        self.declare_parameter("camera_info_topic", "/image_enhanced/camera_info")
 
         # 카메라가 로봇에 고정 장착이라 프레임 이름이 항상 같음 —
         # yolo_detector 가 매 메시지마다 안 보내고 여기서 고정값으로 둔다
-        self.declare_parameter(
-            'depth_frame_id', 'camera_depth_optical_frame'
-        )
+        self.declare_parameter("depth_frame_id", "camera_depth_optical_frame")
 
         # 이 클래스들만 fire/person 감지로 취급
-        self.declare_parameter('target_classes', ['fire', 'person'])
+        self.declare_parameter("target_classes", ["fire", "person"])
 
-        self.declare_parameter('tf_timeout_sec', 1.0)
+        self.declare_parameter("tf_timeout_sec", 0.5)
 
-        self.map_frame = self.get_parameter('map_frame').value
-        self.depth_frame_id = self.get_parameter('depth_frame_id').value
-        self.tf_timeout_sec = self.get_parameter('tf_timeout_sec').value
-        self.target_classes = set(
-            self.get_parameter('target_classes').value
-        )
+        self.map_frame = self.get_parameter("map_frame").value
+        self.depth_frame_id = self.get_parameter("depth_frame_id").value
+        self.tf_timeout_sec = self.get_parameter("tf_timeout_sec").value
+        self.target_classes = set(self.get_parameter("target_classes").value)
 
         self.latest_camera_info = None
         self.fx = None
@@ -84,7 +76,12 @@ class VisionDetector(Node):
         # TF (카메라 좌표 -> map 좌표 변환용)
         # -----------------------------
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # spin_thread=True 가 핵심이다. 이게 없으면 리스너가 메인 노드와
+        # 같은 단일 스레드 executor 를 쓰는데, 아래 transform() 이 블로킹
+        # 하는 동안 /tf 콜백이 못 돌아 buffer 가 영원히 안 채워진다.
+        # 즉 변환이 준비 안 된 경우 timeout 을 통째로 소진하고 반드시
+        # 실패하는 self-deadlock 이 된다 (감지 1건당 1초씩).
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
 
         # -----------------------------
         # Subscriptions
@@ -94,14 +91,14 @@ class VisionDetector(Node):
         # 기본(RELIABLE) QoS로 구독하면 QoS 불일치로 아예 매칭이 안 된다.
         self.create_subscription(
             CameraInfo,
-            self.get_parameter('camera_info_topic').value,
+            self.get_parameter("camera_info_topic").value,
             self.camera_info_callback,
             qos_profile_sensor_data,
         )
 
         self.create_subscription(
             String,
-            self.get_parameter('detections_topic').value,
+            self.get_parameter("detections_topic").value,
             self.detections_callback,
             qos_profile_sensor_data,
         )
@@ -111,7 +108,7 @@ class VisionDetector(Node):
         # -----------------------------
         self.detection_pub = self.create_publisher(
             String,
-            '/vision/detections',
+            "/vision/detections",
             10,
         )
 
@@ -141,22 +138,20 @@ class VisionDetector(Node):
         try:
             payload = json.loads(msg.data)
         except json.JSONDecodeError as e:
-            self.get_logger().warn(
-                f'Invalid detection JSON: {e}'
-            )
+            self.get_logger().warn(f"Invalid detection JSON: {e}")
             return
 
         # 프레임 전체가 같은 시각을 공유하므로 한 번만 변환해둔다.
         stamp = Time(
-            seconds=payload['stamp_sec'],
-            nanoseconds=payload['stamp_nanosec'],
+            seconds=payload["stamp_sec"],
+            nanoseconds=payload["stamp_nanosec"],
         ).to_msg()
 
         results = []
 
-        for detection in payload.get('detections', []):
+        for detection in payload.get("detections", []):
 
-            class_name = detection.get('class_name')
+            class_name = detection.get("class_name")
 
             if class_name not in self.target_classes:
                 continue
@@ -166,20 +161,22 @@ class VisionDetector(Node):
             if map_point is None:
                 continue
 
-            results.append({
-                'class': class_name,
-                'x': map_point.point.x,
-                'y': map_point.point.y,
-            })
+            results.append(
+                {
+                    "class": class_name,
+                    "x": map_point.point.x,
+                    "y": map_point.point.y,
+                }
+            )
 
         if results:
             self._publish_detections(results)
 
     def _compute_map_position(self, detection, stamp):
 
-        u = detection['x']
-        v = detection['y']
-        depth_m = detection['depth']
+        u = detection["x"]
+        v = detection["y"]
+        depth_m = detection["depth"]
 
         if depth_m is None:
             return None
@@ -200,20 +197,23 @@ class VisionDetector(Node):
 
         except TransformException as e:
             self.get_logger().warn(
-                f'TF transform failed: {e}'
+                f"TF transform failed: {e}",
+                throttle_duration_sec=2.0,  # 감지마다 찍혀 로그가 잠긴다
             )
             return None
 
     def _publish_detections(self, results):
 
         payload = {
-            'frame_id': self.map_frame,
-            'detections': results,
+            "frame_id": self.map_frame,
+            "detections": results,
         }
 
         msg = String()
         msg.data = json.dumps(payload)
 
+        classes = ", ".join(r["class"] for r in results)
+        self._event_logger.info(f"객체 인식: {classes}")
         self.detection_pub.publish(msg)
 
 
@@ -234,5 +234,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
