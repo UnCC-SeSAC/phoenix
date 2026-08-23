@@ -57,7 +57,7 @@ class StateManager(Node):
 
         # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
         # 불부터 끄고, 멀면 사람부터 확인한다
-        self.declare_parameter('fire_person_proximity_threshold', 2.0)
+        self.declare_parameter('fire_person_proximity_threshold', 0.2)
 
         self.declare_parameter('state_check_period', 0.2)
 
@@ -239,6 +239,11 @@ class StateManager(Node):
 
         self.found_targets.append(entry)
         self.target_queue.append(entry)
+
+        self._event_logger.info(
+            f"새 객체 인식: {target_type} "
+            f"({pose.position.x:.2f}, {pose.position.y:.2f})"
+        )
 
         return entry
 

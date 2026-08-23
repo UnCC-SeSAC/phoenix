@@ -1,5 +1,4 @@
 import json
-import math
 
 import numpy as np
 
@@ -48,6 +47,12 @@ class YoloDetector(Node):
         # depth 이미지가 mm(uint16)로 오는 경우의 스케일. float32(m)면 무시
         self.declare_parameter('depth_scale', 0.001)
         self.depth_scale = self.get_parameter('depth_scale').value
+
+        # 픽셀 1개만 읽으면 노이즈(flying pixel)에 그대로 흔들려서
+        # 같은 물체가 map 상에서 튀어 두 개로 잡히는 원인이 됨 —
+        # (u,v) 주변 이 크기(정사각형, px)의 패치에서 median을 쓴다
+        self.declare_parameter('depth_patch_size', 5)
+        self.depth_patch_size = self.get_parameter('depth_patch_size').value
 
         self.bridge = CvBridge()
         self.latest_depth = None
@@ -152,11 +157,22 @@ class YoloDetector(Node):
         if not (0 <= v < depth_h and 0 <= u < depth_w):
             return None
 
-        raw_depth = depth_image[v, u]
+        half = self.depth_patch_size // 2
+        patch = depth_image[
+            max(0, v - half):min(depth_h, v + half + 1),
+            max(0, u - half):min(depth_w, u + half + 1),
+        ].astype(np.float32)
 
-        if raw_depth == 0 or math.isnan(float(raw_depth)):
-            # 측정 실패 픽셀
+        valid = patch[(patch != 0) & ~np.isnan(patch)]
+
+        if valid.size == 0:
+            # 패치 전체가 측정 실패 픽셀
             return None
+
+        # 단일 픽셀 대신 median 사용 — 경계 등에서 튀는 픽셀
+        # 하나 때문에 depth 가 흔들려 같은 물체가 map 상에서
+        # 두 개로 갈라져 잡히는 걸 막는다
+        raw_depth = np.median(valid)
 
         if depth_image.dtype == np.uint16:
             depth_m = float(raw_depth) * self.depth_scale

@@ -214,8 +214,6 @@ class VisionDetector(Node):
         msg = String()
         msg.data = json.dumps(payload)
 
-        classes = ', '.join(r['class'] for r in results)
-        self._event_logger.info(f'객체 인식: {classes}')
         self.detection_pub.publish(msg)
 
 
