@@ -295,8 +295,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.20, 0.0, 1.0] # Velocity Smoother의 최대 속도 [X, Y, 회전] (m/s, m/s, rad/s)
-    min_velocity: [-0.20, -0.0, -1.0] # Velocity Smoother의 최소 속도 [X, Y, 회전] (m/s, m/s, rad/s)
+    max_velocity: [0.20, 0.0, 0.5] # Velocity Smoother의 최대 속도 [X, Y, 회전] (m/s, m/s, rad/s)
+    min_velocity: [0.0, -0.0, -0.5] # Velocity Smoother의 최소 속도 [X, Y, 회전] (m/s, m/s, rad/s)
     max_accel: [0.8, 0.0, 1.5] # Velocity Smoother의 최대 가속도 [X, Y, 회전] (m/s², m/s², rad/s²)
     max_decel: [-1.0, 0.0, -1.5] # Velocity Smoother의 최대 감속도 [X, Y, 회전] (m/s², m/s², rad/s²)
     odom_topic: odom
