@@ -93,6 +93,12 @@ class Controller(Node):
         self.declare_parameter('linear_correction_factor', 1.00)
         self.declare_parameter('linear_correction_factor_tank', 0.52)
         self.declare_parameter('angular_correction_factor', 1.00)
+        # Nav2 / velocity_smoother can emit floating-point residue when it
+        # intends to stop (for example -2.22e-16 rad/s).  This driver uses the
+        # accepted command as the odometry velocity too, so normalize that
+        # residue before it reaches either the motors or the integrator.
+        self.declare_parameter('cmd_vel_linear_deadband', 0.001)
+        self.declare_parameter('cmd_vel_angular_deadband', 0.001)
         self.declare_parameter('machine_type', os.environ['MACHINE_TYPE'])
         
         self.pub_odom_topic = self.get_parameter('pub_odom_topic').value
@@ -106,6 +112,10 @@ class Controller(Node):
         else:
             self.linear_factor = self.get_parameter('linear_correction_factor').value
         self.angular_factor = self.get_parameter('angular_correction_factor').value
+        self.cmd_vel_linear_deadband = self.get_parameter(
+            'cmd_vel_linear_deadband').value
+        self.cmd_vel_angular_deadband = self.get_parameter(
+            'cmd_vel_angular_deadband').value
 
         self.clock = self.get_clock() 
         if self.pub_odom_topic:
@@ -217,6 +227,17 @@ class Controller(Node):
     #             data.duration = 0.02
     #             self.servo_state_pub.publish(data)
     def cmd_vel_callback(self, msg):
+        # Do this at the common input point for both Nav2 (/cmd_vel) and the
+        # controller-specific command topic.  Do not suppress TF publication:
+        # TF must still report the current stationary pose.  By storing an
+        # exact zero here, the existing odom integration also stops exactly.
+        if abs(msg.linear.x) < self.cmd_vel_linear_deadband:
+            msg.linear.x = 0.0
+        if abs(msg.linear.y) < self.cmd_vel_linear_deadband:
+            msg.linear.y = 0.0
+        if abs(msg.angular.z) < self.cmd_vel_angular_deadband:
+            msg.angular.z = 0.0
+
         if self.machine_type == 'MentorPi_Mecanum':
             self.linear_x = msg.linear.x
             self.linear_y = msg.linear.y
@@ -290,4 +311,3 @@ def main():
     rclpy.spin(node)  
 if __name__ == "__main__":
     main()
-

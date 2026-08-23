@@ -301,5 +301,7 @@ velocity_smoother:
     max_decel: [-1.0, 0.0, -1.5] # Velocity Smoother의 최대 감속도 [X, Y, 회전] (m/s², m/s², rad/s²)
     odom_topic: odom
     odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
+    # Stop command residues (e.g. -2.22e-16 rad/s) before publishing /cmd_vel.
+    # The controller driver applies the same final safety deadband.
+    deadband_velocity: [0.001, 0.001, 0.001]
     velocity_timeout: 1.0
