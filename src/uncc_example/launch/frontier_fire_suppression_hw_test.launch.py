@@ -129,7 +129,7 @@ def generate_launch_description():
     # =========================================
 
     vision = TimerAction(
-        period=8.0,
+        period=13.0,
         actions=[
             Node(
                 package='image_pipeline',
@@ -194,7 +194,7 @@ def generate_launch_description():
     # =========================================
 
     frontier = TimerAction(
-        period=11.0,
+        period=9.0,
         actions=[
             Node(
                 package='frontier_exploration_ros2',
@@ -223,7 +223,7 @@ def generate_launch_description():
     )
 
     frontier_state_controller = TimerAction(
-        period=12.0,
+        period=10.0,
         actions=[
             Node(
                 package='uncc_example',
@@ -288,7 +288,7 @@ def generate_launch_description():
     )
 
     mission_stack = TimerAction(
-        period=13.0,
+        period=11.0,
         actions=[
             state_manager,
             mission_executor,
