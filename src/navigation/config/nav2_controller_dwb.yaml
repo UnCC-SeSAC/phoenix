@@ -33,7 +33,7 @@ controller_server:
       max_vel_x: 0.20 # 앞뒤 이동
       max_vel_y: 0.0 # 좌우 이동
       max_vel_theta: 0.5
-      min_speed_xy: 0.0
+      min_speed_xy: 0.01
       max_speed_xy: 0.20
       min_speed_theta: 0.10
       acc_lim_x: 0.8
