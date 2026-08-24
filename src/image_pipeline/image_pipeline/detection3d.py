@@ -36,7 +36,7 @@ from image_pipeline.depth import (
     sample_distance_detail,
     to_base_link,
 )
-from image_pipeline.detection_json import detection_entry
+from image_pipeline.detection_json import detection_entry, is_surrogate
 
 
 # 폴백 영역별 **권장 통계**. HANDOVER 8 "5-1 폴백 후보 정량 비교" 실측 기반.
@@ -59,7 +59,7 @@ class Detected3D:
     class_id: str
     score: float
     distance_m: float
-    region: str          # 거리를 얻은 영역 ("center"면 대상 자체)
+    region: str          # 거리를 얻은 영역 ("center"/"bottom"이면 대상 자체)
     valid_ratio: float
     is_fallback: bool    # ★ True면 대상이 아니라 **주변**을 잰 값입니다
 
@@ -89,13 +89,23 @@ class FrameResult:
 class SamplingParams:
     """거리 샘플링 설정. 전부 노드 파라미터로 노출됩니다.
 
+    ★ `region`의 기본은 "center"가 아니라 **"bottom"**입니다 (2026-08-24).
+    성냥불 위에서 뎁스가 안 나오는 것을 실기에서 확인했습니다 — 화염은 스스로
+    적외선을 내는 광원이라 박스 중앙이 구조적으로 무효입니다. `bottom`은 박스
+    **안**의 아래쪽이라 폴백이 아니라 여전히 대상 자체를 읽습니다.
+
     ★ `fallback_regions`는 **기본으로 비어 있습니다.**
     `below`/`ring`은 대상이 아니라 주변을 재고, 서로 **반대 방향으로** 편향되며
     (below 가깝게 / ring 멀게), 둘 다 `reason="ok"`에 유효비율 100%로 나옵니다.
     실측 없이 켜면 "확신에 찬 틀린 좌표"가 발행됩니다.
     근거 수치는 `HANDOVER.md` 8장 "5-1 폴백 후보 정량 비교".
+
+    ⚠ 화염이 박스를 **가득** 채우면 `bottom`도 막힙니다(`no_valid_pixels`).
+      그 장면에서 값이 나오는 건 `below`(max)뿐이므로, 화염이 박스를 얼마나
+      채우는지를 실기에서 보고 `fallback_regions=("below", "ring")`을 켤지
+      정하세요.
     """
-    region: str = "center"
+    region: str = "bottom"
     method: str = "median"
     central: float = 0.5
     band_ratio: float = 0.15
@@ -188,8 +198,13 @@ class PixelFrameResult:
         return sum(1 for e in self.entries if e["depth"] is None)
 
     def fallback_count(self) -> int:
-        return sum(1 for e in self.entries
-                   if e["depth_status"].startswith("fallback"))
+        """대상이 아니라 **주변**을 재서 얻은 거리의 개수 (`below`/`ring`).
+
+        ★ 접두사 `fallback`으로 세지 않습니다. `fallback_bottom`은 이름과 달리
+        박스 **안**이라 대상 자체를 읽고, 2026-08-24부터 기본 region이므로
+        접두사로 세면 매 프레임 전건이 잡힙니다.
+        """
+        return sum(1 for e in self.entries if is_surrogate(e["depth_status"]))
 
 
 def convert_frame_pixels(boxes, depth, k_color, k_depth, k_out=None,
