@@ -79,6 +79,9 @@ def launch_setup(context):
     else:
         controller_param = os.path.join(navigation_package_path, 'config/nav2_controller_dwb.yaml')
 
+    nav_to_pose_bt_xml = os.path.join(
+        navigation_package_path, 'behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml')
+
 
     load_composable_nodes = LoadComposableNodes(
         target_container=container_name_full,
@@ -111,7 +114,7 @@ def launch_setup(context):
                 package='nav2_bt_navigator',
                 plugin='nav2_bt_navigator::BtNavigator',
                 name='bt_navigator',
-                parameters=[params_file],
+                parameters=[params_file, {'default_nav_to_pose_bt_xml': nav_to_pose_bt_xml}],
                 remappings=remappings),
             ComposableNode(
                 package='nav2_waypoint_follower',
