@@ -53,7 +53,8 @@ class TestConvertFrame:
         d = res.detections[0]
         assert isinstance(d, Detected3D)
         assert d.xyz == pytest.approx(sc.expected_base_link(CAM_OFFSET), abs=1e-3)
-        assert (d.class_id, d.region, d.is_fallback) == ("fire", "center", False)
+        # 기본 region은 "bottom" — 화염 위 뎁스가 비어서 center를 내렸습니다
+        assert (d.class_id, d.region, d.is_fallback) == ("fire", "bottom", False)
         assert d.distance_m == pytest.approx(3.2, abs=1e-3)
 
     def test_uses_color_k_for_backprojection(self):
@@ -148,8 +149,54 @@ class TestFallbackPolicy:
             targets=[(box_d, self.TRUE)], hole_boxes=[box_d])
         return sc, depth
 
+    def _partial_flame_scene(self, hole_fraction=0.75):
+        """화염이 박스의 **위쪽만** 채운 장면 — 아래쪽에 대상이 남아 있습니다.
+
+        기본 region이 `center`에서 `bottom`으로 바뀐 이유가 이 장면입니다.
+        중앙은 불꽃이라 뎁스가 비고, 박스 아래쪽은 살아 있습니다.
+        """
+        sc = dummy_scene(floor_height_m=self.H, box_on_floor=True,
+                         distance_m=self.TRUE, background_m=3.8)
+        box_d = project_box(sc.box_color, sc.k_color, sc.k_depth)
+        x1, y1, x2, y2 = box_d
+        hole = (x1, y1, x2, y1 + (y2 - y1) * hole_fraction)
+        depth = synthetic_depth(
+            *sc.depth_size,
+            background_m=ground_plane_depth(*sc.depth_size, sc.k_depth, self.H, 3.8),
+            targets=[(box_d, self.TRUE)], hole_boxes=[hole])
+        return sc, depth
+
+    def test_기본_bottom은_화염_아래의_대상을_읽는다(self):
+        """★ 2026-08-24 실기 확인: 성냥불 위에서 뎁스가 안 나옵니다.
+
+        `center`였다면 불꽃 한가운데를 재서 검출이 통째로 버려집니다.
+        `bottom`은 박스 **안**의 아래쪽이라 폴백이 아니라 대상 자체를 읽습니다.
+        """
+        sc, depth = self._partial_flame_scene()
+        res = convert_frame([(sc.box_color, "fire", 0.9)], depth,
+                            sc.k_color, sc.k_depth, _tf())
+
+        assert len(res.detections) == 1 and not res.dropped
+        d = res.detections[0]
+        assert d.region == "bottom"
+        assert d.is_fallback is False, "박스 안이므로 폴백이 아닙니다"
+        assert d.distance_m == pytest.approx(self.TRUE, abs=1e-3)
+
+    def test_center였다면_같은_장면에서_버려진다(self):
+        """바뀐 기본값이 실제로 무엇을 구했는지 대조군으로 못 박습니다."""
+        sc, depth = self._partial_flame_scene()
+        p = SamplingParams(region="center")
+        res = convert_frame([(sc.box_color, "fire", 0.9)], depth,
+                            sc.k_color, sc.k_depth, _tf(), p)
+        assert res.detections == []
+        assert res.dropped[0].reason == "no_valid_pixels"
+
     def test_fallback_is_off_by_default(self):
-        """★ 기본값으로는 폴백이 안 돕니다. 실측 전에 켜면 위험합니다."""
+        """★ 기본값으로는 폴백이 안 돕니다. 실측 전에 켜면 위험합니다.
+
+        화염이 박스를 **가득** 채우면 `bottom`(박스 안)도 막힙니다. 이때
+        값이 나오는 건 `below`뿐이고, 그건 명시적으로 켜야 합니다.
+        """
         sc, depth = self._flame_scene()
         res = convert_frame([(sc.box_color, "fire", 0.9)], depth,
                             sc.k_color, sc.k_depth, _tf())
@@ -182,7 +229,7 @@ class TestFallbackPolicy:
         res = convert_frame([(sc.box_color, "fire", 0.9)], sc.depth_image(),
                             sc.k_color, sc.k_depth, _tf(), p)
         assert res.detections[0].is_fallback is False
-        assert res.detections[0].region == "center"
+        assert res.detections[0].region == "bottom"
 
     def test_fallback_distance_is_biased_not_exact(self):
         """★ 폴백은 값이 나와도 대상 거리가 아닙니다. 오차를 기록해 둡니다."""

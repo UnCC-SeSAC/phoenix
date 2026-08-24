@@ -52,6 +52,24 @@ _REGION_STATUS = {
     "ring": STATUS_RING,
 }
 
+# ★ "대상을 쟀는가" vs "주변을 대신 쟀는가"의 구분. 문자열 접두사(`fallback`)로
+#   판단하면 안 됩니다 — `fallback_bottom`은 이름과 달리 **박스 안**이라 대상
+#   자체를 읽습니다(합성 장면 실측 오차 0.000m). 2026-08-24에 노드 기본 region이
+#   `bottom`이 되면서 이 구분이 실제로 중요해졌습니다: 접두사로 거르면
+#   `publish_fallback=false`일 때 **모든 검출의 거리가 지워집니다.**
+#   상태 문자열 자체는 메인과의 계약이라 그대로 둡니다.
+ON_TARGET_STATUSES = (STATUS_OK, STATUS_BOTTOM)
+SURROGATE_STATUSES = (STATUS_BELOW, STATUS_RING)
+
+
+def is_surrogate(status: str) -> bool:
+    """대상이 아니라 **주변**을 재서 얻은 거리인가.
+
+    `below`(접지점, 가깝게 편향) / `ring`(주변, 멀게 편향)만 True입니다.
+    편향 실측치는 `HANDOVER.md` 8장.
+    """
+    return status in SURROGATE_STATUSES
+
 # 거리는 mm 자리까지. 스테레오 오차가 cm 단위라 그 아래는 의미가 없고,
 # 반올림하지 않으면 부동소수 잔재(2.0000000000000004)가 그대로 전송됩니다.
 _DEPTH_DIGITS = 3

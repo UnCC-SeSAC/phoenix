@@ -63,6 +63,7 @@ from image_pipeline.detection_json import (
     build_heartbeat,
     build_payload,
     heartbeat_state,
+    is_surrogate,
     stamp_age_sec,
     to_json,
 )
@@ -207,7 +208,16 @@ class Detection3DNode(Node):
         self.declare_parameter("qos_depth", 30)
 
         # 거리 샘플링 (depth.sample_distance_detail)
-        self.declare_parameter("region", "center")
+        # ★ 기본이 "center"가 아니라 "bottom"입니다 (2026-08-24 실측 반영).
+        #   성냥불 위에서 뎁스가 안 나오는 것을 실기에서 확인했습니다 — 지시서 5-1이
+        #   경고한 상황이 실제로 일어납니다. 화염은 스스로 적외선을 내는 광원이라
+        #   박스 중앙(=불꽃)은 구조적으로 무효입니다. "center"로 두면 화재 검출마다
+        #   `no_valid_pixels`로 버려집니다.
+        #   "bottom"은 박스 **안**의 아래쪽이라 여전히 대상 자체를 읽습니다
+        #   (합성 장면 실측 오차 0.000m, HANDOVER 8장).
+        #   ⚠ 단 화염이 박스를 **가득** 채우면 bottom도 막힙니다. 그때 살아남는 건
+        #     `below`(max)뿐이라 폴백을 켜야 합니다 — fallback_regions 참고.
+        self.declare_parameter("region", "bottom")
         self.declare_parameter("method", "median")
         self.declare_parameter("central", 0.5)
         self.declare_parameter("band_ratio", 0.15)
@@ -344,8 +354,10 @@ class Detection3DNode(Node):
 
         entries = [self._filtered(e) for e in result.entries]
         self._n_unknown += sum(1 for e in entries if e["depth"] is None)
+        # 대상이 아니라 주변을 잰 것만 셉니다. `fallback_bottom`은 박스 안이라
+        # 제외 — 기본값이라 세면 매 프레임 전건이 잡혀 로그가 무의미해집니다.
         self._n_fallback += sum(1 for e in entries
-                                if e["depth_status"].startswith("fallback"))
+                                if is_surrogate(e["depth_status"]))
 
         if entries or self.publish_empty:
             msg = String()
@@ -366,8 +378,13 @@ class Detection3DNode(Node):
 
         ★ 거리만 지우고 **검출은 남깁니다.** 빼버리면 메인은 "불이 보였다"는
         사실조차 모릅니다.
+
+        ★ 여기서 "폴백"은 **주변을 대신 잰 것**(`below`/`ring`)만입니다.
+        `fallback_bottom`은 이름과 달리 박스 **안**이라 대상 자체를 읽으므로
+        거르지 않습니다 — 기본 region이 `bottom`이라, 접두사로 걸렀다면
+        `publish_fallback=false`가 모든 거리를 지워버립니다.
         """
-        if self.publish_fallback or not entry["depth_status"].startswith("fallback"):
+        if self.publish_fallback or not is_surrogate(entry["depth_status"]):
             return entry
         out = dict(entry)
         out["depth"] = None
