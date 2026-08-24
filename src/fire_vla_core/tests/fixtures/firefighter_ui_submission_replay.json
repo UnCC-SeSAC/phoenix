@@ -1,0 +1,91 @@
+{
+  "timestamp": "2026-08-23T09:00:00+09:00",
+  "world_model": {
+    "mission": {
+      "id": "mission_mock_replay_submission",
+      "text": "Assess the situation and prioritize human safety.",
+      "status": "ASSESSED"
+    },
+    "robot": {
+      "pose": {"x": 2.2, "y": 0.3, "yaw": 0.0},
+      "navigation_status": "REPLAY READY"
+    },
+    "people": [
+      {
+        "id": "person_1",
+        "position": {"x": 0.70, "y": 0.00, "yaw": 0.0},
+        "confidence": 0.90,
+        "state": "DETECTED"
+      }
+    ],
+    "fires": [
+      {
+        "id": "fire_1",
+        "position": {"x": 1.00, "y": 0.00, "yaw": 0.0},
+        "confidence": 0.84,
+        "state": "DETECTED",
+        "size": "SMALL"
+      },
+      {
+        "id": "fire_2",
+        "position": {"x": -1.00, "y": 0.00, "yaw": 0.0},
+        "confidence": 0.78,
+        "state": "DETECTED",
+        "size": "SMALL"
+      }
+    ],
+    "current_action": {
+      "action": "PLAN GENERATED",
+      "target": null,
+      "status": "READY",
+      "reason": "Nearest visible hazard prioritized for the proposed response plan."
+    },
+    "last_action": {
+      "action": "PLAN GENERATED",
+      "target": null,
+      "status": "READY",
+      "detail": "Recorded detections reviewed; no physical action shown."
+    },
+    "perception_ready": true
+  },
+  "decision": {
+    "action": "PLAN GENERATED",
+    "target": null,
+    "reason": "fire_1 appears closest to person_1 in the recorded scene."
+  },
+  "validation": {"approved": true, "reason": "mock/replay fixture"},
+  "submission": {"status": "MOCK_REPLAY", "detail": "no hardware dispatch"},
+  "blocked_reason": "MOCK_REPLAY_ONLY",
+  "presentation": {
+    "mock_replay": true,
+    "mission_input": "Assess the situation and prioritize human safety.",
+    "recorded_video": true,
+    "hide_action_detail": true,
+    "hide_robot_marker": true,
+    "decision_summary": "fire_1   HIGH PRIORITY\n         Visually nearest to person_1\nfire_2   SECONDARY\n         More distant from person_1",
+    "decision_reason": "REASON\nfire_1 appears closest to person_1 in the recorded scene\nand is prioritized in the generated mock plan.",
+    "relationships": [
+      {"from": "person_1", "to": "fire_1", "label": "VISUALLY NEAREST"}
+    ],
+    "plan": [
+      "Assess risk to person_1",
+      "Suppress fire_1 first",
+      "Reassess fire_2"
+    ],
+    "timeline": [
+      {"time": "01", "title": "SITUATION", "detail": "person_1 · fire_1 · fire_2 detected"},
+      {"time": "02", "title": "RISK ANALYSIS", "detail": "fire_1 appears nearest to person_1"},
+      {"time": "03", "title": "VISIBILITY CHANGE", "detail": "Detections temporarily leave view during camera motion"},
+      {"time": "04", "title": "RE-DETECTION", "detail": "person and fire labels are reacquired"},
+      {"time": "05", "title": "VLA PLAN", "detail": "Prioritize fire_1 → Reassess fire_2"}
+    ],
+    "result": {
+      "title": "SCENE ASSESSED",
+            "items": [
+        "person and two fire detections observed",
+        "detections reacquired after camera movement",
+        "response plan generated; no HW action shown"
+      ]
+    }
+  }
+}

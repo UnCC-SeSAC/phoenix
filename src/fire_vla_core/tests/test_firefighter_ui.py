@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -257,6 +258,47 @@ def test_http_root_serves_required_v2_panels(http_server):
         "world.last_action", "decision.reason", "current.target_pose",
     ):
         assert canonical_field in html
+
+
+def test_submission_replay_fixture_is_explicit_and_renderable(http_server):
+    fixture_path = (
+        Path(__file__).parent / "fixtures" /
+        "firefighter_ui_submission_replay.json"
+    )
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    presentation = payload["presentation"]
+
+    assert presentation["mock_replay"] is True
+    assert presentation["recorded_video"] is True
+    assert payload["world_model"]["mission"]["text"] == (
+        "Assess the situation and prioritize human safety."
+    )
+    assert [item["id"] for item in payload["world_model"]["people"]] == [
+        "person_1"
+    ]
+    assert [item["id"] for item in payload["world_model"]["fires"]] == [
+        "fire_1", "fire_2"
+    ]
+    assert len(presentation["timeline"]) == 5
+    assert presentation["result"]["title"] == "SCENE ASSESSED"
+
+    server, _ = http_server
+    status, _, body = request(server, "/")
+    html = body.decode("utf-8")
+    assert status == 200
+    for marker in (
+        "replayBadge", "visionVideo", "generatedPlan", "resultChecklist",
+        "renderReplayTimeline", "presentation.relationships",
+        "VLA PLAN GENERATED",
+    ):
+        assert marker in html
+
+    status, content_type, body = request(
+        server, "/media/fire_person_detection_result.mp4"
+    )
+    assert status == 200
+    assert content_type == "video/mp4"
+    assert body[4:8] == b"ftyp"
 
 
 def test_status_api_returns_canonical_status(http_server):

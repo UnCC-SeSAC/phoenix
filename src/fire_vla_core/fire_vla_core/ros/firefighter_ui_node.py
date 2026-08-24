@@ -116,6 +116,9 @@ class FirefighterHTTPServer:
         self._index_html = index_html or (
             files("fire_vla_core.web").joinpath("index.html").read_bytes()
         )
+        self._recorded_video = files("fire_vla_core.web").joinpath(
+            "fire_person_detection_result.mp4"
+        ).read_bytes()
         handler = self._handler_type()
         self._server = ThreadingHTTPServer((host, port), handler)
         self._thread: threading.Thread | None = None
@@ -153,6 +156,11 @@ class FirefighterHTTPServer:
                         HTTPStatus.OK,
                         owner._index_html,
                         "text/html; charset=utf-8",
+                    )
+                    return
+                if parsed.path == "/media/fire_person_detection_result.mp4":
+                    self._send_bytes(
+                        HTTPStatus.OK, owner._recorded_video, "video/mp4"
                     )
                     return
                 if parsed.path == "/api/status":
