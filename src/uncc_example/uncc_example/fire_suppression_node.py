@@ -8,8 +8,8 @@
 - YOLO 상태는 fire_status_service_node가 노출하는 check_fire_status
   서비스를 통해 확인한다.
 - 펌프(GPIO13)/서보(GPIO18)는 라즈베리파이 GPIO를 직접 제어한다.
-- 분사 후 재시도 대기 구간에서는 서보 PWM 신호를 detach()로 끊어서
-  떨림/웅- 소음을 없앤다 (테스트 스크립트에서 검증된 패턴 반영).
+- 시작 및 분사 후 재시도 대기 구간에서는 서보 PWM 신호를 detach()로
+  끊어서 의도하지 않은 움직임과 떨림/웅- 소음을 없앤다.
 - 스윕 자체는 EMA 스무딩/가변속 없이 min/max 각도를 단순 왕복하는
   방식으로 단순화함 (저가형 서보에서는 정밀 스무딩 효과가 미미했음).
 
@@ -85,7 +85,9 @@ class FireSuppressionNode(Node):
         self.servo = AngularServo(
             SERVO_PIN, min_angle=0, max_angle=180,
             min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
-            initial_angle=SERVO_CENTER_ANGLE,
+            # 대기 중에는 PWM을 출력하지 않는다. 실제 suppression goal에서
+            # angle을 지정하면 gpiozero가 자동으로 PWM을 다시 활성화한다.
+            initial_angle=None,
         )
 
         self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)

@@ -89,13 +89,13 @@ ros2 launch uncc_example fire_extinguisher.launch.py
 ```
 
 Expected readiness is one `/fire_suppression_node`, one `/vla_spray_bridge`, and
-exactly one `/suppress_fire` action server. Launching centers the Servo at startup;
-never send a suppression goal without explicit Hardware authorization.
-
-`AngularServo(initial_angle=90)` can cause a brief startup center alignment. Persistent
-Servo buzzing is different: possible causes include failure to reach the target angle,
-a mechanical stop, nozzle/hose load, or center/PWM calibration mismatch. If stopping
-the suppression node immediately stops the sound, do not classify it as a Pump command.
+exactly one `/suppress_fire` action server. The Servo starts detached
+(`AngularServo(initial_angle=None)`), so launch readiness must not move or continuously
+energize it. An authorized suppression goal re-enables Servo PWM through the first angle
+command; completion returns it to center and detaches it again. Never send a suppression
+goal without explicit Hardware authorization. Persistent buzzing during an authorized
+movement can indicate a mechanical stop, nozzle/hose load, or center/PWM calibration
+mismatch; it is not by itself evidence of a Pump command.
 
 ### Ethernet to Wi-Fi transition contract
 
@@ -733,3 +733,35 @@ PENDING:
 - Issue #89 actual Nav2 approach, goal arrival, and safe stop
 - Issue #89 suppression with water and actual flame extinguish verification
 - full fire perception-to-navigation-to-suppression terminal `SUCCESS`
+
+## Issue #89 Actual Full E2E Update (2026-08-24)
+
+Fresh fire-only Hardware run에서 다음 경로를 실제로 통과했다.
+
+```text
+Fresh fire/WorldModel/Qwen: PASS
+NAVIGATE_TO fire / Nav2 result: PASS / SUCCEEDED
+Robot stop: PASS
+EXTINGUISH / Servo / Pump / Pump OFF: PASS
+Physical flame extinction: FAIL
+Terminal result: ABORTED
+```
+
+Nav2는 fire target 약 `(0.79, 1.30)`으로 실제 주행해 robot pose 약
+`(0.58, 1.22)`에서 정지했다. 그러나 물줄기가 실제 화염을 빗나가 사용자가
+수동 소화했다. 현재 `FIRST_REAL_FAILURE`는 일반 SLAM/Nav2 실패가 아니라 fire
+자체 좌표를 goal로 사용하는 접근 pose와 nozzle spray yaw/alignment의 물리적
+불일치다. 검증된 stand-off/yaw recovery는 아직 없다.
+
+운영 중 확인한 사항:
+
+- 점화 중 operator가 person으로 수용되지 않도록 VLA를 끈 채 점화하고 10초 후
+  화각/주행 경로 이탈을 확인한 뒤 VLA와 Navigation Bridge를 함께 fresh-start한다.
+- VLA만 restart하면 `action_0001`이 기존 Navigation Bridge cache와 충돌한다.
+  두 launch tree 동시 restart 후 실제 fire Nav2 goal과 motion을 확인했다.
+- Production Qwen의 실제 mission decision은 수초~수십 초가 걸렸으며 테스트
+  전용 지연으로 간주하지 않는다.
+
+Final run rosbag:
+`/ros2_ws/phoenix_vla/rosbags/issue89_final_fireonly3_20260824_2045`
+(29.2 MiB, 9,388 messages; navigation goal/result 1/1, spray command/result 1/1).

@@ -238,3 +238,39 @@ TERMINAL_RESULT: SUCCESS
 
 Issue #89 remains OPEN until the actual Nav2 approach, safe stop, water suppression,
 flame disappearance, and terminal SUCCESS are all observed.
+
+## 2026-08-24 latest Hardware checkpoint
+
+PC clean reboot 후 XPU probe, authoritative Qwen clean start, health/inference HTTP
+200을 확인했다. Fresh fire-only run에서
+Qwen→`NAVIGATE_TO fire_0006`→Nav2 실제 주행→`SUCCEEDED`→robot stop→
+`EXTINGUISH`→Servo/Pump→Pump OFF까지 실행됐다. 물줄기가 화염을 빗나가 실제
+소화는 실패했고 terminal result는 `ABORTED`다.
+
+```text
+Latest valid bag:
+/ros2_ws/phoenix_vla/rosbags/issue89_final_fireonly3_20260824_2045
+Bag size: 29.2 MiB
+Messages: 9,388
+navigation goal/result: 1 / 1
+spray command/result: 1 / 1
+cmd_vel: 182
+```
+
+다음 작업은 Hardware blind retry가 아니라 fire stand-off approach pose와 spray
+yaw/nozzle alignment의 불일치를 해결하는 것이다. Nav2는 주어진 fire goal을 실제로
+수행했으므로 일반 SLAM/Nav2 실패로 분류하지 않는다.
+
+Operational recovery:
+
+```text
+VLA + Navigation Bridge clean-start
+→ VLA OFF 상태에서 점화 후 operator exit 10초 대기
+→ people=[] / fresh fire only 확인
+→ new rosbag
+→ new mission exactly once
+```
+
+VLA만 restart하면 `action_0001`이 기존 Navigation Bridge cache와 충돌해 과거
+result가 새 fire action에 재사용될 수 있다. 두 launch tree를 함께 restart한 후
+실제 fire Nav2 goal과 motion으로 recovery를 검증했다.

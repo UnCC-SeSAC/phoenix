@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import json
 from types import SimpleNamespace
 
@@ -59,6 +61,18 @@ def test_unavailable_action_server_returns_correlated_failure():
         }
     ]
     assert bridge._active_action_id is None
+
+
+def test_suppression_servo_starts_detached():
+    source = (
+        Path(__file__).parents[1]
+        / "uncc_example"
+        / "fire_suppression_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "initial_angle=None" in source
+    assert "self.servo.angle = angle" in source
+    assert "self.servo.detach()" in source
 
 
 def test_invalid_command_never_reaches_action_server():
