@@ -9,6 +9,14 @@
   robot boxed in on the sides but clear behind gets a chance to back off before
   burning through the other recovery attempts. backup_speed raised 0.05 -> 0.1 m/s
   to halve the time the maneuver itself takes (0.30m backup_dist unchanged).
+
+  Added a combined BackUpAndSpin step right after the plain BackUp: a single
+  straight-line backup or in-place spin can each fail to escape a spot that only
+  a short reposition-then-turn maneuver clears (DWB and DriveOnHeading only ever
+  evaluate single constant-curvature/straight segments, not multi-step paths).
+  Uses a much shorter 0.10m backup_dist than the standalone BackUp above, since
+  the goal here is just to shift pose slightly, not to retreat; a shorter
+  segment is more likely to pass BackUp's own collision check in tight spots.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -33,7 +41,12 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
           </Sequence>
           <BackUp backup_dist="0.30" backup_speed="0.1"/>
+          <Sequence name="BackUpAndSpin">
+            <BackUp backup_dist="0.10" backup_speed="0.1"/>
+            <Spin spin_dist="1.57"/>
+          </Sequence>
           <Spin spin_dist="1.57"/>
+          <Spin spin_dist="-1.57"/>
           <Wait wait_duration="5"/>
         </RoundRobin>
       </ReactiveFallback>
