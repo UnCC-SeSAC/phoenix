@@ -37,6 +37,8 @@
   <exec_depend>std_srvs</exec_depend>
 
   <exec_depend>interfaces</exec_depend>
+  <!-- fire_status_service_node 가 /yolo_result(Detection2DArray)를 구독 -->
+  <exec_depend>vision_msgs</exec_depend>
   <exec_depend>frontier_exploration_ros2</exec_depend>
   <exec_depend>image_pipeline</exec_depend>
   <exec_depend>cv_bridge</exec_depend>

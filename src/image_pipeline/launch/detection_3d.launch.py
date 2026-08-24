@@ -6,9 +6,15 @@
 bag 재생과 함께 쓸 때는 반드시 use_sim_time:=true
 (`ros2 bag play --clock`과 짝. 안 맞추면 TF extrapolation 에러가 쏟아집니다.)
 
+★ `region` 기본은 **`bottom`**입니다 (2026-08-24 실기 실측 반영). 성냥불 위에서
+  뎁스가 안 나오는 것을 확인해서, 박스 중앙(=불꽃)을 재던 `center`를 내렸습니다.
+  `bottom`은 박스 **안**이라 여전히 대상 자체를 읽습니다.
+
 ★ `fallback_regions`는 기본으로 비어 있습니다. `below`/`ring`은 대상이 아니라
   **주변**을 재고 서로 반대 방향으로 편향됩니다(below 가깝게 / ring 멀게).
   실측 전에 켜면 "확신에 찬 틀린 좌표"가 나갑니다 — `HANDOVER.md` 8장 참조.
+  단 화염이 박스를 가득 채우면 `bottom`도 막히므로, 그런 장면이 잦으면
+  `fallback_regions:=below,ring`을 검토하세요.
 """
 
 from launch import LaunchDescription
@@ -37,8 +43,11 @@ def generate_launch_description():
         DeclareLaunchArgument('output_topic', default_value='/fire/detections'),
         DeclareLaunchArgument('status_topic', default_value='/fire/detections/status'),
         DeclareLaunchArgument(
+            'region', default_value='bottom',
+            description='거리를 뽑을 영역. 화염 위 뎁스가 비어서 center 아님'),
+        DeclareLaunchArgument(
             'fallback_regions', default_value='',
-            description='예: "bottom,below,ring". 기본 꺼짐 — 켜기 전 HANDOVER 8장'),
+            description='예: "below,ring". 기본 꺼짐 — 켜기 전 HANDOVER 8장'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
     ]
 
@@ -55,6 +64,7 @@ def generate_launch_description():
             'rgb0_info_topic': LaunchConfiguration('rgb0_info_topic'),
             'output_topic': LaunchConfiguration('output_topic'),
             'status_topic': LaunchConfiguration('status_topic'),
+            'region': LaunchConfiguration('region'),
             'fallback_regions': LaunchConfiguration('fallback_regions'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],

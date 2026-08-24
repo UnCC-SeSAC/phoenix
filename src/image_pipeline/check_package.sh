@@ -88,8 +88,10 @@ for f in image_pipeline/dehaze.py image_pipeline/pipeline.py \
          image_pipeline/detection3d.py image_pipeline/detection_json.py \
          image_pipeline/aodnet.py \
          image_pipeline/yolo.py image_pipeline/yolo_node.py \
+         image_pipeline/fire_status.py \
          tests/test_dehaze.py tests/test_depth.py tests/test_detection3d.py \
          tests/test_detection_json.py tests/test_yolo.py \
+         tests/test_fire_status.py \
          tools/detect_offline.py tools/check_yolo_wiring.py \
          launch/full_chain_check.launch.py launch/yolo.launch.py \
          config/preprocess.yaml launch/preprocess.launch.py; do

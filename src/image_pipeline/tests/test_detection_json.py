@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from image_pipeline.depth import DistanceSample  # noqa: E402
 from image_pipeline.detection_json import (  # noqa: E402
+    ON_TARGET_STATUSES,
     STATE_NO_INPUT,
     STATE_OK,
     STATE_STALLED,
@@ -33,7 +34,9 @@ from image_pipeline.detection_json import (  # noqa: E402
     STATUS_OK,
     STATUS_RING,
     STATUS_UNKNOWN,
+    SURROGATE_STATUSES,
     build_heartbeat,
+    is_surrogate,
     build_payload,
     depth_status,
     heartbeat_state,
@@ -81,6 +84,38 @@ class TestDepthStatus:
         """새 폴백을 추가하고 계약을 안 고치면 여기서 걸립니다."""
         with pytest.raises(ValueError):
             depth_status(sample(2.0, region="diagonal"))
+
+
+class TestSurrogate:
+    """★ "대상을 쟀는가"를 문자열 접두사로 판단하면 안 됩니다.
+
+    `fallback_bottom`은 이름과 달리 박스 **안**이라 대상 자체를 읽습니다
+    (합성 장면 실측 오차 0.000m). 2026-08-24부터 노드 기본 region이 `bottom`이라,
+    접두사로 거르면 `publish_fallback=false`에서 **모든 거리가 지워집니다.**
+    """
+
+    def test_주변을_잰_것만_대리값이다(self):
+        assert is_surrogate(STATUS_BELOW) is True
+        assert is_surrogate(STATUS_RING) is True
+
+    def test_대상을_잰_것은_대리값이_아니다(self):
+        assert is_surrogate(STATUS_OK) is False
+        assert is_surrogate(STATUS_BOTTOM) is False
+
+    def test_이름_접두사와_일치하지_않는다(self):
+        """이 어긋남이 버그의 원천이라 테스트로 못 박습니다."""
+        assert STATUS_BOTTOM.startswith("fallback")
+        assert is_surrogate(STATUS_BOTTOM) is False
+
+    def test_불명은_대리값이_아니다(self):
+        """거리가 아예 없는 것과 주변을 잰 것은 다른 상태입니다."""
+        assert is_surrogate(STATUS_UNKNOWN) is False
+
+    def test_두_분류가_모든_상태를_덮는다(self):
+        """상태를 새로 추가하고 분류를 빠뜨리면 여기서 걸립니다."""
+        assert set(ON_TARGET_STATUSES) | set(SURROGATE_STATUSES) == {
+            STATUS_OK, STATUS_BOTTOM, STATUS_BELOW, STATUS_RING}
+        assert not set(ON_TARGET_STATUSES) & set(SURROGATE_STATUSES)
 
 
 class TestUnknownDistance:
