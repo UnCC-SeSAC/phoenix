@@ -333,7 +333,7 @@ TEST(FrontierSuppressionCoreTests, AllSuppressedCanDispatchTemporaryReturnToStar
 
   core.goal_response_callback(core.current_dispatch_id, nullptr, false, "rejected");
   current_pose = make_pose(3.0, 3.0);
-  core.try_send_next_goal();
+  core.occupancyGridCallback(OccupancyGrid2d(map_msg));
 
   ASSERT_EQ(dispatch_calls, 2);
   EXPECT_EQ(dispatched_goal_kinds.back(), "suppressed_return_to_start");
@@ -397,7 +397,7 @@ TEST(FrontierSuppressionCoreTests, TemporaryReturnToStartPreemptsWhenFrontiersBe
   core.goal_response_callback(core.current_dispatch_id, nullptr, false, "rejected");
 
   current_pose = make_pose(3.0, 3.0);
-  core.try_send_next_goal();
+  core.occupancyGridCallback(OccupancyGrid2d(map_msg));
   ASSERT_EQ(dispatch_calls, 2);
   ASSERT_EQ(dispatched_goal_kinds.back(), "suppressed_return_to_start");
 
@@ -465,7 +465,7 @@ TEST(FrontierSuppressionCoreTests, StartupGracePeriodDefersSuppressionFailures)
   EXPECT_EQ(core.suppressed_region_count(), 0U);
 
   now_ns = 6'000'000'000;
-  core.try_send_next_goal();
+  core.occupancyGridCallback(OccupancyGrid2d(map_msg));
   ASSERT_EQ(dispatch_calls, 2);
   core.goal_response_callback(core.current_dispatch_id, nullptr, false, "rejected");
   EXPECT_TRUE(core.suppression_state_allocated());
