@@ -100,8 +100,12 @@ frontier_explorer:
     goal_skip_on_blocked_goal: true
 
     # Enable the post-goal settle delay after a successful frontier goal.
-    # Useful if you want stability over speed. Use if you have slow SLAM & LiDAR configuration. 
-    post_goal_settle_enabled: false
+    # Useful if you want stability over speed. Use if you have slow SLAM & LiDAR configuration.
+    # Enabled: without it, a goal ending (success/cancel/abort) immediately re-evaluates
+    # frontiers with zero cooldown, which can catch the local costmap mid-update right after
+    # a Nav2 recovery maneuver (e.g. BackUp) moves the robot, causing a spurious "blocked"
+    # read on the same still-valid frontier and no goal ever gets re-dispatched.
+    post_goal_settle_enabled: true
 
     # Minimum seconds to wait before selecting the next frontier after a successful goal.
     post_goal_min_settle: 1.50
