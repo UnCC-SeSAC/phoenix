@@ -241,7 +241,10 @@ frontier_explorer:
     frontier_suppression_timeout_s: 90.0
 
     # Maximum allowed time in seconds without meaningful progress before a frontier goal is canceled.
-    frontier_suppression_no_progress_timeout_s: 20.0
+    # Raised from 20.0: this watchdog can't see Nav2's internal BT recovery state, so at 20s it was
+    # preempting navigate_to_pose before Nav2's own RecoveryActions round-robin (clear costmap ->
+    # backup -> spin -> wait) ever reached BackUp (~30-45s to first reach it in practice).
+    frontier_suppression_no_progress_timeout_s: 40.0
 
     # Minimum distance_remaining improvement in meters required to count as progress.
     frontier_suppression_progress_epsilon_m: 0.25

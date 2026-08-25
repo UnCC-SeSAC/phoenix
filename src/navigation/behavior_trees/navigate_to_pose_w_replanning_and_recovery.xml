@@ -17,7 +17,17 @@
   Uses a much shorter 0.10m backup_dist than the standalone BackUp above, since
   the goal here is just to shift pose slightly, not to retreat; a shorter
   segment is more likely to pass BackUp's own collision check in tight spots.
+
+  FollowPath's inner RecoveryNode dropped from number_of_retries="1" to "0":
+  that retry only cleared the local costmap and re-ran the identical path once
+  before giving up outward, which just duplicated the RecoveryActions round-robin's
+  first item (ClearingActions, local+global). It cost a full extra
+  movement_time_allowance cycle (~15s) before each round-robin slot could be
+  reached, roughly doubling the time to get to BackUp/Spin. Frontier_explorer's
+  external no-progress watchdog cannot see BT internals, so every second spent
+  here was a second closer to it preempting the goal before recovery ever ran.
 -->
+
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode number_of_retries="6" name="NavigateRecovery">
@@ -28,7 +38,7 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
           </RecoveryNode>
         </RateController>
-        <RecoveryNode number_of_retries="1" name="FollowPath">
+        <RecoveryNode number_of_retries="0" name="FollowPath">
           <FollowPath path="{path}" controller_id="FollowPath"/>
           <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
         </RecoveryNode>
