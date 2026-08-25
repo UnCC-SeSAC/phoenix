@@ -1376,7 +1376,7 @@ TEST(PreemptionFlowTests, ReturnToStartCompletedStopsFurtherFrontierSearch)
   EXPECT_EQ(frontier_search_calls, 0);
 }
 
-TEST(PreemptionFlowTests, GoalSucceededWaitsForCooldownAndMapUpdateBeforeProgressing)
+TEST(PreemptionFlowTests, GoalSucceededWaitsForProcessedFreshMapBeforeProgressing)
 {
   FrontierExplorerCoreParams params;
   params.post_goal_settle_enabled = true;
@@ -1438,7 +1438,8 @@ TEST(PreemptionFlowTests, GoalSucceededWaitsForCooldownAndMapUpdateBeforeProgres
     "");
 
   EXPECT_TRUE(core.awaiting_map_refresh);
-  EXPECT_TRUE(core.post_goal_settle_active);
+  EXPECT_FALSE(core.post_goal_settle_active);
+  EXPECT_EQ(core.post_goal_map_generation, 1);
 
   core.costmapCallback(OccupancyGrid2d(costmap_msg));
   EXPECT_EQ(dispatch_calls, 1);
@@ -1446,11 +1447,13 @@ TEST(PreemptionFlowTests, GoalSucceededWaitsForCooldownAndMapUpdateBeforeProgres
   core.processPendingMapUpdate();
   EXPECT_EQ(dispatch_calls, 1);
 
+  core.ingestRawMapUpdate(OccupancyGrid2d(map_msg));
   core.processPendingMapUpdate();
-  EXPECT_EQ(dispatch_calls, 1);
+  EXPECT_EQ(dispatch_calls, 2);
+  EXPECT_FALSE(core.awaiting_map_refresh);
 }
 
-TEST(PreemptionFlowTests, GoalSucceededRedispatchesImmediatelyWhenPostGoalSettleDisabled)
+TEST(PreemptionFlowTests, GoalSucceededWaitsForFreshMapWhenPostGoalSettleDisabled)
 {
   FrontierExplorerCoreParams params;
   params.post_goal_settle_enabled = false;
@@ -1511,8 +1514,17 @@ TEST(PreemptionFlowTests, GoalSucceededRedispatchesImmediatelyWhenPostGoalSettle
     0,
     "");
 
-  EXPECT_FALSE(core.awaiting_map_refresh);
+  EXPECT_TRUE(core.awaiting_map_refresh);
   EXPECT_FALSE(core.post_goal_settle_active);
+  EXPECT_EQ(core.post_goal_map_generation, 1);
+  EXPECT_EQ(dispatch_calls, 1);
+
+  core.costmapCallback(OccupancyGrid2d(costmap_msg));
+  EXPECT_EQ(dispatch_calls, 1);
+
+  core.params.map_processing_rate_hz = 0.0;
+  core.occupancyGridCallback(OccupancyGrid2d(map_msg));
+  EXPECT_FALSE(core.awaiting_map_refresh);
   EXPECT_EQ(dispatch_calls, 2);
 }
 

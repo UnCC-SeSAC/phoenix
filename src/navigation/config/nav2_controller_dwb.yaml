@@ -26,7 +26,14 @@ controller_server:
       yaw_goal_tolerance: 0.25
     # DWB parameters
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      angular_dist_threshold: 0.785
+      forward_sampling_distance: 0.30
+      rotate_to_heading_angular_vel: 0.40
+      max_angular_accel: 1.5
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
       debug_trajectory_details: True
       min_vel_x: 0.0 # 앞뒤 이동
       min_vel_y: 0.0 # 좌우 이동
@@ -70,4 +77,3 @@ controller_server:
 controller_server_rclcpp_node:
   ros__parameters:
     use_sim_time: False
-
