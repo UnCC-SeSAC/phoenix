@@ -53,6 +53,13 @@ RETRY_WAIT_SECONDS = 2.0
 DEFAULT_MAX_ATTEMPTS = 3
 STATUS_CHECK_SECONDS = 3.0
 
+# 분사 종료 후 판정을 부르기까지 기다리는 시간.
+# check_fire_status 의 관찰 구간은 **과거**(now - STATUS_CHECK_SECONDS ~ now)를
+# 본다. 분사 직후 바로 부르면 그 창이 분사 중 프레임으로 채워져서, 불이 방금
+# 꺼졌어도 '안꺼짐'으로 기운다. 창 길이만큼 기다려 관찰 구간 전체가
+# **분사 이후** 프레임이 되게 한다.
+STATUS_SETTLE_SECONDS = STATUS_CHECK_SECONDS
+
 # 서보 스윕 설정 (단순 왕복 방식)
 SERVO_CENTER_ANGLE = 90
 SERVO_SWEEP_RANGE_DEG = 10               # 중앙 기준 +-범위
@@ -266,6 +273,16 @@ class FireSuppressionNode(Node):
                     goal_handle.publish_feedback(feedback_msg)
 
                     cancelled = await self.run_suppression_routine(goal_handle)
+                    if cancelled:
+                        return await self._handle_cancel(goal_handle, attempt)
+
+                    feedback_msg.status = f'{attempt}차 판정 대기 중'
+                    goal_handle.publish_feedback(feedback_msg)
+
+                    # 관찰 구간이 분사 중 프레임을 덮지 않도록 창 길이만큼 대기.
+                    # interruptible_sleep 이라 대기 중에도 취소는 즉시 먹는다.
+                    cancelled = await self.interruptible_sleep(
+                        goal_handle, STATUS_SETTLE_SECONDS)
                     if cancelled:
                         return await self._handle_cancel(goal_handle, attempt)
 
