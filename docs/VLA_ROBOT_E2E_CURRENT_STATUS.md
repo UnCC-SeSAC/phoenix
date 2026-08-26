@@ -793,3 +793,37 @@ timeout / HTTP error / schema failure: 0 / 0 / 0
 64 tokens: strict schema PASS
 HW commands: 0
 ```
+
+## Issue #101 human-safety policy audit (2026-08-26)
+
+Production Qwen policy는 유효한 map 위치의 미보고 person을 거리와 관계없이 먼저
+`REPORT_PERSON`하고, 보고만을 위한 person 접근을 하지 않는다.
+
+- report terminal success 후 `reported=true`를 반영하고 fire risk를 재판단
+- 보고 완료 person은 Qwen target/context에서 제외하되 fire의 route-blocking 관계는 유지
+- fire suppression range와 physical action validation contract 유지
+- physical action 중 deterministic `WAIT`와 single-flight 유지
+- Resolver/Validator/Dispatcher가 invalid/stale robot pose와 invalid target dispatch 차단
+- suppression failure budget 2회 유지
+
+Software 검증:
+
+```text
+human-safety Qwen fixture: person-only / person+fire / blocking-fire pre-report 30/30 PASS
+post-report blocking fire 단독: NAVIGATE_TO 10/10 PASS
+multiple-person fixture: unreported person REPORT 10/10 PASS
+fire outside/inside range: NAVIGATE_TO / EXTINGUISH 각 10/10 PASS
+fire_vla_core regression: 247 PASS
+latency before p50/p95/max: 1.564/1.658/2.413 sec
+latency after  p50/p95/max: 0.913/0.951/0.978 sec
+timeout / HTTP 503 / schema failure: 0 / 0 / 0
+representative HTTP context: 739 -> 746 bytes
+prompt template tokens: 385 -> 451
+HW commands: 0
+```
+
+남은 GAP:
+
+- `blocks_route_to`는 수동/observation relation이며 VLA가 route geometry로 계산하지 않음
+- multiple-fire human-risk ranking은 일관되지 않음; first fire 선택 10/10
+- no-target Qwen은 존재하지 않는 zone 이름을 선택함; Resolver가 physical dispatch 차단

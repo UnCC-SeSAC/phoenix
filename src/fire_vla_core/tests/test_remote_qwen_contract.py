@@ -86,7 +86,12 @@ def test_qwen_prompt_states_strict_action_target_contract():
     prompt = build_qwen_system_prompt()
     assert "SEARCH targets an existing unexplored_zones id" in prompt
     assert "Every non-null target must exactly match one of valid_targets" in prompt
-    assert "within_report_range is true: REPORT_PERSON" in prompt
+    assert "An unreported person" in prompt
+    assert "Reporting is non-physical" in prompt
+    assert "blocks_person_route=true" in prompt
+    assert "unexplored_zones is non-empty" in prompt
+    assert "Never target REPORT_PERSON at reported=true" in prompt
+    assert "12 words or fewer" in prompt
 
 
 @pytest.mark.parametrize("payload, expected", [
@@ -213,3 +218,20 @@ def test_compact_world_model_excludes_raw_and_transport_state():
     assert "first_seen" not in compact["people"][0]
     assert "last_seen" not in compact["people"][0]
     assert compact["people"][0]["within_report_range"] is False
+
+
+def test_compact_world_model_omits_reported_people_but_keeps_fire_risk_relation():
+    payload = {
+        "people": [{
+            "id": "person_01", "position": {"x": 1.0, "y": 0.0},
+            "state": "REPORTED", "reported": True,
+        }],
+        "fires": [{
+            "id": "fire_01", "position": {"x": 0.5, "y": 0.0},
+            "state": "ACTIVE", "blocks_route_to": ["person_01"],
+        }],
+    }
+    compact = build_compact_world_model(payload)
+    assert compact["people"] == []
+    assert compact["fires"][0]["blocks_person_route"] is True
+    assert "blocks_route_to" not in compact["fires"][0]

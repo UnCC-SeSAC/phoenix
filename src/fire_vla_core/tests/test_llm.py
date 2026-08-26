@@ -69,13 +69,24 @@ def test_strict_parser_accepts_wait_with_json_null():
 
 def test_valid_targets_are_deduplicated_in_first_seen_order():
     snapshot = {
-        "people": [{"id": "person_01"}, {"id": "shared"}],
+        "people": [
+            {"id": "person_01"},
+            {"id": "reported", "reported": True},
+            {"id": "shared"},
+        ],
         "fires": [{"id": "fire_01"}, {"id": "shared"}],
         "unexplored_zones": [{"id": "zone_01"}, {"id": "fire_01"}],
     }
     assert extract_valid_targets(snapshot) == [
         "person_01", "shared", "fire_01", "zone_01",
     ]
+
+
+def test_reported_people_are_not_valid_decision_targets():
+    snapshot = {
+        "people": [{"id": "person_01", "reported": True}],
+    }
+    assert extract_valid_targets(snapshot) == []
 
 
 class FakeXPU:

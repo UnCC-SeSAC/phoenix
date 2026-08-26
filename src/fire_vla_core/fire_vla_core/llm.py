@@ -70,6 +70,9 @@ def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
     seen: set[str] = set()
     for collection in ("people", "fires", "unexplored_zones"):
         for entity in world_model.get(collection) or []:
+            if (collection == "people" and isinstance(entity, dict)
+                    and entity.get("reported") is True):
+                continue
             entity_id = entity.get("id") if isinstance(entity, dict) else None
             if isinstance(entity_id, str) and entity_id and entity_id not in seen:
                 seen.add(entity_id)
@@ -89,13 +92,13 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
         "people": [
             _select_fields(item, ("id", "position", "state", "reported"))
             for item in world_model.get("people") or []
-            if isinstance(item, dict)
+            if isinstance(item, dict) and item.get("reported") is not True
         ],
         "fires": [
             _select_fields(
                 item,
                 (
-                    "id", "position", "size", "state", "blocks_route_to",
+                    "id", "position", "size", "state",
                     "robot_within_spray_range", "spray_count",
                 ),
             )
@@ -112,6 +115,12 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
             ("action", "target", "status"),
         ),
     }
+    source_fires = [
+        item for item in world_model.get("fires") or []
+        if isinstance(item, dict)
+    ]
+    for entity, source in zip(compact["fires"], source_fires):
+        entity["blocks_person_route"] = bool(source.get("blocks_route_to"))
     robot_pose = (compact.get("robot") or {}).get("pose")
     if not isinstance(robot_pose, dict):
         return compact
@@ -210,20 +219,25 @@ class RemoteQwenBackend(LLMPort):
 
 def build_qwen_system_prompt() -> str:
     return """You are a fire-response robot decision engine.
-Apply the FIRST matching rule. JSON null means absent.
-1. current_action is NOT null: WAIT with target null. WAIT IS FOR THIS CASE ONLY;
-   when current_action is null, continue to the next rules and never choose WAIT.
-2. An unresolved person has an ACTIVE fire whose blocks_route_to equals that
-   person's id: choose EXTINGUISH on that fire when robot_within_spray_range is
-   true; otherwise NAVIGATE_TO that fire.
-3. An unresolved person's within_report_range is true: REPORT_PERSON that person.
-4. An unresolved person's within_report_range is false: NAVIGATE_TO that person.
-5. An ACTIVE fire remains: EXTINGUISH it only when robot_within_spray_range is
-   true; otherwise NAVIGATE_TO that fire.
-6. unexplored_zones is non-empty: SEARCH the first zone.
-7. Otherwise, including empty people/fires/zones: RETURN_HOME with target null.
+Prioritize human safety. Apply the FIRST matching policy, then reassess after
+every terminal action result.
+1. current_action is not null: WAIT with target null. Do not overlap actions.
+2. An unreported person (reported=false) has a valid map position: REPORT_PERSON
+   first, regardless of distance or nearby fires. Reporting is non-physical;
+   never navigate merely to report a known location.
+3. After all known people are reported, an ACTIVE fire has blocks_person_route=true:
+   choose that fire. EXTINGUISH only when robot_within_spray_range is true;
+   otherwise NAVIGATE_TO that fire.
+4. An ACTIVE fire remains: EXTINGUISH only when robot_within_spray_range is true;
+   otherwise NAVIGATE_TO that fire.
+5. unexplored_zones is non-empty: SEARCH an existing zone id.
+6. Otherwise, including empty people/fires/zones: RETURN_HOME with target null.
+Never target REPORT_PERSON at reported=true. When several valid people or fires
+remain at the same priority, reason from explicit human-risk relations, action
+feasibility, and current robot state; do not invent risk.
 
-Output exactly one JSON object with exactly action, target, reason.
+Output exactly one compact single-line JSON object with action, target, reason.
+Keep reason at 12 words or fewer.
 action must be in allowed_actions.
 NAVIGATE_TO targets an existing people or fires id.
 REPORT_PERSON targets an existing people id.
@@ -231,8 +245,10 @@ EXTINGUISH targets an existing fires id.
 SEARCH targets an existing unexplored_zones id.
 WAIT and RETURN_HOME use JSON null.
 Every non-null target must exactly match one of valid_targets. If valid_targets
-is empty, never use NAVIGATE_TO, REPORT_PERSON, EXTINGUISH, or SEARCH.
+is empty, choose RETURN_HOME with target null.
 Never invent an id, coordinate, class name, or the string "null".
+Do not claim a missing or invalid map position. Never propose a stale or invalid
+physical action; deterministic validation remains authoritative.
 Do not output Markdown or any text outside the JSON object."""
 
 
