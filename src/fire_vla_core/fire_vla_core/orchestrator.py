@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any
 
 from .dispatcher import ActionDispatcher
@@ -154,7 +155,13 @@ class VLAOrchestrator:
                 self._pose_signature(robot.home_pose),
             ),
             tuple(sorted(
-                (person.id, self._pose_signature(person.position), person.state.value, person.reported)
+                (
+                    person.id,
+                    self._pose_signature(person.position),
+                    person.state.value,
+                    person.reported,
+                    self.world.person_is_decision_eligible(person.id),
+                )
                 for person in self.world.people.values()
             )),
             tuple(sorted(
@@ -166,6 +173,7 @@ class VLAOrchestrator:
                     fire.blocks_route_to,
                     fire.robot_within_spray_range,
                     fire.spray_count,
+                    self.world.fire_is_decision_eligible(fire.id),
                 )
                 for fire in self.world.fires.values()
             )),
@@ -176,10 +184,13 @@ class VLAOrchestrator:
     def _pose_signature(pose: Any) -> tuple[int, int, int] | None:
         if pose is None:
             return None
+        values = (float(pose.x), float(pose.y), float(pose.yaw))
+        if not all(isfinite(value) for value in values):
+            return None
         return (
-            round(float(pose.x) / _POSITION_SIGNATURE_RESOLUTION_M),
-            round(float(pose.y) / _POSITION_SIGNATURE_RESOLUTION_M),
-            round(float(pose.yaw) / _YAW_SIGNATURE_RESOLUTION_RAD),
+            round(values[0] / _POSITION_SIGNATURE_RESOLUTION_M),
+            round(values[1] / _POSITION_SIGNATURE_RESOLUTION_M),
+            round(values[2] / _YAW_SIGNATURE_RESOLUTION_RAD),
         )
 
     @staticmethod

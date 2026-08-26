@@ -70,6 +70,8 @@ def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
     seen: set[str] = set()
     for collection in ("people", "fires", "unexplored_zones"):
         for entity in world_model.get(collection) or []:
+            if isinstance(entity, dict) and entity.get("decision_eligible") is False:
+                continue
             if (collection == "people" and isinstance(entity, dict)
                     and entity.get("reported") is True):
                 continue
@@ -82,6 +84,15 @@ def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
 
 def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
     """Keep remote inference limited to semantic decision state."""
+    already_filtered = set(world_model) == {
+        "exploration_status",
+        "perception_ready",
+        "robot",
+        "people",
+        "fires",
+        "unexplored_zones",
+        "current_action",
+    }
     compact = {
         "exploration_status": world_model.get("exploration_status"),
         "perception_ready": world_model.get("perception_ready"),
@@ -92,7 +103,14 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
         "people": [
             _select_fields(item, ("id", "position", "state", "reported"))
             for item in world_model.get("people") or []
-            if isinstance(item, dict) and item.get("reported") is not True
+            if (
+                isinstance(item, dict)
+                and (
+                    already_filtered
+                    or item.get("decision_eligible") is True
+                )
+                and item.get("reported") is not True
+            )
         ],
         "fires": [
             _select_fields(
@@ -103,7 +121,13 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
             for item in world_model.get("fires") or []
-            if isinstance(item, dict)
+            if (
+                isinstance(item, dict)
+                and (
+                    already_filtered
+                    or item.get("decision_eligible") is True
+                )
+            )
         ],
         "unexplored_zones": [
             _select_fields(item, ("id", "pose"))
@@ -117,10 +141,21 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
     }
     source_fires = [
         item for item in world_model.get("fires") or []
-        if isinstance(item, dict)
+        if (
+            isinstance(item, dict)
+            and (
+                already_filtered
+                or item.get("decision_eligible") is True
+            )
+        )
     ]
     for entity, source in zip(compact["fires"], source_fires):
-        entity["blocks_person_route"] = bool(source.get("blocks_route_to"))
+        entity["blocks_person_route"] = bool(
+            source.get(
+                "blocks_person_route",
+                source.get("blocks_route_to"),
+            )
+        )
     robot_pose = (compact.get("robot") or {}).get("pose")
     if not isinstance(robot_pose, dict):
         return compact

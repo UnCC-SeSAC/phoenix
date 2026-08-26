@@ -176,7 +176,7 @@ def test_transformers_adapter_loads_once_reuses_model_and_grounds_targets(
     )
     adapter = TransformersQwenAdapter()
     snapshot = {
-        "people": [{"id": "person_01"}],
+        "people": [{"id": "person_01", "decision_eligible": True}],
         "fires": [],
         "unexplored_zones": [{"id": "zone_01"}],
     }

@@ -60,9 +60,14 @@ def test_duplicate_result_is_ignored():
 
 
 def test_fire_requires_valid_negative_observations_to_be_extinguished():
-    config = WorldModelConfig(verification_required_observations=2, verification_delay_sec=0.0, verification_timeout_sec=5.0)
+    config = WorldModelConfig(
+        verification_required_observations=2,
+        verification_delay_sec=0.0,
+        verification_timeout_sec=5.0,
+        observation_max_age_sec=10.0,
+    )
     world = make_world(config)
-    start = utc_now()
+    start = utc_now() - timedelta(seconds=2)
     world.update_observation_batch(ObservationBatch(start.isoformat(), (SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()),)))
     action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
     world.apply_submission(action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED))

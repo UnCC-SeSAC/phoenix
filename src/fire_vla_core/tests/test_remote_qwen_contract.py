@@ -225,13 +225,16 @@ def test_compact_world_model_omits_reported_people_but_keeps_fire_risk_relation(
         "people": [{
             "id": "person_01", "position": {"x": 1.0, "y": 0.0},
             "state": "REPORTED", "reported": True,
+            "decision_eligible": False,
         }],
         "fires": [{
             "id": "fire_01", "position": {"x": 0.5, "y": 0.0},
             "state": "ACTIVE", "blocks_route_to": ["person_01"],
+            "decision_eligible": True,
         }],
     }
     compact = build_compact_world_model(payload)
     assert compact["people"] == []
     assert compact["fires"][0]["blocks_person_route"] is True
     assert "blocks_route_to" not in compact["fires"][0]
+    assert build_compact_world_model(compact) == compact
