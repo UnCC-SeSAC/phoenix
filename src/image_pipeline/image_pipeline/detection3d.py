@@ -23,12 +23,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from image_pipeline.depth import (
     DEFAULT_Z_MAX,
     DEFAULT_Z_MIN,
+    REGIONS,
     backproject,
     box_center,
     project_box,
@@ -50,6 +51,36 @@ from image_pipeline.detection_json import detection_entry, is_surrogate
 # ★ 즉 `fallback_method` 하나를 모든 영역에 똑같이 적용하면 안 됩니다.
 #   `SamplingParams.fallback_method=None`(기본)이면 이 표를 씁니다.
 REGION_METHOD = {"bottom": "median", "below": "max", "ring": "median"}
+
+
+def method_for(region: str, band_offset: float = 0.0) -> str:
+    """영역별 권장 통계. `below`만 `band_offset`에 따라 갈립니다.
+
+    ★ `below`의 통계는 취향이 아니라 **띠가 무엇 위에 놓였는지**의 함수입니다.
+
+      band_offset == 0  띠가 박스 바로 아래 = 바닥. 아래로 갈수록 가까워지므로
+                        **가장 먼 값이 접지점**입니다 -> `max`
+                        (median −0.326m / max −0.046m, HANDOVER 8장)
+      band_offset > 0   띠가 박스에서 떨어진 곳 = 불 아래의 물체(촛대·종이컵).
+                        컵은 **뒤 배경보다 반드시 가깝습니다.** 띠가 컵을 벗어난
+                        만큼 배경이 섞이므로 앞쪽으로 당기는 통계가 맞습니다
+                        -> `p25`
+
+    ★ 여기서 `median`을 쓰면 안 되는 이유 (합성 장면 실측):
+      띠가 컵과 배경에 **절반씩** 걸치면 `np.median`은 짝수 개일 때 가운데 두
+      값을 평균냅니다. 컵 0.5m / 배경 1.1m 에서 **0.8m**가 나왔습니다 —
+      장면에 존재하지 않는 거리입니다. p25는 같은 조건에서 0.5m를 유지합니다.
+      촛불이 타들어가 화염-컵 거리가 변하면 이 "절반씩" 상태를 반드시 지나갑니다.
+    """
+    if region == "below":
+        return "p25" if float(band_offset) > 0.0 else "max"
+    return REGION_METHOD.get(region, "median")
+
+# 대상이 아니라 **주변**을 재는 영역. `center`/`bottom`은 박스 안이라 제외입니다.
+# ★ "폴백으로 넘어갔는가"가 아니라 **무엇을 쟀는가**로 판단해야 합니다.
+#   2026-08-26부터 fire의 1차 영역이 `below`라, "1차 = 대상"이 더는 성립하지
+#   않습니다. 여기서 갈라야 `is_fallback`이 계속 진실을 말합니다.
+SURROGATE_REGIONS = ("below", "ring")
 
 
 @dataclass(frozen=True)
@@ -104,11 +135,29 @@ class SamplingParams:
       그 장면에서 값이 나오는 건 `below`(max)뿐이므로, 화염이 박스를 얼마나
       채우는지를 실기에서 보고 `fallback_regions=("below", "ring")`을 켤지
       정하세요.
+
+    ★ `region_by_class` — 클래스마다 영역이 다릅니다 (2026-08-26 실기 실측).
+
+      fire   : `below`. 박스 대부분이 불꽃이라 **박스 안에 대상 표면이 없습니다.**
+               `bottom`으로 재면 불꽃 사이로 보이는 **배경(벽)**이 잡혀
+               +0.33~+0.60m 멀게 나갔습니다. 그것도 유효비율 0.98·`ok`로요.
+               `below`는 박스 바깥이라 불꽃이 박스를 얼마나 채우든 무관합니다.
+               ★ 단 박스 **바로** 아래는 아직 화염 언저리라 여전히 배경이
+                 잡혔습니다. `band_offset`으로 띠를 아래로 밀어 **촛대를 받친
+                 종이컵**을 겨냥합니다 (2026-08-26 실기).
+      person : `bottom`. `below`로 쟀더니 **예상보다 가깝게** 나왔습니다 —
+               사람 앞쪽 바닥을 재기 때문입니다. 사람은 박스 안 뎁스가 멀쩡해서
+               굳이 주변을 잴 이유가 없습니다.
+
+      매핑에 없는 클래스는 `region`(기본 `bottom`)을 씁니다.
     """
     region: str = "bottom"
     method: str = "median"
     central: float = 0.5
     band_ratio: float = 0.15
+    #: `below` 띠의 시작 위치 (박스 높이의 배수). 0 = 박스 바로 아래(접지점).
+    #: >0 이면 불 아래 물체를 겨냥합니다 — 노드는 3.5를 기본으로 씁니다.
+    band_offset: float = 0.0
     ring_margin: float = 0.25
     min_valid_ratio: float = 0.2
     min_valid_px: int = 1
@@ -120,14 +169,66 @@ class SamplingParams:
     # 그 통계를 강제합니다 — ring 에 "max"를 강제하면 편향이 더 커집니다.
     fallback_method: Optional[str] = None
     min_score: float = 0.0
+    #: {class_id: region}. 비어 있으면 모든 클래스가 `region`을 씁니다.
+    region_by_class: dict = field(default_factory=dict)
 
     def as_kwargs(self, region: str, method: str | None = None) -> dict:
         return dict(
             region=region, method=method or self.method, central=self.central,
-            band_ratio=self.band_ratio, ring_margin=self.ring_margin,
+            band_ratio=self.band_ratio, band_offset=self.band_offset,
+            ring_margin=self.ring_margin,
             min_valid_ratio=self.min_valid_ratio, min_valid_px=self.min_valid_px,
             z_min=self.z_min, z_max=self.z_max, max_spread_m=self.max_spread_m,
         )
+
+    def region_for(self, class_id: str) -> tuple[str, str]:
+        """클래스 -> (region, method).
+
+        ★ **method를 region과 함께 정하는 게 이 함수의 존재 이유입니다.**
+        `as_kwargs`는 method를 안 주면 `self.method`(기본 median)를 씁니다.
+        그래서 매핑으로 region만 바꾸면 `below`에 median이 걸려
+        **−0.326m**가 나갑니다 (max였다면 −0.046m). 실측치는 HANDOVER 8장.
+
+        매핑으로 바꾼 영역은 `REGION_METHOD`의 권장 통계를 따르고, 매핑에
+        걸리지 않은 클래스만 `self.method`를 씁니다 — 그래야 `method`
+        파라미터로 기본 동작을 조정하던 기존 사용법이 안 깨집니다.
+        """
+        region = self.region_by_class.get(str(class_id), self.region)
+        if region == self.region:
+            return region, self.method
+        return region, method_for(region, self.band_offset)
+
+
+def parse_region_by_class(text: str) -> dict:
+    """`"fire:below,person:bottom"` -> `{"fire": "below", "person": "bottom"}`.
+
+    노드 파라미터는 dict를 못 받아서 문자열로 주고받습니다 (`parse_cascade`와
+    같은 형식). 빈 문자열이면 빈 dict — 모든 클래스가 `region`을 씁니다.
+
+    ★ 오타를 여기서 바로 터뜨립니다. 클래스 이름 오타는 잡을 수 없지만
+      (라벨은 모델이 정하므로) **영역 이름 오타는 잡습니다.** 안 잡으면
+      `sample_distance_detail`이 첫 프레임 콜백에서 터지고, 그건 "검출이
+      조용히 사라지는" 형태로 보입니다.
+
+    ⚠ 클래스 이름은 **학습 라벨과 정확히** 같아야 합니다. `Fire`처럼 대소문자가
+      다르면 매핑이 조용히 안 걸리고 기본 `region`이 쓰입니다.
+    """
+    out: dict = {}
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        class_id, sep, region = part.partition(":")
+        class_id, region = class_id.strip(), region.strip()
+        if not sep or not class_id or not region:
+            raise ValueError(
+                f"'클래스:영역' 형식이어야 합니다 (받은 값: {part!r}). "
+                '예: "fire:below,person:bottom"')
+        if region not in REGIONS:
+            raise ValueError(
+                f"region은 {REGIONS} 중 하나 (클래스 {class_id!r}에 {region!r})")
+        out[class_id] = region
+    return out
 
 
 def convert_frame(boxes, depth, k_color, k_depth, transform,
@@ -156,7 +257,7 @@ def convert_frame(boxes, depth, k_color, k_depth, transform,
 
         box_d = project_box(box, k_color, k_depth)
         sample, region_used, is_fallback = _sample_with_fallback(
-            depth, box_d, p, encoding, depth_scale)
+            depth, box_d, p, encoding, depth_scale, class_id)
 
         if sample.distance is None:
             # ★ 좌표를 지어내지 않습니다. 0m 하나가 발밑 좌표를 만듭니다.
@@ -237,7 +338,7 @@ def convert_frame_pixels(boxes, depth, k_color, k_depth, k_out=None,
 
         box_d = project_box(box, k_color, k_depth)
         sample, _region, _is_fallback = _sample_with_fallback(
-            depth, box_d, p, encoding, depth_scale)
+            depth, box_d, p, encoding, depth_scale, class_id)
 
         u, v = box_center(box)
         if k_out is not None:
@@ -250,30 +351,34 @@ def convert_frame_pixels(boxes, depth, k_color, k_depth, k_out=None,
     return PixelFrameResult(entries=entries, dropped=dropped)
 
 
-def _sample_with_fallback(depth, box_d, p: SamplingParams, encoding, depth_scale):
-    """기본 영역 → (설정된 경우) 폴백 영역 순으로 시도.
+def _sample_with_fallback(depth, box_d, p: SamplingParams, encoding, depth_scale,
+                          class_id: str = ""):
+    """클래스별 1차 영역 → (설정된 경우) 폴백 영역 순으로 시도.
 
-    폴백으로 얻은 값은 `is_fallback=True`로 표시합니다. 노드가 이 표시를 보고
-    신뢰도를 낮추거나 별도로 다뤄야 합니다 — **표시 없이 섞어 보내면 메인과
-    물총이 대상 거리로 착각합니다.**
+    돌려주는 `is_fallback`은 **"폴백으로 넘어갔는가"가 아니라 "주변을 쟀는가"**
+    입니다. fire의 1차 영역이 `below`라 둘이 더는 같지 않습니다 — 1차로 성공해도
+    그게 바닥을 잰 값이면 대상 거리가 아닙니다. 표식 없이 섞어 보내면 메인과
+    물총이 대상 거리로 착각합니다.
     """
+    region, method = p.region_for(class_id)
     first = sample_distance_detail(
         depth, box_d, encoding=encoding, depth_scale=depth_scale,
-        **p.as_kwargs(p.region))
+        **p.as_kwargs(region, method))
     if first.distance is not None:
-        return first, p.region, False
+        return first, region, region in SURROGATE_REGIONS
 
-    for region in p.fallback_regions:
+    for alt_region in p.fallback_regions:
         # 폴백 영역은 대상이 아니라 주변이라 통계도 달라집니다. "below" 띠는
         # 아래로 갈수록 가까워지므로 중앙값이 아니라 위쪽 꼬리를 써야 접지점입니다.
-        method = p.fallback_method or REGION_METHOD.get(region, "median")
+        alt_method = p.fallback_method or method_for(alt_region, p.band_offset)
         alt = sample_distance_detail(
             depth, box_d, encoding=encoding, depth_scale=depth_scale,
-            **p.as_kwargs(region, method))
+            **p.as_kwargs(alt_region, alt_method))
         if alt.distance is not None:
-            return alt, region, True
+            return alt, alt_region, alt_region in SURROGATE_REGIONS
 
-    return first, p.region, False
+    # 전부 실패 — 1차 시도의 사유를 그대로 돌려줍니다(진단이 남아야 합니다).
+    return first, region, region in SURROGATE_REGIONS
 
 
 class StampMonitor:
