@@ -79,8 +79,7 @@ class TopicBridgeSprayAdapter(SprayPort, ActionResultSource):
                 "WorldModel에 fire target이 없습니다.",
             )
         if (
-            not self._world.fire_is_decision_eligible(fire.id)
-            or fire.state != FireState.ACTIVE
+            fire.state != FireState.ACTIVE
             or not fire.robot_within_spray_range
             or fire.spray_count >= self._max_spray_attempts
         ):

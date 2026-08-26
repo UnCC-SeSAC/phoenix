@@ -160,7 +160,6 @@ class VLAOrchestrator:
                     self._pose_signature(person.position),
                     person.state.value,
                     person.reported,
-                    self.world.person_is_decision_eligible(person.id),
                 )
                 for person in self.world.people.values()
             )),
@@ -173,7 +172,6 @@ class VLAOrchestrator:
                     fire.blocks_route_to,
                     fire.robot_within_spray_range,
                     fire.spray_count,
-                    self.world.fire_is_decision_eligible(fire.id),
                 )
                 for fire in self.world.fires.values()
             )),

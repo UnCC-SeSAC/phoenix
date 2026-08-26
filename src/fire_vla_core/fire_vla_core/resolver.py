@@ -23,18 +23,9 @@ class TargetResolver:
         if decision.action == ActionType.NAVIGATE_TO:
             if not decision.target:
                 raise TargetResolutionError("NAVIGATE_TO에는 target이 필요합니다.")
-            if decision.target in world.people:
-                entity = world.people[decision.target]
-                eligible = world.person_is_decision_eligible(decision.target)
-            elif decision.target in world.fires:
-                entity = world.fires[decision.target]
-                eligible = world.fire_is_decision_eligible(decision.target)
-            else:
+            entity = world.people.get(decision.target) or world.fires.get(decision.target)
+            if entity is None:
                 raise TargetResolutionError("WorldModel에 존재하지 않는 이동 대상입니다.")
-            if not eligible:
-                raise TargetResolutionError(
-                    "이동 대상이 stale 또는 invalid 상태입니다."
-                )
             target_pose = self._pose_facing_target(world, entity.position)
 
         elif decision.action == ActionType.SEARCH:

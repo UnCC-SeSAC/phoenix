@@ -51,11 +51,6 @@ class ActionValidator:
                 return self._reject(action, "보고할 사람 대상이 WorldModel에 없습니다.")
             if world.people[action.target].reported:
                 return self._reject(action, "이미 보고가 완료된 사람입니다.")
-            if not world.person_is_decision_eligible(action.target):
-                return self._reject(
-                    action,
-                    "person 대상이 stale 또는 invalid 상태입니다.",
-                )
 
         if action.action == ActionType.EXTINGUISH:
             if not action.target or action.target not in world.fires:
@@ -63,11 +58,6 @@ class ActionValidator:
             fire = world.fires[action.target]
             if fire.state != FireState.ACTIVE:
                 return self._reject(action, "ACTIVE 상태의 화점만 진압할 수 있습니다.")
-            if not world.fire_is_decision_eligible(action.target):
-                return self._reject(
-                    action,
-                    "fire 대상이 stale 또는 invalid 상태입니다.",
-                )
             if not fire.robot_within_spray_range:
                 return self._reject(action, "로봇이 화점의 분사 가능 범위 안에 있지 않습니다.")
             if fire.spray_count >= self.max_spray_attempts:
@@ -85,11 +75,7 @@ class ActionValidator:
 
     @staticmethod
     def _target_exists(target: str, world: WorldModel) -> bool:
-        if target in world.people:
-            return world.person_is_decision_eligible(target)
-        if target in world.fires:
-            return world.fire_is_decision_eligible(target)
-        return False
+        return target in world.people or target in world.fires
 
     @staticmethod
     def _reject(action: Action, reason: str) -> ValidationResult:

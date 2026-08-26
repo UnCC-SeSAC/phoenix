@@ -60,10 +60,7 @@ class TopicBridgePersonReportAdapter(ReportPort, ActionResultSource):
                 "REPORT_PERSON Action만 제출할 수 있습니다.",
             )
         person = self._world.people.get(action.target or "")
-        if (
-            person is None
-            or not self._world.person_is_decision_eligible(person.id)
-        ):
+        if person is None or person.reported:
             return ActionSubmission(
                 action.action_id,
                 ActionSubmissionStatus.REJECTED,

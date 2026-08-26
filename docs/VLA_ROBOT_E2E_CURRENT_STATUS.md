@@ -828,62 +828,10 @@ HW commands: 0
 - multiple-fire human-risk ranking은 일관되지 않음; first fire 선택 10/10
 - no-target Qwen은 존재하지 않는 zone 이름을 선택함; Resolver가 physical dispatch 차단
 
-## Issue #101 stored entity freshness contract (2026-08-26)
+## Issue #101 stored entity freshness 정정 (2026-08-26)
 
-### Timestamp semantics
-
-| 값 | 생성 위치 | Clock / 단위 | 현재 사용처 |
-|---|---|---|---|
-| observation source timestamp | detection ROS header → fire detection adapter | source ROS epoch → UTC ISO-8601, ns 보존 | source-time TF, inbound stale gate, entity first/last seen |
-| observation receive timestamp | normalizer/WorldModel의 `utc_now()` | PC/Pi process UTC wall clock, seconds | source timestamp age 비교. 별도 entity field로 저장하지 않음 |
-| entity `first_seen` | WorldModel 최초 upsert | observation source UTC ISO-8601 | history/UI |
-| entity `last_seen` | WorldModel upsert | observation source UTC ISO-8601 | association과 decision eligibility |
-| decision timestamp | 별도 field 없음 | Qwen client/server latency만 monotonic seconds | decision record에는 미저장 |
-| action start | `ACTION_ACCEPTED` Event 생성 시각 | process UTC wall clock ISO-8601 | event history. Action 자체 start field 없음 |
-| action terminal | ActionResult 생성/수신 시각 | process UTC wall clock ISO-8601 | terminal result, suppression verification start |
-| robot pose timestamp | robot pose payload Unix seconds, 없으면 receive now | UTC ISO-8601 seconds | navigation Validator 0.5초 freshness |
-
-### Existing values
-
-- inbound observation max age: `observation_max_age_sec=1.0`
-- robot pose max age: `robot_pose_max_age_sec=0.5`
-- semantic ID association TTL: `2.0초`; decision TTL이 아님
-- suppression verification delay/timeout: `0.5/5.0초`
-
-Stored entity 전용 TTL은 없었다. 새 숫자를 추가하지 않고 inbound observation의
-검증된 `1.0초`를 decision eligibility에도 재사용한다.
-
-### Contract
-
-- person/fire history와 first/last seen은 WorldModel에 보존
-- fresh, finite map pose를 가진 entity만 decision eligible
-- person은 `reported=false`, fire는 `ACTIVE`일 때만 target eligible
-- future, missing, malformed, timezone 없는 timestamp는 fail-safe invalid
-- stale/invalid entity는 compact Qwen context와 valid targets에서 제외
-- Resolver, Validator, person-report/suppression adapter가 eligibility 재검증
-- physical action 진행 중 target expiry는 기존 deterministic WAIT 유지
-- 임의 cancel/replan 정책 추가 없음
-- `PENDING_VERIFICATION` fire는 history에 남고 decision target에서 제외
-
-Software 결과:
-
-```text
-freshness acceptance matrix: 16 scenarios PASS
-stale target physical dispatch: 0
-focused regression: 114 PASS
-full fire_vla_core regression: 265 PASS
-Qwen person/person+fire/blocking fixture: 30/30 PASS
-latency before p50/p95/max: 0.913/0.951/0.978 sec
-latency after  p50/p95/max: 0.924/1.045/1.892 sec
-timeout / HTTP 503 / schema failure: 0 / 0 / 0
-fresh compact / HTTP bytes: 627 / 802 -> 627 / 802
-stale compact / HTTP bytes: 627 / 802 -> 255 / 430
-prompt template tokens: 451 -> 451
-HW commands: 0
-```
-
-현재 동작/GAP:
-
-- target이 Nav2/suppression 실행 중 stale이 되어도 자동 cancel하지 않고 terminal result 대기
-- valid perception batch가 없으면 `PENDING_VERIFICATION`은 자체 시간 경과만으로 전이하지 않음
-- decision/action 객체에 독립 decision/start timestamp field 없음
+- `observation_max_age_sec=1.0`은 inbound observation stale gate로만 사용
+- 정상 저장된 person/fire에는 별도 decision TTL을 적용하지 않음
+- robot pose freshness, fire state/range/spray count, target 존재 검증 유지
+- `PENDING_VERIFICATION`과 physical action single-flight 계약 유지
+- entity freshness 정책은 실제 HW E2E 데이터 확보 후 재검토

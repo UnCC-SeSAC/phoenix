@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from math import isfinite
 from typing import Any, Iterable
 
 from .domain import (
@@ -204,42 +203,14 @@ class WorldModel:
             "exploration_status": self.exploration_status.value,
             "perception_ready": self.perception_ready,
             "robot": self._serialize(self.robot),
-            "people": [
-                self._serialize_entity(
-                    person,
-                    self.person_is_decision_eligible(person.id),
-                )
-                for person in self.people.values()
-            ],
-            "fires": [
-                self._serialize_entity(
-                    fire,
-                    self.fire_is_decision_eligible(fire.id),
-                )
-                for fire in self.fires.values()
-            ],
+            "people": [self._serialize(p) for p in self.people.values()],
+            "fires": [self._serialize(f) for f in self.fires.values()],
             "current_action": self._serialize(self.current_action),
             "last_action": self._serialize(self.last_action),
             "pending_action_ids": sorted(self.pending_actions),
             "unexplored_zones": self.unexplored_zones,
             "recent_events": [self._serialize(e) for e in self.event_log[-20:]],
         }
-
-    def person_is_decision_eligible(self, person_id: str) -> bool:
-        person = self.people.get(person_id)
-        return bool(
-            person
-            and not person.reported
-            and self._entity_is_fresh_and_valid(person.last_seen, person.position)
-        )
-
-    def fire_is_decision_eligible(self, fire_id: str) -> bool:
-        fire = self.fires.get(fire_id)
-        return bool(
-            fire
-            and fire.state == FireState.ACTIVE
-            and self._entity_is_fresh_and_valid(fire.last_seen, fire.position)
-        )
 
     def complete_mission_if_resolved(self) -> bool:
         if not self.mission_goals_resolved():
@@ -373,22 +344,6 @@ class WorldModel:
     def _elapsed_seconds(start_iso: str, end_iso: str) -> float:
         return (datetime.fromisoformat(end_iso) - datetime.fromisoformat(start_iso)).total_seconds()
 
-    def _entity_is_fresh_and_valid(
-        self,
-        timestamp_iso: str,
-        position: Pose2D,
-    ) -> bool:
-        age = self._timestamp_age_seconds(timestamp_iso)
-        return bool(
-            age is not None
-            and 0 <= age <= self.config.observation_max_age_sec
-            and all(isfinite(value) for value in (
-                position.x,
-                position.y,
-                position.yaw,
-            ))
-        )
-
     @staticmethod
     def _timestamp_age_seconds(timestamp_iso: str) -> float | None:
         try:
@@ -415,10 +370,3 @@ class WorldModel:
             return obj
 
         return convert(data)
-
-    @classmethod
-    def _serialize_entity(cls, value: Any, eligible: bool) -> dict[str, Any]:
-        data = cls._serialize(value)
-        assert isinstance(data, dict)
-        data["decision_eligible"] = eligible
-        return data
