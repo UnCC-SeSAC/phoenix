@@ -86,6 +86,13 @@ def generate_launch_description():
 
     start_vision = LaunchConfiguration("start_vision")
 
+    # Pi 5(4코어, 0~3) 기준: mission_manager를 이 코어(들)에만 묶어서
+    # SLAM/nav2/rf2o가 쓰는 나머지 코어를 절대 못 건드리게 격리한다.
+    # mission_manager 자체가 쓰는 CPU 총량이 줄지는 않지만, 거기서
+    # 튀는 부하가 시간에 민감한 TF/SLAM/nav2 파이프라인을 굶기는 걸
+    # 막아준다. 예: "3" (코어 3만 사용), "2,3" (코어 2~3 사용).
+    mission_cpu_cores = LaunchConfiguration("mission_cpu_cores")
+
     # =========================================
     # 1. Hardware
     # =========================================
@@ -324,6 +331,7 @@ def generate_launch_description():
                 name="mission_manager",
                 output="screen",
                 condition=IfCondition(start_mission),
+                prefix=["taskset -c ", mission_cpu_cores],
             ),
         ],
     )
@@ -377,6 +385,13 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "start_vision",
                 default_value="false",
+            ),
+            # Pi 5(4코어, 0~3) 기준 권장값 "3" — mission_manager를 코어 3에만
+            # 묶어서 SLAM/nav2/rf2o가 쓰는 코어 0~2를 절대 못 건드리게 함.
+            # 여러 코어를 주려면 "2,3" 처럼 콤마로. taskset -c 문법 그대로.
+            DeclareLaunchArgument(
+                "mission_cpu_cores",
+                default_value="3",
             ),
             hardware,
             lidar_app,
