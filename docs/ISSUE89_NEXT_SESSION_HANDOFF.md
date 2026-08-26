@@ -288,3 +288,22 @@ max 2.332초, timeout/HTTP/schema failure 0을 확인했다. 32/48 tokens는 rea
 Fire fallback ID는 ACTIVE/PENDING_VERIFICATION lifecycle 동안 기존 0.5 m radius를
 유지한다. Observation max age 1.0초와 resolved-fire 분리는 변경하지 않았다.
 Hardware command는 실행하지 않았다.
+
+## 2026-08-26 fire-only Mission transport checkpoint
+
+`ab0d02e` production runtime에서 Qwen, Camera, HEF YOLO, Depth, LiDAR, TF,
+Nav2, suppression, VLA readiness를 확인했다. 실제 fire 연속 검출과 Depth 3D
+발행까지 PASS했다.
+
+첫 Mission 실패 원인은 일반 문자열 발행에 따른 JSON 계약 위반이다.
+
+```text
+wrong: 화재를 찾아 진압해줘
+correct: {"mission_id":"mission_fire_001","text":"화재를 찾아 진압해줘"}
+WorldModel mission: null
+Nav2 goal / suppression / 실제 이동 / 분사: 0 / 0 / 0 / 0
+```
+
+다음 단계는 충전 완료, 전원선 분리, 안전한 바닥 배치 후 production runtime을
+정확히 1회 clean start하고 정상 JSON Mission 1회로 fire-only 전체 E2E를 재시도하는
+것이다. 다음 실행은 rosbag을 사용하지 않는다. #89/#91은 OPEN 유지한다.

@@ -845,3 +845,27 @@ HW commands: 0
 - Hailo backend/model과 VLA/Qwen policy 변경 없음
 - software: image_pipeline 351 PASS, fire_vla_core 247 PASS
 - actual Robot HW: PENDING
+
+## Fire-only Hardware E2E checkpoint (2026-08-26)
+
+`ab0d02e` production stack에서 Qwen, Camera, production HEF YOLO, Depth,
+LiDAR, TF, Nav2, suppression, VLA 개별 readiness를 확인했다. Fresh fire를
+연속 검출했고 class별 Depth sampling이 적용된 3D detection 발행도 확인했다.
+
+첫 Mission은 일반 문자열 `화재를 찾아 진압해줘`를 발행해 JSON Mission 계약을
+위반했다. 올바른 payload는 다음과 같다.
+
+```json
+{"mission_id":"mission_fire_001","text":"화재를 찾아 진압해줘"}
+```
+
+결과:
+
+- WorldModel: `mission: null`
+- Nav2 goal: 0
+- suppression: 0
+- 실제 이동/분사: 0/0
+- FIRST_FAILURE_STAGE: Mission transport
+
+다음 fire-only E2E는 rosbag 없이 정상 JSON Mission을 정확히 1회 발행한다.
+전체 E2E와 실제 소화는 아직 `PENDING`이며 Issue #89/#91을 유지한다.
