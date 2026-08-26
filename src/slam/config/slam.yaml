@@ -28,7 +28,11 @@
     debug_logging: false
     throttle_scans: 1
     transform_publish_period: 0.02 #if 0 never publishes odometry
-    map_update_interval: 0.2
+    # 1.0s로 완화: nav2 global_costmap의 update_frequency도 1.0Hz라서
+    # 그보다 빠르게 지도를 직렬화/발행해봐야 소비되지 않음. 지도가 커질수록
+    # 이 발행 작업 자체가 무거워지는데 필요 이상으로 자주 하고 있었고,
+    # 그 부하가 transform_publish_period(TF 발행)까지 밀리게 만드는 것으로 추정.
+    map_update_interval: 1.0
     resolution: 0.05
     max_laser_range: 12.0 #for rastering images
     minimum_time_interval: 0.5
