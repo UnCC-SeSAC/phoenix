@@ -21,6 +21,7 @@ depth0/image_raw ─────────────────────
 | `detection_3d_node` | 태스크② — 박스 + 뎁스 → 거리 → JSON 발행 |
 | `fake_detection_node` | 로봇·YOLO 없이 돌려보기 위한 더미 (정답을 로그에 찍음) |
 | `fake_camera_node` | 로봇 없이 쓰는 가짜 카메라 |
+| `detection_overlay_node` | 디버그 — 박스+confidence를 구운 영상 토픽 (rqt용) |
 
 ## 토픽
 
@@ -33,6 +34,7 @@ depth0/image_raw ─────────────────────
 | ② 구독 | `/yolo_result`, `depth0/image_raw`(16UC1 mm), `camera_info` 3종 | |
 | ② 발행 | `/fire/detections` | `std_msgs/String` (JSON, **검출이 있을 때만**) |
 | ② 발행 | `/fire/detections/status` | `std_msgs/String` (하트비트, 1초 주기) |
+| 오버레이 | (YOLO 입력 영상) + `/yolo_result` → `/yolo/overlay` (+`/compressed`) | `Image` / `CompressedImage` |
 
 ★ **RGB는 `/image`이고 뎁스만 `/image_raw`입니다.** 여기서 틀리면 콜백이 안 불립니다.
 ★ 구독·발행 모두 `qos_profile_sensor_data`입니다. 정수 큐를 쓰면 **조용히 실패**합니다.
@@ -74,6 +76,45 @@ ROS 없이 도는 테스트 341개:
 ```bash
 python3 -m pytest tests/ -q
 ```
+
+## 모델이 실제로 뭘 보는지 rqt로 확인하기
+
+`yolo_node`는 `Detection2DArray`만 냅니다 — rqt_image_view는 그걸 못 그리므로
+원본 영상만 보이고 박스는 안 보입니다. `detection_overlay_node`가 박스와
+confidence를 구운 영상 토픽을 따로 냅니다.
+
+전체 미션 스택(SLAM·Nav2·frontier·GPIO)을 빼고 **카메라 + YOLO + 오버레이만**
+띄우는 경량 런치가 있습니다. 파이 5에서 "불꽃과 사람을 제대로 보는가"만
+판단할 때 쓰세요.
+
+```bash
+# 로봇에서
+ros2 launch image_pipeline yolo_view.launch.py \
+    model_path:=/절대/경로/model.hef class_names:="['fire','person']" conf:=0.10
+
+# 원격 PC에서 (같은 ROS_DOMAIN_ID, 같은 RMW)
+ros2 run rqt_image_view rqt_image_view      # /yolo/overlay/compressed 선택
+```
+
+| 인자 | 기본 | 쓸 때 |
+|---|---|---|
+| `conf` | `0.25` | 낮추면 아슬아슬한 검출까지 보입니다. 런타임 변경도 됩니다 (아래) |
+| `use_preprocess` | `false` | `true`면 태스크①을 끼워 **실제 배포와 같은 영상**으로 봅니다 |
+| `display_width` | `640` | 무선이 느리면 480/320. `0`이면 원본 |
+| `max_fps` | `10.0` | 오버레이 발행 상한 (추론 fps와 무관) |
+| `start_camera` | `true` | 카메라가 이미 떠 있으면 `false` |
+| `start_rqt` | `false` | 로봇 화면/VNC에서 볼 때만 |
+
+```bash
+ros2 param set /yolo_node conf 0.35        # 런치를 다시 안 띄우고 문턱값 조정
+```
+
+⚠ 기본값은 전처리를 **뺀** 배선(카메라 원본 직결)이라 실제 배포에서 YOLO가 받는
+`/image_enhanced`와 다른 영상입니다. 1차 확인에는 충분하지만 최종 판단은
+`use_preprocess:=true`로 한 번 더 보세요.
+
+화면이 비면 `detection_overlay_node`의 5초 주기 로그를 보세요 — 영상 Hz,
+검출 Hz, **stamp 매칭 실패 수**가 찍혀서 어디서 끊겼는지 바로 갈립니다.
 
 ## YOLO 가중치가 오면
 
