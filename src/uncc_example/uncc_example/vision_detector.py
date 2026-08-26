@@ -35,7 +35,7 @@ class VisionDetector(Node):
     state_manager 가 target_merge_radius 기준으로 처리한다.
     """
 
-    def __init__(self):
+    def __init__(self, tf_buffer=None):
         super().__init__('vision_detector')
 
         self._event_logger = make_event_logger(self)
@@ -83,8 +83,15 @@ class VisionDetector(Node):
         # -----------------------------
         # TF (카메라 좌표 -> map 좌표 변환용)
         # -----------------------------
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # mission_manager 처럼 state_manager 와 한 프로세스에서 같이 돌 때는
+        # 그쪽 tf_buffer 를 공유받아 쓴다 - 같은 프로세스 안에서 /tf 를
+        # 중복 구독/파싱하는 걸 피하기 위함. 단독 실행(ros2 run) 시에는
+        # 인자가 없으니 이전처럼 자체 리스너를 만든다.
+        if tf_buffer is not None:
+            self.tf_buffer = tf_buffer
+        else:
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # -----------------------------
         # Subscriptions
