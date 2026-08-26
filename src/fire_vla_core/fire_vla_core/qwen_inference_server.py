@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import threading
+import time
+from itertools import count
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -16,6 +20,7 @@ from .ports import LLMPort
 
 
 MAX_REQUEST_BYTES = 1_000_000
+LOGGER = logging.getLogger(__name__)
 
 
 def infer(backend: LLMPort, payload: dict[str, Any]) -> dict[str, Any]:
@@ -41,6 +46,9 @@ def infer(backend: LLMPort, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_handler(backend: LLMPort) -> type[BaseHTTPRequestHandler]:
+    inference_lock = threading.Lock()
+    request_ids = count(1)
+
     class InferenceHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.path != "/health":
@@ -52,6 +60,9 @@ def create_handler(backend: LLMPort) -> type[BaseHTTPRequestHandler]:
             if self.path != "/infer":
                 self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
+            request_id = next(request_ids)
+            received_at = time.monotonic()
+            self._log_event("request_received", request_id, received_at)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > MAX_REQUEST_BYTES:
@@ -59,7 +70,19 @@ def create_handler(backend: LLMPort) -> type[BaseHTTPRequestHandler]:
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("request body는 JSON 객체여야 합니다.")
-                result = infer(backend, payload)
+                if not inference_lock.acquire(blocking=False):
+                    self._log_event("request_busy", request_id, received_at)
+                    self._send(
+                        HTTPStatus.TOO_MANY_REQUESTS,
+                        {"error": "Qwen inference가 이미 실행 중입니다."},
+                    )
+                    return
+                try:
+                    self._log_event("inference_start", request_id, received_at)
+                    result = infer(backend, payload)
+                    self._log_event("inference_end", request_id, received_at)
+                finally:
+                    inference_lock.release()
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
                 self._send(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
@@ -70,6 +93,7 @@ def create_handler(backend: LLMPort) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             self._send(HTTPStatus.OK, result)
+            self._log_event("response_sent", request_id, received_at)
 
         def log_message(self, format: str, *args: Any) -> None:
             return
@@ -80,7 +104,19 @@ def create_handler(backend: LLMPort) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                LOGGER.info("qwen_http event=response_disconnected")
+
+        @staticmethod
+        def _log_event(event: str, request_id: int, started_at: float) -> None:
+            LOGGER.info(
+                "qwen_http event=%s request_id=%d elapsed_sec=%.6f",
+                event,
+                request_id,
+                time.monotonic() - started_at,
+            )
 
     return InferenceHandler
 
@@ -105,6 +141,10 @@ def create_server(
 
 
 def main(argv: list[str] | None = None) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     parser = argparse.ArgumentParser(
         description="PC-only Qwen inference HTTP server"
     )
@@ -119,7 +159,7 @@ def main(argv: list[str] | None = None) -> None:
         "--model-id", default="Qwen/Qwen3-1.7B"
     )
     parser.add_argument("--device", default="xpu:0")
-    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--max-new-tokens", type=int, default=64)
     args = parser.parse_args(argv)
     server = create_server(args.host, args.port, build_backend(args))
     try:

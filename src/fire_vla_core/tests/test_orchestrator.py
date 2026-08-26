@@ -257,13 +257,18 @@ def test_resolution_and_validation_blocked_cycles_are_deduplicated(decision):
     assert orchestrator.llm.calls == 2
 
 
-def test_inference_failure_does_not_consume_signature():
+def test_inference_failure_blocks_unchanged_timer_retry():
     _, _, orchestrator = make_orchestrator()
     orchestrator.llm = StubLLM(error=LLMInferenceError("device lost"))
     first = orchestrator.decide_once()
     second = orchestrator.decide_once()
     assert first.blocked_reason.startswith("LLM_INFERENCE_FAILED:")
-    assert second.blocked_reason.startswith("LLM_INFERENCE_FAILED:")
+    assert second.blocked_reason == ""
+    assert orchestrator.llm.calls == 1
+
+    orchestrator.world.update_robot_pose(Pose2D(0.2, 0.0))
+    third = orchestrator.decide_once()
+    assert third.blocked_reason.startswith("LLM_INFERENCE_FAILED:")
     assert orchestrator.llm.calls == 2
 
 

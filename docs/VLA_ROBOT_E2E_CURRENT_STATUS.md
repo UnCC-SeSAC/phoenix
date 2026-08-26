@@ -765,3 +765,31 @@ Nav2는 fire target 약 `(0.79, 1.30)`으로 실제 주행해 robot pose 약
 Final run rosbag:
 `/ros2_ws/phoenix_vla/rosbags/issue89_final_fireonly3_20260824_2045`
 (29.2 MiB, 9,388 messages; navigation goal/result 1/1, spray command/result 1/1).
+
+## Hardware-free Qwen latency stabilization (2026-08-26)
+
+실제 #89 log의 16.691초 timeout 뒤 동일 WorldModel retry가 즉시 실행됐다.
+HTTP timeout은 server-side generation을 취소하지 않고, 기존 `ThreadingHTTPServer`는
+동일 XPU model의 concurrent inference를 막지 않았다.
+
+Software 변경:
+
+- server inference single-flight: 동시 backend 실행 최대 1
+- inference failure signature cache: 의미 있는 WorldModel 변화 전 동일 retry 0
+- Qwen lifecycle timestamp logging과 HTTP error body 보존
+- ACTIVE/PENDING_VERIFICATION fire는 기존 0.5 m association radius 안에서 stable ID 유지
+- resolved fire와 0.5 m 밖 fire는 별도 ID
+- Qwen context에서 중복 mission, timestamp, last action history 제외
+- `max_new_tokens`: 128 → 64
+
+Intel XPU HTTP fixture 50회 결과:
+
+```text
+scenarios: fire far / fire in range / person near fire / no target / stale target
+repeats: 10 each
+latency p50 / p95 / max: 1.125 / 1.510 / 2.332 sec
+timeout / HTTP error / schema failure: 0 / 0 / 0
+32 / 48 tokens: truncated JSON
+64 tokens: strict schema PASS
+HW commands: 0
+```

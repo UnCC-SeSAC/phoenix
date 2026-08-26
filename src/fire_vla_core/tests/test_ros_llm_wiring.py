@@ -12,7 +12,7 @@ def backend_kwargs():
         "ollama_base_url": "http://ollama.test",
         "transformers_model_id": "test/qwen",
         "transformers_device": "xpu:0",
-        "transformers_max_new_tokens": 128,
+        "transformers_max_new_tokens": 64,
     }
 
 
@@ -65,7 +65,7 @@ def test_transformers_backend_uses_configured_adapter(monkeypatch):
     assert captured == {
         "model_id": "test/qwen",
         "device": "xpu:0",
-        "max_new_tokens": 128,
+        "max_new_tokens": 64,
     }
 
 

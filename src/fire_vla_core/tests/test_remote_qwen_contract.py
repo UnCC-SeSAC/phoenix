@@ -137,6 +137,9 @@ class RawResponse:
     def read(self):
         return self.body
 
+    def close(self):
+        pass
+
 
 @pytest.mark.parametrize("response", [
     RawResponse(b"not-json"),
@@ -159,10 +162,12 @@ def test_remote_http_500_fails_as_inference_error(monkeypatch):
     monkeypatch.setattr(
         "urllib.request.urlopen",
         lambda *a, **k: (_ for _ in ()).throw(
-            urllib.error.HTTPError("url", 500, "error", {}, None)
+            urllib.error.HTTPError(
+                "url", 500, "error", {}, RawResponse(b'{"error":"device lost"}')
+            )
         ),
     )
-    with pytest.raises(LLMInferenceError):
+    with pytest.raises(LLMInferenceError, match="device lost"):
         RemoteQwenBackend("http://pc.test:8088/infer").decide(
             "mission", make_world().create_snapshot()
         )
@@ -203,3 +208,8 @@ def test_compact_world_model_excludes_raw_and_transport_state():
     assert not {
         "raw_image", "laser_scan", "occupancy_grid", "tf_tree", "ros_dump"
     } & set(compact)
+    assert "mission" not in compact
+    assert "last_action" not in compact
+    assert "first_seen" not in compact["people"][0]
+    assert "last_seen" not in compact["people"][0]
+    assert compact["people"][0]["within_report_range"] is False

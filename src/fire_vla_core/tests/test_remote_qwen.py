@@ -187,3 +187,72 @@ def test_inference_server_health_and_synthetic_decision():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_inference_server_never_overlaps_backend_calls():
+    class SlowBackend:
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.active = 0
+            self.max_active = 0
+
+        def decide(self, mission, world_model):
+            from fire_vla_core.domain import ActionDecision
+
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.started.set()
+            self.release.wait(timeout=2)
+            self.active -= 1
+            return ActionDecision(
+                ActionType.RETURN_HOME,
+                "대상이 없어 복귀한다",
+            )
+
+    backend = SlowBackend()
+    server = create_server("127.0.0.1", 0, backend)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    payload = {
+        "mission": "복귀",
+        "world_model": {},
+        "allowed_actions": ALLOWED_ACTIONS,
+    }
+
+    def request():
+        return urllib.request.urlopen(
+            urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/infer",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            timeout=2,
+        )
+
+    first_error = []
+
+    def first_call():
+        try:
+            with request():
+                pass
+        except Exception as exc:
+            first_error.append(exc)
+
+    request_thread = threading.Thread(target=first_call)
+    request_thread.start()
+    assert backend.started.wait(timeout=1)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            request()
+        assert exc_info.value.code == 429
+    finally:
+        backend.release.set()
+        request_thread.join(timeout=2)
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
+
+    assert first_error == []
+    assert backend.max_active == 1

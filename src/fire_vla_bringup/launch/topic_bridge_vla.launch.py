@@ -85,7 +85,7 @@ def generate_launch_description():
         DeclareLaunchArgument("transformers_device", default_value="xpu:0"),
         DeclareLaunchArgument(
             "transformers_max_new_tokens",
-            default_value="128",
+            default_value="64",
         ),
         DeclareLaunchArgument(
             "remote_qwen_endpoint",

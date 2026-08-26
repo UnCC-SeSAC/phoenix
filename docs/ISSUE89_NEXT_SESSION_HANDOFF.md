@@ -274,3 +274,17 @@ VLA + Navigation Bridge clean-start
 VLA만 restart하면 `action_0001`이 기존 Navigation Bridge cache와 충돌해 과거
 result가 새 fire action에 재사용될 수 있다. 두 launch tree를 함께 restart한 후
 실제 fire Nav2 goal과 motion으로 recovery를 검증했다.
+
+## 2026-08-26 Hardware-free latency checkpoint
+
+`13f2282` 기준 실제 #89 latency 원인을 software fixture로 재현했다. Client timeout
+후 server generation이 계속될 수 있고 timer-driven 동일-state retry가 중첩될 수 있었다.
+Server single-flight와 meaningful-state-change retry gate를 적용했다.
+
+Qwen3-1.7B XPU HTTP fixture 50회에서 64 tokens 기준 p50 1.125초, p95 1.510초,
+max 2.332초, timeout/HTTP/schema failure 0을 확인했다. 32/48 tokens는 reason
+문자열이 잘려 strict JSON contract에 실패했다.
+
+Fire fallback ID는 ACTIVE/PENDING_VERIFICATION lifecycle 동안 기존 0.5 m radius를
+유지한다. Observation max age 1.0초와 resolved-fire 분리는 변경하지 않았다.
+Hardware command는 실행하지 않았다.

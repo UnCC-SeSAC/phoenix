@@ -68,6 +68,9 @@ class VLAOrchestrator:
                 self._last_decision_input_signature = signature
                 return DecisionCycle(None, None, None, f"LLM_OUTPUT_INVALID: {exc}")
             except (LLMInferenceError, LLMError) as exc:
+                # A timed-out remote request may still be running on the server.
+                # Do not overlap it with an unchanged timer-driven retry.
+                self._last_decision_input_signature = signature
                 return DecisionCycle(None, None, None, f"LLM_INFERENCE_FAILED: {exc}")
             self._last_decision_input_signature = signature
 

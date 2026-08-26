@@ -8,6 +8,7 @@ from typing import Any
 
 from ..domain import (
     ObservationBatch,
+    FireState,
     Pose2D,
     SemanticObservation,
     utc_now,
@@ -148,7 +149,14 @@ class CanonicalPerceptionNormalizer:
                 continue
             last_seen = self._parse_timestamp(entity.last_seen)
             age = max(0.0, (observed_time - last_seen).total_seconds())
-            if age > self._ttl_sec:
+            fire_is_trackable = (
+                class_name == "fire"
+                and entity.state in {
+                    FireState.ACTIVE,
+                    FireState.PENDING_VERIFICATION,
+                }
+            )
+            if age > self._ttl_sec and not fire_is_trackable:
                 continue
             distance = position.distance_to(entity.position)
             if distance <= self._radius_m:

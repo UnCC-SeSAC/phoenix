@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -14,17 +15,7 @@ from .ports import LLMPort
 
 
 ALLOWED_ACTIONS = [action.value for action in ActionType]
-REMOTE_WORLD_MODEL_FIELDS = (
-    "mission",
-    "exploration_status",
-    "perception_ready",
-    "robot",
-    "people",
-    "fires",
-    "unexplored_zones",
-    "current_action",
-    "last_action",
-)
+LOGGER = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
@@ -89,11 +80,38 @@ def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
 def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
     """Keep remote inference limited to semantic decision state."""
     compact = {
-        field: world_model[field]
-        for field in REMOTE_WORLD_MODEL_FIELDS
-        if field in world_model
+        "exploration_status": world_model.get("exploration_status"),
+        "perception_ready": world_model.get("perception_ready"),
+        "robot": _select_fields(
+            world_model.get("robot"),
+            ("pose", "navigation_status", "home_pose"),
+        ),
+        "people": [
+            _select_fields(item, ("id", "position", "state", "reported"))
+            for item in world_model.get("people") or []
+            if isinstance(item, dict)
+        ],
+        "fires": [
+            _select_fields(
+                item,
+                (
+                    "id", "position", "size", "state", "blocks_route_to",
+                    "robot_within_spray_range", "spray_count",
+                ),
+            )
+            for item in world_model.get("fires") or []
+            if isinstance(item, dict)
+        ],
+        "unexplored_zones": [
+            _select_fields(item, ("id", "pose"))
+            for item in world_model.get("unexplored_zones") or []
+            if isinstance(item, dict)
+        ],
+        "current_action": _select_fields(
+            world_model.get("current_action"),
+            ("action", "target", "status"),
+        ),
     }
-    compact = deepcopy(compact)
     robot_pose = (compact.get("robot") or {}).get("pose")
     if not isinstance(robot_pose, dict):
         return compact
@@ -120,6 +138,15 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _select_fields(
+    value: Any,
+    fields: tuple[str, ...],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return deepcopy({field: value[field] for field in fields if field in value})
+
+
 @dataclass(slots=True)
 class RemoteQwenBackend(LLMPort):
     endpoint: str
@@ -143,15 +170,41 @@ class RemoteQwenBackend(LLMPort):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        started_at = time.monotonic()
+        LOGGER.info(
+            "qwen_client event=request_start bytes=%d",
+            len(request.data or b""),
+        )
         try:
             with urllib.request.urlopen(
                 request, timeout=self.timeout_sec
             ) as response:
                 content = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            LOGGER.warning(
+                "qwen_client event=http_error elapsed_sec=%.6f status=%d body=%s",
+                time.monotonic() - started_at,
+                exc.code,
+                error_body,
+            )
+            raise LLMInferenceError(
+                "Remote Qwen 호출에 실패했습니다: "
+                f"HTTP {exc.code}: {error_body}"
+            ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            LOGGER.warning(
+                "qwen_client event=request_failed elapsed_sec=%.6f error=%s",
+                time.monotonic() - started_at,
+                exc,
+            )
             raise LLMInferenceError(
                 f"Remote Qwen 호출에 실패했습니다: {exc}"
             ) from exc
+        LOGGER.info(
+            "qwen_client event=response_received elapsed_sec=%.6f",
+            time.monotonic() - started_at,
+        )
         return parse_action_decision(content)
 
 
@@ -194,7 +247,7 @@ class TransformersQwenAdapter(LLMPort):
     model_id: str = "Qwen/Qwen3-1.7B"
     device: str = "xpu:0"
     dtype: str = "float32"
-    max_new_tokens: int = 128
+    max_new_tokens: int = 64
     _torch: Any = None
     _tokenizer: Any = None
     _model: Any = None

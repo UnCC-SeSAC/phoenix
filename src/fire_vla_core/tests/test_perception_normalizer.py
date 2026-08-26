@@ -2,7 +2,13 @@ from datetime import timedelta
 
 import pytest
 
-from fire_vla_core.domain import FireEntity, PersonEntity, Pose2D, utc_now
+from fire_vla_core.domain import (
+    FireEntity,
+    FireState,
+    PersonEntity,
+    Pose2D,
+    utc_now,
+)
 from fire_vla_core.ros.perception_normalizer import (
     CanonicalPerceptionNormalizer,
 )
@@ -120,6 +126,48 @@ def test_candidate_older_than_ttl_is_not_reused():
     batch = normalizer.normalize(payload(detection(x=2.0, y=1.0)))
 
     assert batch.observations[0].entity_id == "person_0002"
+
+
+def test_active_fire_keeps_id_after_association_ttl():
+    world = WorldModel()
+    old = (utc_now() - timedelta(seconds=8)).isoformat()
+    world.fires["fire_0001"] = FireEntity(
+        "fire_0001", Pose2D(2.0, 1.0), last_seen=old
+    )
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = normalizer.normalize(payload(detection("fire", 2.08, 1.01)))
+
+    assert batch.observations[0].entity_id == "fire_0001"
+
+
+def test_distant_fire_remains_separate_after_association_ttl():
+    world = WorldModel()
+    old = (utc_now() - timedelta(seconds=8)).isoformat()
+    world.fires["fire_0001"] = FireEntity(
+        "fire_0001", Pose2D(2.0, 1.0), last_seen=old
+    )
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = normalizer.normalize(payload(detection("fire", 2.6, 1.0)))
+
+    assert batch.observations[0].entity_id == "fire_0002"
+
+
+def test_resolved_fire_id_is_not_reused_after_association_ttl():
+    world = WorldModel()
+    old = (utc_now() - timedelta(seconds=8)).isoformat()
+    world.fires["fire_0001"] = FireEntity(
+        "fire_0001",
+        Pose2D(2.0, 1.0),
+        state=FireState.EXTINGUISHED,
+        last_seen=old,
+    )
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = normalizer.normalize(payload(detection("fire", 2.02, 1.0)))
+
+    assert batch.observations[0].entity_id == "fire_0002"
 
 
 def test_equal_distance_tie_breaks_by_entity_id():
