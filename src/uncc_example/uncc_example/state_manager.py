@@ -687,11 +687,16 @@ class StateManager(Node):
     def _update_robot_pose(self):
 
         try:
+            # timeout=0: 지금 당장 buffer 에 있는 걸로만 즉시 판단한다.
+            # 0.2초마다 도는 타이머에서 매번 최대 0.1초씩 블로킹하면,
+            # TF 가 이미 밀린 상황(map->odom 지연)에서 이 콜백 자체가
+            # CPU를 붙잡고 있어서 TF 지연을 더 악화시키는 악순환이 됨.
+            # 이번 tick 에 못 구하면 다음 tick(0.2초 뒤)에 다시 시도된다.
             transform = self.tf_buffer.lookup_transform(
                 self.map_frame,
                 self.base_frame,
                 Time(),
-                timeout=Duration(seconds=0.1),
+                timeout=Duration(seconds=0.0),
             )
 
         except TransformException:
