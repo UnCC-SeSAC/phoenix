@@ -53,7 +53,7 @@ class TestConvertFrame:
         d = res.detections[0]
         assert isinstance(d, Detected3D)
         assert d.xyz == pytest.approx(sc.expected_base_link(CAM_OFFSET), abs=1e-3)
-        assert (d.class_id, d.region, d.is_fallback) == ("fire", "center", False)
+        assert (d.class_id, d.region, d.is_fallback) == ("fire", "bottom", False)
         assert d.distance_m == pytest.approx(3.2, abs=1e-3)
 
     def test_uses_color_k_for_backprojection(self):
@@ -182,7 +182,7 @@ class TestFallbackPolicy:
         res = convert_frame([(sc.box_color, "fire", 0.9)], sc.depth_image(),
                             sc.k_color, sc.k_depth, _tf(), p)
         assert res.detections[0].is_fallback is False
-        assert res.detections[0].region == "center"
+        assert res.detections[0].region == "bottom"
 
     def test_fallback_distance_is_biased_not_exact(self):
         """★ 폴백은 값이 나와도 대상 거리가 아닙니다. 오차를 기록해 둡니다."""

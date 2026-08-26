@@ -57,12 +57,14 @@ from image_pipeline.detection3d import (
     SamplingParams,
     StampMonitor,
     convert_frame_pixels,
+    parse_region_by_class,
 )
 from image_pipeline.detection_json import (
     STATUS_UNKNOWN,
     build_heartbeat,
     build_payload,
     heartbeat_state,
+    is_surrogate,
     stamp_age_sec,
     to_json,
 )
@@ -86,6 +88,7 @@ class Detection3DNode(Node):
             method=str(p("method").value),
             central=float(p("central").value),
             band_ratio=float(p("band_ratio").value),
+            band_offset=float(p("band_offset").value),
             ring_margin=float(p("ring_margin").value),
             min_valid_ratio=float(p("min_valid_ratio").value),
             min_valid_px=int(p("min_valid_px").value),
@@ -95,10 +98,12 @@ class Detection3DNode(Node):
                           else float(p("max_spread_m").value)),
             fallback_regions=tuple(str(p("fallback_regions").value).split(",")) if
             str(p("fallback_regions").value).strip() else (),
-            # 빈 문자열 = 영역별 권장값(REGION_METHOD). 문자열을 주면
+            # 빈 문자열 = 영역별 권장값(detection3d.method_for). 문자열을 주면
             # **모든** 폴백 영역에 강제됩니다 — ring 에 "max"는 편향을 키웁니다.
             fallback_method=(str(p("fallback_method").value).strip() or None),
             min_score=float(p("min_score").value),
+            region_by_class=parse_region_by_class(
+                str(p("region_by_class").value)),
         )
 
         self.bridge = CvBridge()
@@ -179,6 +184,23 @@ class Detection3DNode(Node):
             f"[태스크②] {p('detections_topic').value} + {p('depth_topic').value} "
             f"-> {p('output_topic').value} (JSON, 검출이 있을 때만) "
             f"| 상태 -> {p('status_topic').value}")
+        # ★ 클래스별 매핑은 **반드시 시작 로그로 확인할 수 있어야** 합니다.
+        #   라벨 오타는 예외를 안 냅니다 — 그 클래스만 조용히 기본값으로 재고,
+        #   fire가 bottom으로 떨어지면 벽 거리가 나갑니다.
+        mapping = ", ".join(
+            "{}->{}({})".format(c, r, self.params.region_for(c)[1])
+            for c, r in sorted(self.params.region_by_class.items()))
+        self.get_logger().info(
+            f"[태스크②] 거리 샘플링: 기본 {self.params.region}"
+            f"({self.params.method})"
+            + (f" | 클래스별 {mapping}" if mapping else " | 클래스별 매핑 없음")
+            + "  ← 검출 라벨이 여기 이름과 정확히 같은지 확인하세요")
+        if self.params.band_offset > 0.0:
+            lo, hi = self.params.band_offset, self.params.band_offset + self.params.band_ratio
+            self.get_logger().info(
+                f"[태스크②] below 띠 = 박스 아래 {lo:.1f}~{hi:.1f}배 지점 "
+                f"(박스높이 배수). 화염 1.75cm 기준 아래 "
+                f"{lo * 1.75:.1f}~{hi * 1.75:.1f}cm — 촛대 받침(종이컵)을 겨냥합니다")
         if self.params.fallback_regions:
             self.get_logger().warn(
                 f"폴백 켜짐: {self.params.fallback_regions} — 이 값들은 대상이 아니라 "
@@ -207,10 +229,35 @@ class Detection3DNode(Node):
         self.declare_parameter("qos_depth", 30)
 
         # 거리 샘플링 (depth.sample_distance_detail)
-        self.declare_parameter("region", "center")
+        # ★ 기본이 "center"가 아니라 "bottom"입니다 (2026-08-24 실측 반영).
+        #   성냥불 위에서 뎁스가 안 나오는 것을 실기에서 확인했습니다 — 지시서 5-1이
+        #   경고한 상황이 실제로 일어납니다. 화염은 스스로 적외선을 내는 광원이라
+        #   박스 중앙(=불꽃)은 구조적으로 무효입니다. "center"로 두면 화재 검출마다
+        #   `no_valid_pixels`로 버려집니다.
+        #   여기 "region"은 **매핑에 없는 클래스**의 기본값입니다 — 클래스별 값은
+        #   아래 region_by_class 를 보세요.
+        self.declare_parameter("region", "bottom")
         self.declare_parameter("method", "median")
         self.declare_parameter("central", 0.5)
-        self.declare_parameter("band_ratio", 0.15)
+
+        # --- `below` 띠의 위치·두께 (박스 높이의 배수) ---
+        # ★ 2026-08-26 실기 측정으로 정한 값입니다. 화염 박스 19px, 실제 화염
+        #   1.5~2cm, 촛대를 받친 종이컵은 화염 아래 약 9cm.
+        #     9cm / 1.75cm ≈ 5.1배  <- 눈대중 "5~6배"와 일치
+        #   박스 바로 아래(band_offset=0)는 아직 화염 언저리라 배경(벽)이 잡혔습니다.
+        #
+        #   3.5 ~ 3.5+3.0 = 화염 아래 6.1~11.4cm (두께 5.3cm)를 덮습니다.
+        #   9cm를 가운데 두고 위아래로 여유를 둔 건, 촛불이 타들어가면서
+        #   화염-종이컵 거리가 **계속 변하기** 때문입니다. 얇게 잡으면 어느
+        #   시점에 컵을 벗어납니다.
+        #
+        # ★ 배수로 잡는 이유: 9cm의 픽셀 크기도 박스 높이도 똑같이 1/Z 이라
+        #   **비율이 거리와 무관**합니다. 거리를 몰라도 되고 f_y도 안 씁니다.
+        # ★ band_offset > 0 이면 method가 자동으로 max -> median 이 됩니다.
+        #   띠가 컵 몸통이라 가장 먼 값은 컵 뒤 배경입니다 (detection3d.method_for).
+        self.declare_parameter("band_offset", 3.5)
+        self.declare_parameter("band_ratio", 3.0)
+
         self.declare_parameter("ring_margin", 0.25)
         self.declare_parameter("min_valid_ratio", 0.2)
         self.declare_parameter("min_valid_px", 1)
@@ -218,10 +265,27 @@ class Detection3DNode(Node):
         self.declare_parameter("z_max", 4.0)
         self.declare_parameter("max_spread_m", 0.0)   # <=0 이면 꺼짐
 
+        # ★★ 클래스마다 재는 위치가 다릅니다 (2026-08-26 실기 실측).
+        #
+        #   fire:below    박스 **대부분이 불꽃**이라 박스 안에 대상 표면이 없습니다.
+        #                 bottom으로 재면 불꽃 사이로 보이는 **배경(벽)**이 잡혀
+        #                 +0.33~+0.60m 멀게 나갔습니다 — 그것도 유효비율 0.98에
+        #                 사유 `ok`로요. below는 박스 바깥이라 불꽃 영향을 안 받습니다.
+        #   person:bottom below로 쟀더니 **예상보다 가깝게** 나왔습니다. 사람 앞쪽
+        #                 바닥을 재기 때문입니다. 사람은 박스 안 뎁스가 멀쩡하므로
+        #                 굳이 주변을 잴 이유가 없습니다.
+        #
+        # 형식은 "클래스:영역" 쉼표 구분. 매핑에 없는 클래스는 위 `region`을 씁니다.
+        # ★ 클래스 이름은 **학습 라벨과 정확히** 같아야 합니다 — `Fire`처럼 대소문자가
+        #   다르면 조용히 안 걸리고 기본값(bottom)이 쓰입니다.
+        # ★ method는 자동으로 따라갑니다 (below→max). region만 바꾸면 median이
+        #   걸려 -0.326m가 나갑니다 — detection3d.SamplingParams.region_for 참고.
+        self.declare_parameter("region_by_class", "fire:below,person:bottom")
+
         # ★ 폴백 기본 꺼짐. 켜기 전에 HANDOVER 8장 편향 표를 읽으세요.
         self.declare_parameter("fallback_regions", "")   # 예: "bottom,below,ring"
         # "" = 영역별 권장값 (below→max, bottom/ring→median). 아래 참조:
-        #   detection3d.REGION_METHOD
+        #   detection3d.method_for
         self.declare_parameter("fallback_method", "")
         # 폴백 값을 실어 보낼지. 보낼 때는 `depth_status`가 폴백임을 밝힙니다.
         # False면 폴백 거리를 버리고 `unknown`으로 내보냅니다.
@@ -247,6 +311,10 @@ class Detection3DNode(Node):
                 if n == "fallback_regions":
                     self.params.fallback_regions = tuple(
                         s for s in str(v).split(",") if s.strip())
+                elif n == "region_by_class":
+                    # 오타면 ValueError -> 아래에서 거부됩니다. 잘못된 매핑을
+                    # 받아들이면 그 클래스만 조용히 다른 곳을 잽니다.
+                    self.params.region_by_class = parse_region_by_class(str(v))
                 elif n == "max_spread_m":
                     self.params.max_spread_m = None if float(v) <= 0 else float(v)
                 elif n == "fallback_method":
@@ -344,8 +412,10 @@ class Detection3DNode(Node):
 
         entries = [self._filtered(e) for e in result.entries]
         self._n_unknown += sum(1 for e in entries if e["depth"] is None)
+        # 대상이 아니라 주변을 잰 것만 셉니다. `fallback_bottom`은 박스 안이라
+        # 제외 — 기본값이라 세면 매 프레임 전건이 잡혀 로그가 무의미해집니다.
         self._n_fallback += sum(1 for e in entries
-                                if e["depth_status"].startswith("fallback"))
+                                if is_surrogate(e["depth_status"]))
 
         if entries or self.publish_empty:
             msg = String()
@@ -366,8 +436,13 @@ class Detection3DNode(Node):
 
         ★ 거리만 지우고 **검출은 남깁니다.** 빼버리면 메인은 "불이 보였다"는
         사실조차 모릅니다.
+
+        ★ 여기서 "폴백"은 **주변을 대신 잰 것**(`below`/`ring`)만입니다.
+        `fallback_bottom`은 이름과 달리 박스 **안**이라 대상 자체를 읽으므로
+        거르지 않습니다 — 기본 region이 `bottom`이라, 접두사로 걸렀다면
+        `publish_fallback=false`가 모든 거리를 지워버립니다.
         """
-        if self.publish_fallback or not entry["depth_status"].startswith("fallback"):
+        if self.publish_fallback or not is_surrogate(entry["depth_status"]):
             return entry
         out = dict(entry)
         out["depth"] = None

@@ -835,3 +835,13 @@ HW commands: 0
 - robot pose freshness, fire state/range/spray count, target 존재 검증 유지
 - `PENDING_VERIFICATION`과 physical action single-flight 계약 유지
 - entity freshness 정책은 실제 HW E2E 데이터 확보 후 재검토
+
+## Depth sampling selective integration (2026-08-26)
+
+- upstream source: `albitro/image_fire@ed3abbc301b0d49b52300cbc0e01fcb06eeef2e6`
+- fire: `below`, band offset/ratio `3.5/3.0`, `p25`
+- person: `bottom`, `median`
+- production topic/schema: `/yolo_result → /fire/detections` 유지
+- Hailo backend/model과 VLA/Qwen policy 변경 없음
+- software: image_pipeline 351 PASS, fire_vla_core 247 PASS
+- actual Robot HW: PENDING
