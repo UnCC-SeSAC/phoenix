@@ -869,3 +869,68 @@ LiDAR, TF, Nav2, suppression, VLA 개별 readiness를 확인했다. Fresh fire�
 
 다음 fire-only E2E는 rosbag 없이 정상 JSON Mission을 정확히 1회 발행한다.
 전체 E2E와 실제 소화는 아직 `PENDING`이며 Issue #89/#91을 유지한다.
+
+## 2026-08-27 fire-only Hardware E2E 실행환경과 중단 상태
+
+기준은 `integration/vla-robot-e2e@0af75f9627170f2eee3218110225c78762cb0f29`다.
+Camera package는 `/home/ubuntu/ros2_ws/install/peripherals`, ASCamera SDK는
+`v1.2.22.20240516`이며 `IntelPi` container의 `ros:humble-export` image와
+`MentorPi_Mecanum`을 사용했다. Qwen endpoint는 당시 PC Wi-Fi 주소인
+`http://192.168.1.37:8088/infer`였다. 다음 세션에는 실제 PC 주소를 다시 확인한다.
+
+검증된 source와 environment 순서:
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
+source /home/ubuntu/ros2_ws/install/setup.bash
+source /ros2_ws/phoenix_vla/install/setup.bash
+export MACHINE_TYPE=MentorPi_Mecanum
+export need_compile=True
+export DEPTH_CAMERA_TYPE=ascamera
+export ROS_DOMAIN_ID=42
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export PYTHONPATH=/usr/local/lib/python3.10/dist-packages:${PYTHONPATH}:/home/ubuntu/.local/lib/python3.10/site-packages
+cd /
+```
+
+실제 RGB/Depth/CameraInfo PASS를 만든 startup transcript는 Camera를 먼저 시작하고
+8초 기다린 뒤 나머지 tree를 각각 정확히 1회 시작했다. 각 명령은 위 environment를
+source한 별도 `docker exec IntelPi bash -lc` process에서 실행했다.
+
+```bash
+ros2 launch peripherals depth_camera.launch.py
+# Camera initialization wait: 8 sec
+ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false
+ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough
+ros2 launch image_pipeline yolo.launch.py model_path:=/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef postprocess_path:=/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx backend:=hailo layout:=end2end class_names:="[fire,person]"
+ros2 launch image_pipeline detection_3d.launch.py
+ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://192.168.1.37:8088/infer
+ros2 launch uncc_example vla_navigation_bridge.launch.py
+ros2 launch uncc_example fire_extinguisher.launch.py
+```
+
+오늘 확인한 PASS:
+
+- compatible-QoS direct subscriber: RGB / Depth / CameraInfo PASS
+- Qwen HTTP health: 200
+- Nav2 `/navigate_to_pose` action server: PASS
+- `/suppress_fire` action server: PASS
+- YOLO fire detection: 지속 발생
+- Detection3D depth: PASS, `depth_status=fallback_below`
+
+오전 표적 배치 성공값은 confidence `0.729`, depth `0.634 m`, map position 약
+`(0.470, -0.514)`, WorldModel `fire_0023 ACTIVE`였다.
+`FRESH_FIRE_OBSERVATION: PASS`, `READY_FOR_MISSION: YES`까지 확인했다.
+
+오후 최종 시도에서는 fire detection과 유효 depth가 지속됐지만 최고 confidence가
+`0.5817`로 production threshold `0.60` 미만이었다. Depth는 약 `1.53 m`, 상태는
+`fallback_below`였고 WorldModel ACTIVE fire는 등록되지 않았다. Mission, Nav2,
+Robot motion, Servo, Pump command는 모두 0이다. 첫 실제 실패 단계는
+`YOLO confidence threshold`다.
+
+다음 표적은 threshold를 바꾸기 전에 화면 중앙 약 `0.9 m`에 둔다. 불꽃 아래
+불연성 고체 받침과 거리 측정 가능한 비반사·불투명 배경을 확보하고 불 ON 시간은
+최소화한다. `0.60 → 0.40` threshold 변경과 지속 검출 횟수+유효 Depth를 결합한
+supervised E2E 정책은 `PROPOSED / NOT_APPLIED`다.

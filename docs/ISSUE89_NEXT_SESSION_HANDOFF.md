@@ -307,3 +307,37 @@ Nav2 goal / suppression / 실제 이동 / 분사: 0 / 0 / 0 / 0
 다음 단계는 충전 완료, 전원선 분리, 안전한 바닥 배치 후 production runtime을
 정확히 1회 clean start하고 정상 JSON Mission 1회로 fire-only 전체 E2E를 재시도하는
 것이다. 다음 실행은 rosbag을 사용하지 않는다. #89/#91은 OPEN 유지한다.
+
+## 2026-08-27 next fire-only execution
+
+현재 production runtime은 안전 종료됐고 active production process는 0개다. 다음
+세션은 `integration/vla-robot-e2e@0af75f9627170f2eee3218110225c78762cb0f29`와
+`/ros2_ws/phoenix_vla/install`을 그대로 사용한다. Canonical source/environment와
+실제 launch 명령은 `docs/VLA_ROBOT_E2E_CURRENT_STATUS.md`의
+`2026-08-27 fire-only Hardware E2E 실행환경과 중단 상태`를 그대로 재사용한다.
+
+```text
+불 OFF에서 production start exactly once
+→ compatible-QoS direct subscriber 통합 preflight 1회
+→ Robot 바닥 배치와 전원선 분리
+→ 표적을 화면 중앙 약 0.9 m에 배치
+→ 불연성 고체 받침과 거리 측정 가능한 배경 확인
+→ BEST_EFFORT passive observer를 불보다 먼저 연결
+→ 불 ON
+→ confidence >= 0.60 + valid depth/map + fresh ACTIVE fire
+→ {"mission_id":"mission_fire_001","text":"화재를 찾아 진압해줘"} 정확히 1회
+→ Qwen → Nav2 → Robot stop → Servo/Pump → Pump OFF
+→ flame disappearance → terminal SUCCESS
+```
+
+Observer는 `/yolo_result`, `/fire/detections`, `/fire/detections/status`,
+`/vla/world_model`, VLA navigation/spray command/result와 action status를 한 process로
+관찰한다. `/fire/detections*`에는 BEST_EFFORT `qos_profile_sensor_data`를 사용한다.
+매 실행마다 새 QoS나 timeout을 조립하지 않는다. Fresh ACTIVE fire가 생성되면 중간
+readiness 없이 Mission부터 terminal까지 연속 실행한다. 명백히 threshold 미만으로
+안정되면 불을 60초 유지하지 않고 중단한다.
+
+오전 성공값은 confidence `0.729`, depth `0.634 m`, map 약
+`(0.470, -0.514)`, `fire_0023 ACTIVE`다. 오후 실패값은 최고 confidence `0.5817`,
+depth 약 `1.53 m`, `fallback_below`, WorldModel ACTIVE fire 미등록이다. Mission과
+모든 HW command는 0이었다. Threshold 변경은 적용하지 않았다.
