@@ -987,3 +987,33 @@ Phoenix low-battery contract는 Pi poweroff가 아니라 `RETURNING_TO_BASE`다.
 정지 상태에서 localization yaw가 `110.6° → 64.0°`로 변했다. 수동 이동 뒤 기존
 localization, fire, Mission, goal은 모두 폐기한다. 현재 Robot과 Pi는 충전을 위해
 종료됐고 Hardware E2E는 중단 상태다.
+
+## 2026-08-27 final fire-only checkpoint
+
+기준은 `integration/vla-robot-e2e@2b5ee9a12147754004d293e0d9f7d8799e69f951`다.
+Qwen `REPORT_PERSON` 판단은 약 `2.36 s`에 성공했다. Production launch에는
+`remote_qwen_timeout_sec:=10.0`을 명시해야 한다. `REPORT_PERSON` terminal result가
+WorldModel에 반영되지 않은 현상은 별도 known issue이며 이번 fire-only 실행에서
+수정하지 않았다.
+
+점화 중 사람 관측을 피하기 위해 VLA Orchestrator와 Navigation Bridge를 끄고,
+작업자가 화각에서 빠진 뒤 두 component를 시작했다. 새 WorldModel의 `people=0`을
+확인한 이 방식으로 fresh `fire_0001 ACTIVE`를 생성했다. Confidence는 `0.582`, map
+position은 약 `(1.066, -0.854)`이며 Depth와 map position은 유효했다.
+
+Qwen이 분사거리 밖 ACTIVE fire에 `EXTINGUISH`를 반환해 Validator가 거절하던 경로는
+`2b5ee9a`에서 같은 target의 `NAVIGATE_TO`로 제출 전 정확히 1회 교정한다. 역방향
+교정은 없고 stale/invalid/inactive target 차단, spray range `0.8 m`, 나머지 safety
+threshold는 유지한다. 검증은 focused `4 PASS`, Orchestrator `22 PASS`다.
+
+마지막 canonical runtime은 Camera 선기동과 8초 대기 후 나머지 stack을 정확히 1회
+시작했다. RGB/Depth/CameraInfo/YOLO는 PASS했고 Detection3D counter는
+`frames=43`, `detections_in=94`, `depth_in=349`였다. Nav2와 Suppression action
+server는 각각 1개였고 Mission/Nav2/Servo/Pump command는 0이었다. 이후 PC–Pi
+경로가 끊겨 WorldModel empty와 Pi→Qwen HTTP 200 최종 확인은 `UNKNOWN`이다.
+`READY_FOR_FIRE=NO`로 종료했다.
+
+SSH는 정상 접속 뒤 reset, timeout, `No route to host`가 간헐적으로 발생했다. Ping은
+약 `85–125 ms`, packet loss `33%`였으나 이 정보만으로 production failure를
+확정하지 않는다. 세션 종료 시 SSH가 복구되지 않아 runtime clean stop, Robot stop,
+Pump OFF의 원격 확인 상태도 `UNKNOWN`이다.

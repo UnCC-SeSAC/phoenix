@@ -710,3 +710,35 @@ canonical production stack을 시작한다.
 - 시작 전 network와 localization을 한 번 확인하고 terminal까지 연속 실행한다.
 - Active Mission 중 Robot을 손으로 옮기지 않는다.
 - 책상 위 또는 전원선 연결 상태에서는 motion을 실행하지 않는다.
+
+## Remote Qwen timeout과 out-of-range action 처리
+
+- `REPORT_PERSON` 판단은 약 `2.36 s`에 성공했다. Production VLA launch에는
+  `remote_qwen_timeout_sec:=10.0`을 명시한다.
+- `REPORT_PERSON` terminal result 미반영은 별도 known lifecycle issue다.
+- Qwen이 유효한 분사거리 밖 ACTIVE fire에 `EXTINGUISH`를 반환하면 기존 Validator가
+  거절하고 Mission이 진행되지 않았다.
+- `2b5ee9a`부터 Validator 제출 전에 같은 target의 `NAVIGATE_TO`로 한 번만 교정한다.
+  Stale/invalid/inactive target과 다른 safety gate는 기존대로 차단한다.
+
+## 점화 작업자의 person observation 회피
+
+Fire-only 검증에서 점화 작업자가 WorldModel person으로 남으면 Qwen이
+`REPORT_PERSON`을 우선할 수 있다. 불 OFF에서 VLA Orchestrator와 Navigation Bridge만
+정지하고, 점화 후 작업자가 화각에서 빠진 다음 두 component를 한 번 시작한다. 새
+WorldModel에서 `people=0`, fresh ACTIVE fire, `current_action=null`을 확인한 뒤 새
+Mission ID를 한 번만 사용한다. Camera, YOLO, Detection3D, Nav2, Suppression server는
+이 절차 때문에 재시작하지 않는다.
+
+## 간헐적 PC–Pi SSH 단절
+
+증상: SSH가 정상 접속된 뒤 reset, timeout 또는 `No route to host`로 바뀔 수 있다.
+2026-08-27 관측값은 ping `85–125 ms`, packet loss `33%`였다.
+
+판정: SSH 조회 실패만으로 Pi production runtime failure나 종료 성공을 확정하지
+않는다. Side-effect 명령 timeout 뒤 runtime을 중복 시작하지 않는다.
+
+복구: 불 OFF에서 Pi 전원·배터리와 SSH 실제 명령 경로를 먼저 확인한다. 접속되면
+active production process와 Mission/Nav2/Suppression 상태를 한 번 확인해 살아 있는
+runtime은 재사용한다. Process가 없을 때만 canonical clean start를 한 번 수행한다.
+접속되지 않으면 remote stop 상태는 `UNKNOWN`으로 남긴다.

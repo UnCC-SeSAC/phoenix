@@ -464,3 +464,33 @@ JSON publisher로 정확히 1회만 발행한다.
 기존 fire, localization, Mission, goal은 재사용하지 않는다. Active Mission 중 Robot을
 손으로 옮기지 않는다. Threshold는 `0.40`, spray range는 `0.8 m`다. 현재 미완료는
 Nav2 terminal, system-level stop, Servo/Pump, 실제 소화, terminal SUCCESS다.
+
+## 2026-08-27 final resume checkpoint
+
+Authoritative checkpoint는
+`integration/vla-robot-e2e@2b5ee9a12147754004d293e0d9f7d8799e69f951`다.
+Out-of-range ACTIVE fire에 대한 잘못된 Qwen `EXTINGUISH`는 같은 target의
+`NAVIGATE_TO`로 한 번 교정된다. `remote_qwen_timeout_sec:=10.0`, fire confidence
+threshold `0.40`, spray range `0.8 m`를 유지한다.
+
+마지막 readiness는 RGB/Depth/CameraInfo/YOLO, Detection3D frame 진행, Nav2 server
+1개, Suppression server 1개까지 PASS했다. Command는 Mission/Nav2/Servo/Pump 모두
+0이었다. 네트워크 단절로 WorldModel empty, Pi→Qwen HTTP 200, runtime clean stop,
+Robot stop, Pump OFF의 최종 확인은 `UNKNOWN`이며 `READY_FOR_FIRE=NO`다. 이전
+fire/Mission/goal은 재사용하지 않는다.
+
+다음 세션 최소 순서:
+
+1. 배터리 충분, 불 OFF, 충전선 분리, 안전한 바닥 배치를 확인한다.
+2. Pi IP와 SSH 실제 명령 응답을 확인한다.
+3. Active production process를 한 번 확인한다. 살아 있으면 재사용하고, 없을 때만
+   위 canonical Camera-first 순서로 clean start를 정확히 1회 수행한다.
+4. WorldModel empty와 Pi→현재 PC Qwen endpoint HTTP 200만 마무리한다.
+5. 점화 중 VLA/Navigation Bridge를 OFF로 유지하고 사람이 화각에서 빠진 뒤 시작해
+   새 WorldModel `people=0`과 fresh ACTIVE fire를 확인한다.
+6. `READY_FOR_FIRE` 이후 이전과 다른 새 Mission ID로 Mission을 정확히 1회 발행해
+   Qwen → Nav2 → Robot stop → Suppression → terminal SUCCESS를 연속 관찰한다.
+
+SSH 조회 실패만으로 runtime을 다시 시작하지 않는다. Mission, Nav2 goal, 전체
+runtime start를 중복 실행하지 않는다. `REPORT_PERSON` terminal result 미반영은 별도
+known issue이며 fire-only 완료와 분리해 추적한다.
