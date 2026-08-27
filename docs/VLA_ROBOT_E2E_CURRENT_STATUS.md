@@ -934,3 +934,25 @@ Robot motion, Servo, Pump command는 모두 0이다. 첫 실제 실패 단계는
 불연성 고체 받침과 거리 측정 가능한 비반사·불투명 배경을 확보하고 불 ON 시간은
 최소화한다. `0.60 → 0.40` threshold 변경과 지속 검출 횟수+유효 Depth를 결합한
 supervised E2E 정책은 `PROPOSED / NOT_APPLIED`다.
+
+## 2026-08-27 fire geometry / Nav2 분리 시험
+
+승인된 최소 변경으로 production fire confidence threshold `0.60 → 0.40`을
+`WorldModelConfig`와 `fire_vla_bringup/config/vla.yaml`에 적용했고, 관련 VLA package만
+build한 뒤 VLA bridge/Orchestrator만 재시작했다. Camera, YOLO, Detection3D, Nav2,
+Suppression runtime은 유지했다.
+
+직전 Mission/WorldModel을 폐기한 뒤 Test 1에서 fresh `fire_0003 ACTIVE`를 만들었다.
+Robot map pose는 `(0.141, -0.268, yaw 110.6°)`, fire map position은
+`(-0.511, 1.153)`, robot 기준 bearing은 `+4.0°`였다. 실제 불도 카메라 정면에 있어
+Detection3D/source-time TF의 fire 방향은 `PASS`다. Confidence는 `0.418`이었다.
+
+불 OFF 후 같은 좌표로 Test 2를 시작했으나 이동 직전 robot yaw가 `64.0°`로 바뀌었다.
+Robot은 수동·자율 이동하지 않았으므로 Test 1 대비 약 `46.6°`의 localization/TF
+heading 변화다. Local costmap 정면 0.12~0.60 m 구간의 lethal cell은 `0/25`였지만
+`ComputePathToPose`가 path를 생성하지 못했다. `NavigateToPose` goal은 발행하지
+않았고 Robot motion, Mission, Servo, Pump command는 0이다.
+
+첫 실패 계층은 `localization/TF heading stability`다. Fire map 좌표 방향 오류는
+이번 Test 1로 배제됐다. Nav2 planner/costmap root cause는 아직 확정하지 않는다.
+Test 3 Full E2E는 실행하지 않았고 terminal SUCCESS는 `NO`다.

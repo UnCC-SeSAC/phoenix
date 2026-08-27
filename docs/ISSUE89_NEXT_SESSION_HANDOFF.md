@@ -341,3 +341,18 @@ readiness 없이 Mission부터 terminal까지 연속 실행한다. 명백히 thr
 `(0.470, -0.514)`, `fire_0023 ACTIVE`다. 오후 실패값은 최고 confidence `0.5817`,
 depth 약 `1.53 m`, `fallback_below`, WorldModel ACTIVE fire 미등록이다. Mission과
 모든 HW command는 0이었다. Threshold 변경은 적용하지 않았다.
+
+## 2026-08-27 geometry test checkpoint
+
+Production threshold `0.40` 적용 후 VLA만 재시작해 이전 Mission/fire를 폐기했다.
+Fresh fire geometry는 robot pose `(0.141, -0.268, 110.6°)`, fire
+`(-0.511, 1.153)`, relative bearing `+4.0°`로 실제 카메라 정면과 일치했다.
+
+불 OFF 후 Nav2-only 시험 직전, 정지 상태의 robot yaw가 `64.0°`로 바뀌었다.
+Local costmap 정면 lethal cell은 `0/25`였지만 plan은 생성되지 않았다. 실제
+`NavigateToPose` goal, Mission, Servo/Pump command는 0이며 Full E2E는 NOT RUN이다.
+
+다음 실행은 불 OFF에서 localization/TF heading이 정지 상태에서 안정적인지 먼저
+확인한다. 이전 fire, Mission, goal은 재사용하지 않는다. Heading이 안정된 뒤 fresh
+fire bearing이 정면과 일치하고 plan이 생성될 때만 Nav2 goal 1회와 Full E2E를
+진행한다. 현재 blocker는 `localization/TF heading stability`다.
