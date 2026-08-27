@@ -33,7 +33,7 @@ from .domain import (
 @dataclass(slots=True)
 class WorldModelConfig:
     person_confidence_threshold: float = 0.50
-    fire_confidence_threshold: float = 0.60
+    fire_confidence_threshold: float = 0.40
     spray_range_m: float = 0.80
     max_event_log_entries: int = 500
     verification_required_observations: int = 3

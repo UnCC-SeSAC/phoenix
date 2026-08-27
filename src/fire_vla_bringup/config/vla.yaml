@@ -5,7 +5,7 @@ vla:
     llm_invalid_output_retries: 2
     navigation_integration_strategy: "MOCK"  # MOCK | DIRECT_ACTION | TOPIC_BRIDGE
     person_confidence_threshold: 0.5
-    fire_confidence_threshold: 0.6
+    fire_confidence_threshold: 0.4
     spray_range_m: 0.8
     entity_merge_distance_m: 0.5
     event_log_max_entries: 500
