@@ -340,7 +340,8 @@ readiness 없이 Mission부터 terminal까지 연속 실행한다. 명백히 thr
 오전 성공값은 confidence `0.729`, depth `0.634 m`, map 약
 `(0.470, -0.514)`, `fire_0023 ACTIVE`다. 오후 실패값은 최고 confidence `0.5817`,
 depth 약 `1.53 m`, `fallback_below`, WorldModel ACTIVE fire 미등록이다. Mission과
-모든 HW command는 0이었다. Threshold 변경은 적용하지 않았다.
+모든 HW command는 0이었다. 이 시점에는 threshold 변경을 적용하지 않았고, 이후
+사용자 승인으로 `5717087`에서 `0.40`을 적용했다.
 
 ## 2026-08-27 geometry test checkpoint
 
@@ -356,3 +357,110 @@ Local costmap 정면 lethal cell은 `0/25`였지만 plan은 생성되지 않았�
 확인한다. 이전 fire, Mission, goal은 재사용하지 않는다. Heading이 안정된 뒤 fresh
 fire bearing이 정면과 일치하고 plan이 생성될 때만 Nav2 goal 1회와 Full E2E를
 진행한다. 현재 blocker는 `localization/TF heading stability`다.
+
+## 2026-08-27 charging handoff: final fire-only retry
+
+Robot과 Pi는 배터리 충전을 위해 종료됐다. 사용자가 `충전 완료, 바닥 배치 완료`를
+알리기 전에는 Pi, runtime, Hardware command를 실행하지 않는다. 다음 실행에서는
+기존 출발 위치를 억지로 재현하지 않고 새 안전 위치를 기준으로 localization을 정확히
+1회 설정한다.
+
+Canonical source 순서:
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
+source /home/ubuntu/ros2_ws/install/setup.bash
+source /ros2_ws/phoenix_vla/install/setup.bash
+export MACHINE_TYPE=MentorPi_Mecanum
+export need_compile=True
+export DEPTH_CAMERA_TYPE=ascamera
+export ROS_DOMAIN_ID=42
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export PYTHONPATH=/usr/local/lib/python3.10/dist-packages:${PYTHONPATH}:/home/ubuntu/.local/lib/python3.10/site-packages
+cd /
+```
+
+Active production process 0개를 확인한 뒤 Camera를 정확히 1회 시작하고 8초 기다린다.
+그다음 아래 순서로 각각 정확히 1회 시작한다.
+각 launch/run은 위 environment를 source한 별도
+`docker exec IntelPi bash -lc` process에서 `nohup setsid ... </dev/null &`로 실행하고
+각각 별도 `/tmp/e2e_*.log`에 기록한다. 한 shell에서 foreground로 순차 실행하지 않는다.
+
+```bash
+ros2 launch peripherals depth_camera.launch.py
+sleep 8
+ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false
+ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough
+ros2 launch image_pipeline yolo.launch.py model_path:=/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef postprocess_path:=/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx backend:=hailo layout:=end2end class_names:="[fire,person]"
+ros2 launch image_pipeline detection_3d.launch.py
+ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<PC_IP>:8088/infer
+ros2 launch uncc_example vla_navigation_bridge.launch.py
+ros2 launch uncc_example fire_extinguisher.launch.py
+```
+
+Observer는 하나의 `rclpy` process에서 RGB/Depth/CameraInfo, `/yolo_result`,
+`/fire/detections`, `/fire/detections/status`, `/vla/world_model`, navigation/spray
+result를 함께 구독한다. Sensor와 `/fire/detections*`는
+`qos_profile_sensor_data`(BEST_EFFORT, volatile)를 사용하고 WorldModel/result는
+RELIABLE, volatile을 사용한다. 불보다 먼저 observer를 시작하고 최대 60초 동안 실제
+event를 연속 관찰하되, confidence가 `0.40` 아래로 안정되면 즉시 불 OFF를 요청한다.
+ROS CLI daemon의 echo 결과만으로 FAIL을 판정하지 않는다.
+
+검증된 direct-subscriber observer 원문:
+
+```bash
+python3 - <<'PY'
+import json, time, rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from sensor_msgs.msg import Image, CameraInfo
+from vision_msgs.msg import Detection2DArray
+from std_msgs.msg import String
+
+rclpy.init()
+n = Node("fire_e2e_observer")
+counts = {k: 0 for k in ("rgb", "depth", "info", "yolo", "fire", "status", "world", "nav", "spray")}
+latest = {}
+sensor_topics = (
+    (Image, "/ascamera/camera_publisher/rgb0/image", "rgb"),
+    (Image, "/ascamera/camera_publisher/depth0/image_raw", "depth"),
+    (CameraInfo, "/ascamera/camera_publisher/rgb0/camera_info", "info"),
+    (Detection2DArray, "/yolo_result", "yolo"),
+    (String, "/fire/detections", "fire"),
+    (String, "/fire/detections/status", "status"),
+)
+for msg_type, topic, key in sensor_topics:
+    n.create_subscription(msg_type, topic, lambda m, k=key: (counts.__setitem__(k, counts[k] + 1), latest.__setitem__(k, getattr(m, "data", None))), qos_profile_sensor_data)
+reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
+for topic, key in (("/vla/world_model", "world"), ("/vla/navigation_result", "nav"), ("/vla/spray_result", "spray")):
+    n.create_subscription(String, topic, lambda m, k=key: (counts.__setitem__(k, counts[k] + 1), latest.__setitem__(k, m.data)), reliable)
+end = time.time() + 60
+while time.time() < end:
+    rclpy.spin_once(n, timeout_sec=0.1)
+    print(json.dumps({"counts": counts, "latest": latest}, ensure_ascii=False), flush=True)
+n.destroy_node()
+rclpy.shutdown()
+PY
+```
+
+이 observer는 읽기 전용이다. Mission은 fresh ACTIVE fire를 확인한 뒤 별도 canonical
+JSON publisher로 정확히 1회만 발행한다.
+
+최소 실행 순서:
+
+```text
+배터리 완충 → 전원선 분리 → 새 안전 바닥 위치 배치
+→ PC→Pi SSH + Pi→Qwen HTTP 200
+→ canonical production start exactly once
+→ 현재 위치 localization exactly once
+→ 정지 yaw 5초 동안 ±5° 이내
+→ observer → READY_FOR_FIRE → 불 ON → fresh ACTIVE fire
+→ {"mission_id":"mission_fire_001","text":"화재를 찾아 진압해줘"} exactly once
+→ Qwen → Nav2 → Robot stop → Suppression → flame removed → terminal SUCCESS
+```
+
+기존 fire, localization, Mission, goal은 재사용하지 않는다. Active Mission 중 Robot을
+손으로 옮기지 않는다. Threshold는 `0.40`, spray range는 `0.8 m`다. 현재 미완료는
+Nav2 terminal, system-level stop, Servo/Pump, 실제 소화, terminal SUCCESS다.

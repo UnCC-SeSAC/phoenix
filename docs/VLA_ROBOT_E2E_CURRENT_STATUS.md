@@ -932,8 +932,9 @@ Robot motion, Servo, Pump command는 모두 0이다. 첫 실제 실패 단계는
 
 다음 표적은 threshold를 바꾸기 전에 화면 중앙 약 `0.9 m`에 둔다. 불꽃 아래
 불연성 고체 받침과 거리 측정 가능한 비반사·불투명 배경을 확보하고 불 ON 시간은
-최소화한다. `0.60 → 0.40` threshold 변경과 지속 검출 횟수+유효 Depth를 결합한
-supervised E2E 정책은 `PROPOSED / NOT_APPLIED`다.
+최소화한다. 이 시점에는 `0.60 → 0.40` threshold 변경이
+`PROPOSED / NOT_APPLIED`였고, 이후 사용자 승인으로 `5717087`에서 적용했다.
+지속 검출 횟수+유효 Depth 결합 정책은 계속 `NOT_APPLIED`다.
 
 ## 2026-08-27 fire geometry / Nav2 분리 시험
 
@@ -956,3 +957,33 @@ heading 변화다. Local costmap 정면 0.12~0.60 m 구간의 lethal cell은 `0/
 첫 실패 계층은 `localization/TF heading stability`다. Fire map 좌표 방향 오류는
 이번 Test 1로 배제됐다. Nav2 planner/costmap root cause는 아직 확정하지 않는다.
 Test 3 Full E2E는 실행하지 않았고 terminal SUCCESS는 `NO`다.
+
+## 2026-08-27 charging checkpoint
+
+최종 source checkpoint는 `integration/vla-robot-e2e`의 threshold commit
+`5717087`과 이어지는 문서 commit이다. 실제 Hardware runtime은
+`/ros2_ws/phoenix_vla/install` overlay를 사용했다. Pi는 `IntelPi` container,
+`ros:humble-export`, `MentorPi_Mecanum`이며 Camera package prefix는
+`/home/ubuntu/ros2_ws/install/peripherals`다. ASCamera SDK는
+`v1.2.22.20240516`이다.
+
+Production 환경은 `MACHINE_TYPE=MentorPi_Mecanum`, `need_compile=True`,
+`DEPTH_CAMERA_TYPE=ascamera`, `ROS_DOMAIN_ID=42`, `ROS_LOCALHOST_ONLY=0`,
+`RMW_IMPLEMENTATION=rmw_fastrtps_cpp`다. `PYTHONPATH`는
+`/usr/local/lib/python3.10/dist-packages:${PYTHONPATH}:/home/ubuntu/.local/lib/python3.10/site-packages`다.
+Qwen endpoint는 고정 주소가 아니라 현재 PC Wi-Fi IP의 `http://<PC_IP>:8088/infer`로
+설정하고 Pi에서 HTTP 200을 확인한다. Overlay와 canonical launch 원문은 바로 위
+실행환경 section이 authoritative하다.
+
+확인된 Happy Path는 RGB/Depth/CameraInfo, 지속 YOLO fire, Detection3D
+`fallback_below` depth, fresh ACTIVE fire, Qwen HTTP 200, Mission 1회 발행,
+VLA physical action 시작, Nav2/Suppression action server까지다. 미완료 항목은 Nav2
+terminal result, system-level Robot stop, Servo/Pump suppression, 실제 화염 제거,
+terminal SUCCESS다.
+
+현재 blocker는 전원과 localization이다. PC–Pi 단절 당시 Pi 전원이 실제로 꺼져
+있었다. 배터리 부족 또는 Motor 부하 중 voltage drop이 직접 원인 후보이며 미확정이다.
+Phoenix low-battery contract는 Pi poweroff가 아니라 `RETURNING_TO_BASE`다. 또한
+정지 상태에서 localization yaw가 `110.6° → 64.0°`로 변했다. 수동 이동 뒤 기존
+localization, fire, Mission, goal은 모두 폐기한다. 현재 Robot과 Pi는 충전을 위해
+종료됐고 Hardware E2E는 중단 상태다.
