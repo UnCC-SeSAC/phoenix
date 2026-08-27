@@ -110,7 +110,7 @@ def test_resolution_failure_preserves_decision_without_dispatch():
     assert adapter_call_count(orchestrator) == 0
 
 
-def test_validation_rejection_preserves_result_without_dispatch():
+def test_out_of_range_active_fire_extinguish_is_corrected_to_navigation():
     _, _, orchestrator = make_orchestrator()
     decision = ActionDecision(
         ActionType.EXTINGUISH,
@@ -121,11 +121,83 @@ def test_validation_rejection_preserves_result_without_dispatch():
 
     cycle = orchestrator.decide_once()
 
-    assert cycle.decision is decision
-    assert cycle.validation and not cycle.validation.approved
-    assert cycle.submission is None
-    assert cycle.blocked_reason.startswith("ACTION_VALIDATION_REJECTED:")
-    assert adapter_call_count(orchestrator) == 0
+    assert cycle.decision.action == ActionType.NAVIGATE_TO
+    assert cycle.decision.target == "fire_01"
+    assert cycle.validation and cycle.validation.approved
+    assert cycle.submission is not None
+    assert len(orchestrator.dispatcher.navigation.calls) == 1
+
+
+def test_in_range_active_fire_keeps_extinguish_decision():
+    world, _, orchestrator = make_orchestrator()
+    world.update_robot_pose(Pose2D(1.3, 0))
+    orchestrator.llm = StubLLM(
+        ActionDecision(ActionType.EXTINGUISH, "분사 범위 안 화점 진압", "fire_01")
+    )
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.action == ActionType.EXTINGUISH
+    assert cycle.validation and cycle.validation.approved
+    assert len(orchestrator.dispatcher.spray.calls) == 1
+
+
+def test_stale_or_invalid_fire_is_not_corrected_to_navigation():
+    stale_world, _, stale_orchestrator = make_orchestrator()
+    stale_world.fires.clear()
+    stale_world.update_observation_batch(
+        ObservationBatch(
+            "2000-01-01T00:00:00+00:00",
+            (
+                SemanticObservation(
+                    "fire_01",
+                    "fire",
+                    0.9,
+                    Pose2D(2, 0),
+                    "2000-01-01T00:00:00+00:00",
+                ),
+            ),
+        )
+    )
+    stale_orchestrator.llm = StubLLM(
+        ActionDecision(ActionType.EXTINGUISH, "유효하지 않은 화점", "fire_01")
+    )
+    stale_cycle = stale_orchestrator.decide_once()
+
+    assert "fire_01" not in stale_world.fires
+    assert stale_cycle.decision.action == ActionType.EXTINGUISH
+    assert stale_cycle.blocked_reason.startswith("ACTION_VALIDATION_REJECTED:")
+    assert adapter_call_count(stale_orchestrator) == 0
+
+    invalid_world, _, invalid_orchestrator = make_orchestrator()
+    invalid_world.fires["fire_01"].position = Pose2D(float("nan"), 0)
+    invalid_orchestrator.llm = StubLLM(
+        ActionDecision(ActionType.EXTINGUISH, "유효하지 않은 화점", "fire_01")
+    )
+    invalid_cycle = invalid_orchestrator.decide_once()
+
+    assert invalid_cycle.decision.action == ActionType.EXTINGUISH
+    assert invalid_cycle.validation and not invalid_cycle.validation.approved
+    assert invalid_cycle.submission is None
+    assert adapter_call_count(invalid_orchestrator) == 0
+
+
+def test_corrected_navigation_is_not_duplicated_in_same_mission():
+    world, _, orchestrator = make_orchestrator()
+    orchestrator.llm = StubLLM(
+        ActionDecision(ActionType.EXTINGUISH, "범위 밖 화점 진압", "fire_01")
+    )
+
+    first = orchestrator.decide_once()
+    world.current_action = None
+    world.pending_actions.clear()
+    world.update_robot_pose(Pose2D(0.2, 0))
+    second = orchestrator.decide_once()
+
+    assert first.submission is not None
+    assert second.submission is None
+    assert second.blocked_reason.startswith("DUPLICATE_ACTION_BLOCKED:")
+    assert len(orchestrator.dispatcher.navigation.calls) == 1
 
 
 def test_normal_wait_is_dispatched_to_wait_port():
@@ -242,7 +314,6 @@ def test_output_blocked_cycle_is_deduplicated():
 
 @pytest.mark.parametrize("decision", [
     ActionDecision(ActionType.NAVIGATE_TO, "없는 대상", "missing_01"),
-    ActionDecision(ActionType.EXTINGUISH, "범위 밖 화점", "fire_01"),
 ])
 def test_resolution_and_validation_blocked_cycles_are_deduplicated(decision):
     world, _, orchestrator = make_orchestrator()

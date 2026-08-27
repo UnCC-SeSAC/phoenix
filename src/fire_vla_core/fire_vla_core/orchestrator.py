@@ -11,6 +11,7 @@ from .domain import (
     ActionSubmission,
     ActionSubmissionStatus,
     ActionType,
+    FireState,
 )
 from .llm import LLMError, LLMInferenceError, LLMOutputError
 from .ports import ActionResultSource, LLMPort
@@ -75,6 +76,8 @@ class VLAOrchestrator:
                 return DecisionCycle(None, None, None, f"LLM_INFERENCE_FAILED: {exc}")
             self._last_decision_input_signature = signature
 
+            decision = self._correct_out_of_range_extinguish(decision)
+
         try:
             action = self.resolver.resolve(decision, self.world)
         except TargetResolutionError as exc:
@@ -109,6 +112,32 @@ class VLAOrchestrator:
             self._semantic_action_keys[validation.action.action_id] = semantic_key
             self._non_retryable_semantic_keys.add(semantic_key)
         return DecisionCycle(decision, validation, submission)
+
+    def _correct_out_of_range_extinguish(
+        self, decision: ActionDecision
+    ) -> ActionDecision:
+        if decision.action != ActionType.EXTINGUISH or not decision.target:
+            return decision
+        fire = self.world.fires.get(decision.target)
+        if (
+            fire is None
+            or fire.state != FireState.ACTIVE
+            or fire.robot_within_spray_range
+            or not all(
+                isfinite(value)
+                for value in (
+                    fire.position.x,
+                    fire.position.y,
+                    fire.position.yaw,
+                )
+            )
+        ):
+            return decision
+        return ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "분사거리 밖 ACTIVE 화점으로 접근한다.",
+            decision.target,
+        )
 
     def process_results(self, source: ActionResultSource) -> int:
         count = 0
