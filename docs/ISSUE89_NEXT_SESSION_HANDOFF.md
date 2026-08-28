@@ -494,3 +494,22 @@ fire/Mission/goal은 재사용하지 않는다.
 SSH 조회 실패만으로 runtime을 다시 시작하지 않는다. Mission, Nav2 goal, 전체
 runtime start를 중복 실행하지 않는다. `REPORT_PERSON` terminal result 미반영은 별도
 known issue이며 fire-only 완료와 분리해 추적한다.
+
+
+## Production 운영 wrapper
+
+`/ros2_ws/phoenix_vla`에서 `scripts/vla_hardware_e2e.sh`를 사용한다.
+
+```bash
+export VLA_QWEN_ENDPOINT=http://<CURRENT_PC_IP>:8088/infer
+scripts/vla_hardware_e2e.sh start
+scripts/vla_hardware_e2e.sh status
+scripts/vla_hardware_e2e.sh mission
+scripts/vla_hardware_e2e.sh stop
+```
+
+`start`는 기존 process가 있으면 중복 시작하지 않는다. 새 runtime은 Camera 선기동,
+8초 대기, 나머지 canonical stack 순서를 유지하며 component 로그를
+`/tmp/e2e_<component>.log`에 저장한다. `mission`은 새 ID로 정확히 한 번 발행한다.
+SSH 실패 뒤 `start`를 재전송하지 말고 `status`로 실제 process 상태를 먼저 확인한다.
+명령·경로 확인에는 `VLA_E2E_DRY_RUN=1`을 사용한다.
