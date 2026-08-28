@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from math import isfinite
 from typing import Any
 
@@ -12,6 +13,7 @@ from .domain import (
     ActionSubmissionStatus,
     ActionType,
     FireState,
+    utc_now,
 )
 from .llm import LLMError, LLMInferenceError, LLMOutputError
 from .ports import ActionResultSource, LLMPort
@@ -48,6 +50,12 @@ class VLAOrchestrator:
     _non_retryable_semantic_keys: set[tuple[str, ActionType, str | None]] = field(
         default_factory=set, init=False, repr=False
     )
+    _navigation_continuations: dict[
+        str, tuple[str, tuple[Any, ...]]
+    ] = field(default_factory=dict, init=False, repr=False)
+    _pending_continuation: tuple[str, tuple[Any, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def decide_once(self) -> DecisionCycle:
         if not self.world.mission:
@@ -55,28 +63,39 @@ class VLAOrchestrator:
         if self.world.mission.status.value != "RUNNING":
             return DecisionCycle(None, None, None, f"Mission이 {self.world.mission.status.value} 상태입니다.")
 
+        qwen_selected_navigation = False
         if self.world.current_action is not None:
             decision = ActionDecision(ActionType.WAIT, "물리 행동이 실행 중이므로 완료 결과를 기다린다")
         else:
-            signature = self._decision_input_signature()
-            if signature == self._last_decision_input_signature:
-                return DecisionCycle(None, None, None)
-            try:
-                decision = self.llm.decide(
-                    self.world.mission.text,
-                    self.world.create_snapshot(),
+            decision = None
+            if self._pending_continuation is not None:
+                target, scene_signature = self._pending_continuation
+                self._pending_continuation = None
+                decision = self._build_extinguish_continuation(
+                    target, scene_signature
                 )
-            except LLMOutputError as exc:
+            if decision is None:
+                signature = self._decision_input_signature()
+                if signature == self._last_decision_input_signature:
+                    return DecisionCycle(None, None, None)
+                try:
+                    decision = self.llm.decide(
+                        self.world.mission.text,
+                        self.world.create_snapshot(),
+                    )
+                except LLMOutputError as exc:
+                    self._last_decision_input_signature = signature
+                    return DecisionCycle(None, None, None, f"LLM_OUTPUT_INVALID: {exc}")
+                except (LLMInferenceError, LLMError) as exc:
+                    # A timed-out remote request may still be running on the server.
+                    # Do not overlap it with an unchanged timer-driven retry.
+                    self._last_decision_input_signature = signature
+                    return DecisionCycle(None, None, None, f"LLM_INFERENCE_FAILED: {exc}")
                 self._last_decision_input_signature = signature
-                return DecisionCycle(None, None, None, f"LLM_OUTPUT_INVALID: {exc}")
-            except (LLMInferenceError, LLMError) as exc:
-                # A timed-out remote request may still be running on the server.
-                # Do not overlap it with an unchanged timer-driven retry.
-                self._last_decision_input_signature = signature
-                return DecisionCycle(None, None, None, f"LLM_INFERENCE_FAILED: {exc}")
-            self._last_decision_input_signature = signature
-
-            decision = self._correct_out_of_range_extinguish(decision)
+                qwen_selected_navigation = (
+                    decision.action == ActionType.NAVIGATE_TO
+                )
+                decision = self._correct_out_of_range_extinguish(decision)
 
         try:
             action = self.resolver.resolve(decision, self.world)
@@ -111,6 +130,15 @@ class VLAOrchestrator:
         if submission.status == ActionSubmissionStatus.ACCEPTED:
             self._semantic_action_keys[validation.action.action_id] = semantic_key
             self._non_retryable_semantic_keys.add(semantic_key)
+            if (
+                qwen_selected_navigation
+                and validation.action.action == ActionType.NAVIGATE_TO
+                and validation.action.target in self.world.fires
+            ):
+                self._navigation_continuations[validation.action.action_id] = (
+                    validation.action.target,
+                    self._continuation_scene_signature(),
+                )
         return DecisionCycle(decision, validation, submission)
 
     def _correct_out_of_range_extinguish(
@@ -144,6 +172,9 @@ class VLAOrchestrator:
         physical_action_completed = False
         for result in source.drain_results():
             action = self.world.pending_actions.get(result.action_id)
+            continuation = self._navigation_continuations.pop(
+                result.action_id, None
+            )
             if action is None and self.world.current_action is not None:
                 if self.world.current_action.action_id == result.action_id:
                     action = self.world.current_action
@@ -160,10 +191,101 @@ class VLAOrchestrator:
                     }
                 ):
                     self._non_retryable_semantic_keys.discard(semantic_key)
+                if (
+                    continuation is not None
+                    and action is not None
+                    and action.action == ActionType.NAVIGATE_TO
+                    and result.status == ActionResultStatus.SUCCEEDED
+                ):
+                    self._pending_continuation = continuation
         if physical_action_completed:
             self._last_decision_input_signature = None
         self.world.complete_mission_if_resolved()
         return count
+
+    def _build_extinguish_continuation(
+        self, target: str, scene_signature: tuple[Any, ...]
+    ) -> ActionDecision | None:
+        if scene_signature != self._continuation_scene_signature():
+            return None
+        fire = self.world.fires.get(target)
+        robot_pose = self.world.robot.pose
+        if (
+            fire is None
+            or fire.state != FireState.ACTIVE
+            or robot_pose is None
+            or not self._entity_is_fresh(fire.last_seen)
+            or not self._robot_pose_is_fresh_and_valid()
+            or not all(isfinite(value) for value in (
+                fire.position.x,
+                fire.position.y,
+                fire.position.yaw,
+            ))
+        ):
+            return None
+        distance = robot_pose.distance_to(fire.position)
+        if distance > self.world.config.spray_range_m:
+            return None
+        if not fire.robot_within_spray_range:
+            return None
+        return ActionDecision(
+            ActionType.EXTINGUISH,
+            "Nav2 접근 성공 후 안전 조건을 확인해 화점을 진압한다.",
+            target,
+        )
+
+    def _continuation_scene_signature(self) -> tuple[Any, ...]:
+        return (
+            self.world.mission.id if self.world.mission else None,
+            tuple(sorted(
+                (
+                    person.id,
+                    self._pose_signature(person.position),
+                    person.state.value,
+                    person.reported,
+                )
+                for person in self.world.people.values()
+            )),
+            tuple(sorted(
+                (
+                    fire.id,
+                    self._pose_signature(fire.position),
+                    fire.size,
+                    fire.state.value,
+                    fire.blocks_route_to,
+                    fire.threatens_person,
+                    fire.threatened_person_id,
+                    fire.spray_count,
+                )
+                for fire in self.world.fires.values()
+            )),
+        )
+
+    def _entity_is_fresh(self, timestamp: str) -> bool:
+        try:
+            observed_at = datetime.fromisoformat(timestamp)
+            if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+                return False
+            age = (utc_now() - observed_at).total_seconds()
+        except (TypeError, ValueError):
+            return False
+        return 0.0 <= age <= self.world.config.observation_max_age_sec
+
+    def _robot_pose_is_fresh_and_valid(self) -> bool:
+        pose = self.world.robot.pose
+        timestamp = self.world.robot.pose_updated_at
+        if pose is None or timestamp is None:
+            return False
+        if not all(isfinite(value) for value in (pose.x, pose.y, pose.yaw)):
+            return False
+        try:
+            updated_at = datetime.fromisoformat(timestamp)
+            if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+                return False
+            age = (utc_now() - updated_at).total_seconds()
+        except (TypeError, ValueError):
+            return False
+        return 0.0 <= age <= self.world.config.robot_pose_max_age_sec
 
     def _semantic_action_key(
         self, action: Any

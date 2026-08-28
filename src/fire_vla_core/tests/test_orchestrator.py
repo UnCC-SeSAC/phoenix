@@ -2,7 +2,7 @@ import pytest
 
 from fire_vla_core.adapters.mock_adapters import MockNavigationAdapter, MockReportAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter
 from fire_vla_core.dispatcher import ActionDispatcher
-from fire_vla_core.domain import ActionDecision, ActionType, Event, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
+from fire_vla_core.domain import ActionDecision, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
 from fire_vla_core.llm import LLMInferenceError, LLMOutputError, MockVLABrain
 from fire_vla_core.orchestrator import VLAOrchestrator
 from fire_vla_core.resolver import TargetResolver
@@ -361,3 +361,140 @@ def test_running_physical_action_guard_does_not_call_llm_again():
     cycle = orchestrator.decide_once()
     assert cycle.decision.action == ActionType.WAIT
     assert orchestrator.llm.calls == 1
+
+
+def make_navigation_continuation_orchestrator():
+    world = WorldModel()
+    world.update_robot_pose(Pose2D(0, 0))
+    world.set_mission("continuation", "화재를 진압해")
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
+    )))
+    queue = MockResultQueue()
+    navigation = MockNavigationAdapter(queue)
+    spray = MockSprayAdapter(queue)
+    llm = StubLLM(ActionDecision(ActionType.NAVIGATE_TO, "화점으로 접근", "fire_01"))
+    dispatcher = ActionDispatcher(navigation, spray, MockReportAdapter(queue), MockWaitAdapter(queue))
+    orchestrator = VLAOrchestrator(world, llm, TargetResolver(), ActionValidator(), dispatcher)
+    return world, queue, navigation, spray, llm, orchestrator
+
+
+def prepare_successful_navigation(world, queue, orchestrator):
+    first = orchestrator.decide_once()
+    action_id = first.validation.action.action_id
+    world.update_robot_pose(Pose2D(1.2, 0))
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
+    )))
+    assert orchestrator.process_results(queue) == 1
+    return action_id
+
+
+def test_navigation_success_continues_to_one_extinguish_without_qwen():
+    world, queue, navigation, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    prepare_successful_navigation(world, queue, orchestrator)
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.action == ActionType.EXTINGUISH
+    assert cycle.decision.target == "fire_01"
+    assert cycle.validation and cycle.validation.approved
+    assert len(navigation.calls) == 1
+    assert len(spray.calls) == 1
+    assert llm.calls == 1
+
+
+@pytest.mark.parametrize("invalid_state", ["resolved", "stale", "invalid"])
+def test_invalid_fire_does_not_continue_to_extinguish(invalid_state):
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    orchestrator.decide_once()
+    world.update_robot_pose(Pose2D(1.3, 0))
+    if invalid_state == "resolved":
+        world.fires["fire_01"].state = world.fires["fire_01"].state.EXTINGUISHED
+    elif invalid_state == "stale":
+        world.fires["fire_01"].last_seen = "2000-01-01T00:00:00+00:00"
+        world.fires["fire_01"].robot_within_spray_range = True
+    else:
+        world.fires["fire_01"].position = Pose2D(float("nan"), 0)
+        world.fires["fire_01"].robot_within_spray_range = True
+    assert orchestrator.process_results(queue) == 1
+
+    orchestrator.decide_once()
+
+    assert len(spray.calls) == 0
+    assert llm.calls == 2
+
+
+@pytest.mark.parametrize("invalid_pose", ["stale", "invalid"])
+def test_invalid_robot_pose_does_not_continue_to_extinguish(invalid_pose):
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    orchestrator.decide_once()
+    world.update_robot_pose(Pose2D(1.3, 0))
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
+    )))
+    if invalid_pose == "stale":
+        world.robot.pose_updated_at = "2000-01-01T00:00:00+00:00"
+    else:
+        world.robot.pose = Pose2D(float("nan"), 0)
+    assert orchestrator.process_results(queue) == 1
+
+    orchestrator.decide_once()
+
+    assert len(spray.calls) == 0
+    assert llm.calls == 2
+
+
+def test_out_of_range_after_navigation_does_not_continue_to_extinguish():
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    orchestrator.decide_once()
+    world.update_robot_pose(Pose2D(1.0, 0))
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
+    )))
+    assert orchestrator.process_results(queue) == 1
+
+    orchestrator.decide_once()
+
+    assert len(spray.calls) == 0
+    assert llm.calls == 2
+
+
+def test_meaningful_scene_change_uses_qwen_instead_of_continuation():
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    orchestrator.decide_once()
+    world.update_robot_pose(Pose2D(1.3, 0))
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
+        SemanticObservation("person_01", "person", .9, Pose2D(2.05, 0), now),
+    )))
+    assert orchestrator.process_results(queue) == 1
+
+    orchestrator.decide_once()
+
+    assert len(spray.calls) == 0
+    assert llm.calls == 2
+
+
+def test_duplicate_navigation_terminal_does_not_duplicate_suppression():
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    action_id = prepare_successful_navigation(world, queue, orchestrator)
+    orchestrator.decide_once()
+    duplicate_source = MockResultQueue()
+    duplicate_source.emit(ActionResult(
+        action_id=action_id,
+        source=ExecutionSource.NAVIGATION,
+        status=ActionResultStatus.SUCCEEDED,
+        target_id="fire_01",
+    ))
+
+    assert orchestrator.process_results(duplicate_source) == 0
+    orchestrator.decide_once()
+
+    assert len(spray.calls) == 1
+    assert llm.calls == 1
