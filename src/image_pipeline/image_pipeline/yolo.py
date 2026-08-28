@@ -528,6 +528,9 @@ class HailoBackend:
     """HailoRT adapter for NMS HEFs and measured YOLO26 split HEFs."""
 
     kind = "hailo"
+    #: ★ 이 백엔드는 float32 NCHW 블롭이 아니라 uint8 NHWC 를 받습니다.
+    #:   YoloDetector.detect() 가 이 표시를 보고 블롭 왕복을 건너뜁니다.
+    wants_uint8_nhwc = True
 
     def __init__(self, hef_path: str, **_kwargs):
         if not os.path.exists(hef_path):
@@ -667,10 +670,18 @@ class HailoBackend:
 
     def infer(self, blob: np.ndarray) -> list[np.ndarray]:
         arr = np.asarray(blob)
-        if arr.ndim != 4 or arr.shape[0] != 1 or arr.shape[1] != 3:
-            raise ValueError(f"NCHW RGB batch=1 blob을 기대했습니다: {arr.shape}")
-        nhwc = np.transpose(arr, (0, 2, 3, 1))
-        nhwc = np.clip(np.rint(nhwc * 255.0), 0, 255).astype(np.uint8)
+        if (arr.ndim == 4 and arr.shape[0] == 1
+                and arr.shape[3] == 3 and arr.dtype == np.uint8):
+            # 새 경로 — detect() 가 이미 uint8 NHWC 로 넘겨줬습니다.
+            nhwc = arr
+        elif arr.ndim == 4 and arr.shape[0] == 1 and arr.shape[1] == 3:
+            # 기존 경로 — float32 NCHW(/255) 블롭. 되돌려서 씁니다.
+            nhwc = np.transpose(arr, (0, 2, 3, 1))
+            nhwc = np.clip(np.rint(nhwc * 255.0), 0, 255).astype(np.uint8)
+        else:
+            raise ValueError(
+                f"uint8 NHWC 또는 float32 NCHW batch=1 을 기대했습니다: "
+                f"{arr.shape} {arr.dtype}")
         if getattr(self, "_mode", "nms") == "split":
             output_buffers = {
                 name: np.empty(self._infer_model.output(name).shape,
@@ -781,7 +792,14 @@ class YoloDetector:
         t0 = time.perf_counter()
 
         lb_img, info = letterbox(img, (self.imgsz, self.imgsz))
-        blob = make_blob(lb_img, swap_rb=self.swap_rb)
+        if getattr(self.backend, "wants_uint8_nhwc", False):
+            # ★ /255 로 나눴다가 백엔드에서 도로 곱하는 왕복이 640x640 기준
+            #   프레임당 약 9ms 였습니다. uint8 왕복은 무손실이라(0~255 전수 확인)
+            #   건너뛰어도 백엔드가 받는 배열이 비트 단위로 같습니다.
+            rgb = cv2.cvtColor(lb_img, cv2.COLOR_BGR2RGB) if self.swap_rb else lb_img
+            blob = rgb[None, ...]
+        else:
+            blob = make_blob(lb_img, swap_rb=self.swap_rb)
         t1 = time.perf_counter()
 
         outs = self.backend.infer(blob)
