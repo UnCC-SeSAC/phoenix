@@ -8,7 +8,8 @@ ROS에 의존하지 않으므로 주피터/CLI에서 그대로 import해 튜닝�
 실시간성 최적화 (발표에서의 기여 포인트):
   - 대기광/투과율 추정을 축소 해상도(기본 1/4)에서 수행 → 픽셀 수 1/16
   - guided filter도 축소 해상도에서 수행 후 투과율만 업샘플
-  - 복원식만 원본 해상도에서 계산 (벡터 연산 3줄)
+  - 복원식만 원본 해상도에서 계산. 이때 numpy 대신 cv2 산술을 써서 전체해상도
+    임시배열 6개 -> 3개로 줄임 (RPi5 실측 10.8ms -> 3.7ms). process() 참고
   - min filter는 cv2.erode 로 대체 (사각 커널 erode == min filter, C 구현)
 
 화재 도메인 특유의 함정:
@@ -217,9 +218,40 @@ class DarkChannelDehazer:
         self.last_transmission = t
         self.last_a = a
 
-        # 복원식 J = (I - A) / t + A
-        out = (img_f - a) / t[..., None] + a
-        return np.clip(out * 255.0, 0, 255).astype(np.uint8)
+        # 복원식 J = (I - A) / t + A 를 0~255 정수 영역에서 그대로 계산합니다.
+        #
+        # 순진하게 쓰면
+        #     out = (img_f - a) / t[..., None] + a
+        #     np.clip(out * 255.0, 0, 255).astype(np.uint8)
+        # 인데, 이러면 **전체해상도 float32 임시배열이 6개**(640x480x3 기준 3.7MB씩)
+        # 만들어지고 그만큼 메모리를 훑습니다. numpy 는 단일 스레드이고 연산 융합도
+        # 없어서, RPi5 실측으로 이 두 줄이 전처리 CPU의 40%(10.8ms/프레임)였습니다.
+        #
+        # cv2 산술은 SIMD + 포화 캐스팅이라 3패스로 줄고, 마지막 CV_8U 변환이
+        # clip 과 astype 을 흡수합니다 -> 10.8ms -> 3.7ms (threads=1 기준).
+        #
+        # ★ A 에서 0.5를 빼는 이유: OpenCV 의 CV_8U 변환은 saturate_cast = **반올림**
+        #   인데 이전 구현의 astype(uint8) 은 **절단**이었습니다. round(x - 0.5) 로
+        #   맞춰주지 않으면 결과가 통째로 +1 씩 밀립니다.
+        #
+        # ★ 보정해도 이전 구현과 **비트 동일하지는 않습니다.** 이전에는 0~1 영역을
+        #   경유했다가(÷255 -> 계산 -> ×255) 절단해서, 수학적으로 16인 값이
+        #   15.9999990 이 되어 15 로 떨어졌습니다. 여기는 0~255 영역에서 바로
+        #   계산하므로 16 이 나옵니다. 차이는 **항상 1 레벨 이하**이고, 실내
+        #   프레임 기준 0.2~4.4% 픽셀에서 발생합니다. 주로 t=1.0 인 영역(다크채널
+        #   0 -> 복원값이 정확히 정수)에서 갈립니다.
+        #   정확도는 서로 비슷한 급입니다 — float64 정답 대비 평균 절대오차가
+        #   실제 프레임에서는 0.480 vs 0.504(이쪽이 유리), 합성 영상에서는
+        #   0.342 vs 0.316(반대). 어느 쪽이든 0.03 레벨 안쪽입니다.
+        #   tests/test_dehaze.py::TestRestoreEquivalence 가 이 범위를 잠급니다.
+        a255 = tuple(float(v) for v in (a.reshape(3) * 255.0))
+        a_add = a255 + (0.0,)
+        a_sub = tuple(v - 0.5 for v in a255) + (0.0,)
+
+        inv3 = cv2.cvtColor(np.reciprocal(t), cv2.COLOR_GRAY2BGR)   # 1/t 를 3채널로
+        out = cv2.subtract(bgr, a_add, dtype=cv2.CV_32F)            # I - A  (uint8 입력에서 바로)
+        cv2.multiply(out, inv3, dst=out)                            # (I - A) * (1/t)
+        return cv2.add(out, a_sub, dtype=cv2.CV_8U)                 # + A, 포화 변환 융합
 
     def process_lowlight(
         self,
