@@ -29,10 +29,12 @@ from launch_ros.actions import Node
 def include_launch(
     path,
     condition=None,
+    launch_arguments=None,
 ):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(path),
         condition=condition,
+        launch_arguments=(launch_arguments or {}).items(),
     )
 
 
@@ -93,6 +95,11 @@ def generate_launch_description():
     # 막아준다. 예: "3" (코어 3만 사용), "2,3" (코어 2~3 사용).
     mission_cpu_cores = LaunchConfiguration("mission_cpu_cores")
 
+    # slam/nav2를 코어 0에서 빼서 ekf 등 하드웨어 체인 전용으로 비워둔다.
+    slam_cpu_cores = LaunchConfiguration("slam_cpu_cores")
+
+    nav2_cpu_cores = LaunchConfiguration("nav2_cpu_cores")
+
     # =========================================
     # 1. Hardware
     # =========================================
@@ -134,6 +141,9 @@ def generate_launch_description():
                     "slam_mapping.launch.py",
                 ),
                 IfCondition(start_slam),
+                launch_arguments={
+                    "slam_cpu_cores": slam_cpu_cores,
+                },
             )
         ],
     )
@@ -151,6 +161,9 @@ def generate_launch_description():
                     "nav2_online.launch.py",
                 ),
                 IfCondition(start_nav2),
+                launch_arguments={
+                    "nav2_cpu_cores": nav2_cpu_cores,
+                },
             )
         ],
     )
@@ -392,6 +405,15 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "mission_cpu_cores",
                 default_value="3",
+            ),
+            # 코어 0 제외 (ekf 등 하드웨어 체인 전용으로 비워둠)
+            DeclareLaunchArgument(
+                "slam_cpu_cores",
+                default_value="1,2",
+            ),
+            DeclareLaunchArgument(
+                "nav2_cpu_cores",
+                default_value="1,2,3",
             ),
             hardware,
             lidar_app,
