@@ -185,11 +185,12 @@ def test_non_success_terminal_result_keeps_fire_active(status):
     assert world.last_action.status.value == status
 
 
-def test_out_of_range_fire_is_rejected_without_publish():
+def test_out_of_range_fire_is_corrected_to_navigation_without_spray():
     _, node, _, orchestrator, _ = make_system(in_range=False)
     cycle = orchestrator.decide_once()
-    assert cycle.submission is None
-    assert "분사 가능 범위" in cycle.validation.reason
+    assert cycle.decision.action == ActionType.NAVIGATE_TO
+    assert cycle.submission.status == ActionSubmissionStatus.ACCEPTED
+    assert len(orchestrator.dispatcher.navigation.calls) == 1
     assert node.publishers["/vla/spray_command"].messages == []
 
 
