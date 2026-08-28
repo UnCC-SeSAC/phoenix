@@ -199,6 +199,8 @@ class VLAOrchestrator:
                     fire.size,
                     fire.state.value,
                     fire.blocks_route_to,
+                    fire.threatens_person,
+                    fire.threatened_person_id,
                     fire.robot_within_spray_range,
                     fire.spray_count,
                 )

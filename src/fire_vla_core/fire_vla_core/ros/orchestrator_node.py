@@ -115,6 +115,7 @@ class VLAOrchestratorNode(Node):
             "http://127.0.0.1:8088/infer",
         )
         self.declare_parameter("remote_qwen_timeout_sec", 3.0)
+        self.declare_parameter("person_fire_risk_distance_m", 0.10)
         self.declare_parameter("report_mode", "MOCK")
         self.declare_parameter("spray_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")
@@ -142,7 +143,11 @@ class VLAOrchestratorNode(Node):
             "/vla/person_report_result",
         )
 
-        self.world = WorldModel(WorldModelConfig())
+        self.world = WorldModel(WorldModelConfig(
+            person_fire_risk_distance_m=float(
+                self.get_parameter("person_fire_risk_distance_m").value
+            ),
+        ))
         # Remote inference is synchronous. Keep robot pose processing separate
         # so Validator freshness advances while the timer waits for HTTP.
         self.pose_callback_group = MutuallyExclusiveCallbackGroup()

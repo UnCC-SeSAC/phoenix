@@ -52,6 +52,10 @@ def _create_vla_node(context):
                 LaunchConfiguration("remote_qwen_timeout_sec"),
                 value_type=float,
             ),
+            "person_fire_risk_distance_m": ParameterValue(
+                LaunchConfiguration("person_fire_risk_distance_m"),
+                value_type=float,
+            ),
             "decision_period_sec": 1.0,
             "navigation_mode": "TOPIC_BRIDGE",
             "report_mode": "TOPIC_BRIDGE",
@@ -94,6 +98,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "remote_qwen_timeout_sec",
             default_value="3.0",
+        ),
+        DeclareLaunchArgument(
+            "person_fire_risk_distance_m",
+            default_value="0.10",
         ),
         DeclareLaunchArgument(
             "start_perception_bridge",

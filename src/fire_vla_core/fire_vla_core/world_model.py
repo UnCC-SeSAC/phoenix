@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from math import isclose
 from typing import Any, Iterable
 
 from .domain import (
@@ -35,6 +36,7 @@ class WorldModelConfig:
     person_confidence_threshold: float = 0.50
     fire_confidence_threshold: float = 0.40
     spray_range_m: float = 0.80
+    person_fire_risk_distance_m: float = 0.10
     max_event_log_entries: int = 500
     verification_required_observations: int = 3
     verification_timeout_sec: float = 5.0
@@ -314,10 +316,38 @@ class WorldModel:
                 self._event("SUPPRESSION_VERIFICATION_TIMED_OUT", entity_id=fire.id)
 
     def _refresh_spatial_flags(self) -> None:
-        if not self.robot.pose:
-            return
         for fire in self.fires.values():
-            fire.robot_within_spray_range = self.robot.pose.distance_to(fire.position) <= self.config.spray_range_m
+            if self.robot.pose:
+                fire.robot_within_spray_range = (
+                    self.robot.pose.distance_to(fire.position)
+                    <= self.config.spray_range_m
+                )
+            fire.threatens_person = False
+            fire.threatened_person_id = None
+            if (
+                not self.mission
+                or self.mission.status != MissionStatus.RUNNING
+                or fire.state != FireState.ACTIVE
+                or not self.people
+            ):
+                continue
+            distance, person_id = min(
+                (
+                    fire.position.distance_to(person.position),
+                    person.id,
+                )
+                for person in self.people.values()
+            )
+            if (
+                distance <= self.config.person_fire_risk_distance_m
+                or isclose(
+                    distance,
+                    self.config.person_fire_risk_distance_m,
+                    abs_tol=1e-9,
+                )
+            ):
+                fire.threatens_person = True
+                fire.threatened_person_id = person_id
 
     def _remember_processed_result(self, action_id: str) -> None:
         self._processed_terminal_action_ids.append(action_id)

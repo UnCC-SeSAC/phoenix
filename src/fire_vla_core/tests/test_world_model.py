@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+import pytest
+
 from fire_vla_core.domain import (
     Action,
     ActionResult,
@@ -57,6 +59,53 @@ def test_new_mission_clears_entities_but_preserves_robot_and_home_pose():
     assert world.robot.pose == robot_pose
     assert world.robot.home_pose == home_pose
     assert world.unexplored_zones == map_zones
+
+
+@pytest.mark.parametrize("distance", [0.0, 0.10])
+def test_active_fire_threatens_person_at_inclusive_demo_boundary(distance):
+    world = make_world(WorldModelConfig(person_fire_risk_distance_m=0.10))
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_01", "person", .9, Pose2D(1, 0), now),
+        SemanticObservation(
+            "fire_01", "fire", .9, Pose2D(1 + distance, 0), now
+        ),
+    )))
+
+    fire = world.fires["fire_01"]
+    assert fire.threatens_person is True
+    assert fire.threatened_person_id == "person_01"
+
+
+def test_active_fire_outside_demo_boundary_has_no_person_risk_relation():
+    world = make_world(WorldModelConfig(person_fire_risk_distance_m=0.10))
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_01", "person", .9, Pose2D(1, 0), now),
+        SemanticObservation("fire_01", "fire", .9, Pose2D(1.101, 0), now),
+    )))
+
+    fire = world.fires["fire_01"]
+    assert fire.threatens_person is False
+    assert fire.threatened_person_id is None
+
+
+def test_each_active_fire_uses_nearest_person_without_changing_route_relation():
+    world = make_world(WorldModelConfig(person_fire_risk_distance_m=0.10))
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_a", "person", .9, Pose2D(0, 0), now),
+        SemanticObservation("person_b", "person", .9, Pose2D(1, 0), now),
+        SemanticObservation(
+            "fire_a", "fire", .9, Pose2D(.05, 0), now,
+            blocks_route_to="person_b",
+        ),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(.94, 0), now),
+    )))
+
+    assert world.fires["fire_a"].threatened_person_id == "person_a"
+    assert world.fires["fire_b"].threatened_person_id == "person_b"
+    assert world.fires["fire_a"].blocks_route_to == "person_b"
 
 
 def test_terminal_result_clears_current_action_and_sets_last_action():

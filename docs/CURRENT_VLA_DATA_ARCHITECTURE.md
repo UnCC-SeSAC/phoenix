@@ -76,6 +76,12 @@ upstream ID가 있으면 그대로 보존한다. 없으면 같은 class, 0.5 m r
 2.0초 TTL, batch one-to-one association으로 process-local ID를 만든다. 이는
 full tracker가 아니므로 긴 occlusion이나 process restart 뒤 영구 ID를 보장하지 않는다.
 
+RUNNING Mission에서는 각 ACTIVE fire와 가장 가까운 person의 `map(x,y)` 거리를
+계산한다. Demo 기본값 `person_fire_risk_distance_m=0.10` 이내이면 fire에
+`threatens_person=true`와 `threatened_person_id`를 기록해 Qwen context에 제공한다.
+이 값은 demo-scale 관계 parameter이며 실제 배포 안전거리 기준이 아니다.
+`blocks_route_to`의 수동/observation route 의미와는 독립적이다.
+
 ## Decision
 
 ```text

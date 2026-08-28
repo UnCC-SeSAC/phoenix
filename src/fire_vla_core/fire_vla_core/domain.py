@@ -143,6 +143,8 @@ class FireEntity:
     size: str = "UNKNOWN"
     state: FireState = FireState.ACTIVE
     blocks_route_to: str | None = None
+    threatens_person: bool = False
+    threatened_person_id: str | None = None
     spray_count: int = 0
     robot_within_spray_range: bool = False
     first_seen: str = field(default_factory=utc_now_iso)

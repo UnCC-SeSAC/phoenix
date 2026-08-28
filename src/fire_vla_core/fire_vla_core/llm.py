@@ -103,6 +103,7 @@ def build_compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
                 (
                     "id", "position", "size", "state",
                     "robot_within_spray_range", "spray_count",
+                    "threatens_person", "threatened_person_id",
                 ),
             )
             for item in world_model.get("fires") or []
