@@ -31,21 +31,21 @@ controller_server:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
       min_vel_x: -0.20 # 앞뒤 이동
-      min_vel_y: -0.10 # 좌우 이동 (mecanum strafe)
+      min_vel_y: 0.0 # 좌우 이동
       max_vel_x: 0.2 # 앞뒤 이동
-      max_vel_y: 0.10 # 좌우 이동 (mecanum strafe)
+      max_vel_y: 0.0 # 좌우 이동
       max_vel_theta: 1.0
       min_speed_xy: 0.0
       max_speed_xy: 0.20
       min_speed_theta: 0.0
       acc_lim_x: 0.8
-      acc_lim_y: 0.8 # DWB의 Y축 최대 가속도 (m/s²)
+      acc_lim_y: 0.0 # DWB의 Y축 최대 가속도 (m/s²)
       acc_lim_theta: 1.5
       decel_lim_x: -1.0
-      decel_lim_y: -0.8 # DWB의 Y축 최대 감속도 (m/s²)
+      decel_lim_y: 0.0 # DWB의 Y축 최대 감속도 (m/s²)
       decel_lim_theta: -1.5
       vx_samples: 15
-      vy_samples: 5
+      vy_samples: 1 # 샘플 수 늘리기 
       vtheta_samples: 15
       sim_time: 1.5 # 값이 작을 수록 속도를 기반으로 짧은 시간동안 궤적을 생성
       linear_granularity: 0.05
