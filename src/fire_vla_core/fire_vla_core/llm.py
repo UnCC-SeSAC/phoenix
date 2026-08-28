@@ -14,7 +14,10 @@ from .domain import ActionDecision, ActionType
 from .ports import LLMPort
 
 
-ALLOWED_ACTIONS = [action.value for action in ActionType]
+ALLOWED_ACTIONS = [
+    action.value for action in ActionType
+    if action != ActionType.REPORT_PERSON
+]
 LOGGER = logging.getLogger(__name__)
 
 
@@ -227,25 +230,21 @@ def build_qwen_system_prompt() -> str:
 Prioritize human safety. Apply the FIRST matching policy, then reassess after
 every terminal action result.
 1. current_action is not null: WAIT with target null. Do not overlap actions.
-2. An unreported person (reported=false) has a valid map position: REPORT_PERSON
-   first, regardless of distance or nearby fires. Reporting is non-physical;
-   never navigate merely to report a known location.
-3. After all known people are reported, an ACTIVE fire has blocks_person_route=true:
+2. An ACTIVE fire has blocks_person_route=true:
    choose that fire. EXTINGUISH only when robot_within_spray_range is true;
    otherwise NAVIGATE_TO that fire.
-4. An ACTIVE fire remains: EXTINGUISH only when robot_within_spray_range is true;
+3. An ACTIVE fire remains: EXTINGUISH only when robot_within_spray_range is true;
    otherwise NAVIGATE_TO that fire.
-5. unexplored_zones is non-empty: SEARCH an existing zone id.
-6. Otherwise, including empty people/fires/zones: RETURN_HOME with target null.
-Never target REPORT_PERSON at reported=true. When several valid people or fires
+4. unexplored_zones is non-empty: SEARCH an existing zone id.
+5. Otherwise, including empty people/fires/zones: RETURN_HOME with target null.
+People are reported automatically outside Qwen. When several valid fires
 remain at the same priority, reason from explicit human-risk relations, action
 feasibility, and current robot state; do not invent risk.
 
 Output exactly one compact single-line JSON object with action, target, reason.
 Keep reason at 12 words or fewer.
 action must be in allowed_actions.
-NAVIGATE_TO targets an existing people or fires id.
-REPORT_PERSON targets an existing people id.
+NAVIGATE_TO targets an existing fires id.
 EXTINGUISH targets an existing fires id.
 SEARCH targets an existing unexplored_zones id.
 WAIT and RETURN_HOME use JSON null.
@@ -392,7 +391,7 @@ def build_system_prompt() -> str:
     return """당신은 화재 대응 로봇의 VLA Brain이다.
 자연어 Mission과 검증된 WorldModel 사실만 사용해 다음 행동 하나를 제안하라.
 오직 JSON 객체 하나만 출력하라. Markdown과 추가 설명은 금지한다.
-허용 Action: NAVIGATE_TO, REPORT_PERSON, EXTINGUISH, SEARCH, WAIT, RETURN_HOME.
+허용 Action: NAVIGATE_TO, EXTINGUISH, SEARCH, WAIT, RETURN_HOME.
 WorldModel에 없는 entity를 만들지 마라.
 좌표와 action_id를 생성하지 마라. 좌표는 Application이 WorldModel에서 해결한다.
 EXTINGUISH는 대상 화점의 robot_within_spray_range가 true이고 state가 ACTIVE일 때만 선택한다.

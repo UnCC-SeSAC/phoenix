@@ -143,6 +143,38 @@ def test_report_person_publishes_authoritative_world_model_payload():
     datetime.fromisoformat(payload["timestamp"])
 
 
+def test_new_person_is_auto_reported_once_without_ack_or_pending_action():
+    world, node, report, _, _, _ = make_system()
+
+    assert report.publish_new_people() == 1
+    payload = report_payload(node)
+    assert payload["mission_id"] == "mission_01"
+    assert payload["person_id"] == "person_0001"
+    assert payload["map_position"] == {"x": 2.0, "y": 1.0}
+    assert payload["confidence"] == 0.91
+    assert payload["frame_id"] == "map"
+    assert world.people["person_0001"].reported is True
+    assert world.people["person_0001"].state == PersonState.REPORTED
+    assert world.current_action is None
+    assert world.pending_actions == {}
+    assert report.publish_new_people() == 0
+    assert len(node.publishers["/vla/person_report"].messages) == 1
+
+
+def test_same_person_is_auto_reported_once_per_mission():
+    world, node, report, _, _, _ = make_system()
+    assert report.publish_new_people() == 1
+
+    world.set_mission("mission_02", "새 임무")
+    world.people["person_0001"] = PersonEntity(
+        "person_0001", Pose2D(2.0, 1.0), confidence=0.91
+    )
+
+    assert report.publish_new_people() == 1
+    assert report.publish_new_people() == 0
+    assert len(node.publishers["/vla/person_report"].messages) == 2
+
+
 def test_success_result_marks_person_reported_only_after_terminal_result():
     world, node, report, _, orchestrator, _ = make_system()
     cycle = orchestrator.decide_once()

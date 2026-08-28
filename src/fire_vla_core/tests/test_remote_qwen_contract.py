@@ -24,6 +24,7 @@ from fire_vla_core.domain import (
     utc_now_iso,
 )
 from fire_vla_core.llm import (
+    ALLOWED_ACTIONS,
     LLMInferenceError,
     LLMOutputError,
     RemoteQwenBackend,
@@ -86,11 +87,11 @@ def test_qwen_prompt_states_strict_action_target_contract():
     prompt = build_qwen_system_prompt()
     assert "SEARCH targets an existing unexplored_zones id" in prompt
     assert "Every non-null target must exactly match one of valid_targets" in prompt
-    assert "An unreported person" in prompt
-    assert "Reporting is non-physical" in prompt
+    assert "People are reported automatically outside Qwen" in prompt
     assert "blocks_person_route=true" in prompt
     assert "unexplored_zones is non-empty" in prompt
-    assert "Never target REPORT_PERSON at reported=true" in prompt
+    assert "REPORT_PERSON" not in ALLOWED_ACTIONS
+    assert "REPORT_PERSON targets" not in prompt
     assert "12 words or fewer" in prompt
 
 

@@ -17,6 +17,7 @@ from ..domain import (
     ActionSubmissionStatus,
     ActionType,
     ExecutionSource,
+    PersonState,
     utc_now_iso,
 )
 from ..ports import ActionResultSource, ReportPort
@@ -45,6 +46,24 @@ class TopicBridgePersonReportAdapter(ReportPort, ActionResultSource):
         self._results: deque[ActionResult] = deque()
         self._submitted_ids: set[str] = set()
         self._submitted_targets: dict[str, str] = {}
+        self._auto_reported: set[tuple[str, str]] = set()
+
+    def publish_new_people(self) -> int:
+        mission = self._world.mission
+        if mission is None:
+            return 0
+        published = 0
+        for person in self._world.people.values():
+            key = (mission.id, person.id)
+            if person.reported or key in self._auto_reported:
+                continue
+            action_id = f"auto_report:{mission.id}:{person.id}"
+            self._publish_payload(action_id, person)
+            self._auto_reported.add(key)
+            person.reported = True
+            person.state = PersonState.REPORTED
+            published += 1
+        return published
 
     def submit(self, action: Action) -> ActionSubmission:
         if action.action_id in self._submitted_ids:
@@ -67,8 +86,18 @@ class TopicBridgePersonReportAdapter(ReportPort, ActionResultSource):
                 "보고 가능한 person target이 없습니다.",
             )
 
+        self._publish_payload(action.action_id, person)
+        self._submitted_ids.add(action.action_id)
+        self._submitted_targets[action.action_id] = person.id
+        return ActionSubmission(
+            action.action_id,
+            ActionSubmissionStatus.ACCEPTED,
+            "person report topic에 제출했습니다.",
+        )
+
+    def _publish_payload(self, action_id: str, person) -> None:
         payload = {
-            "action_id": action.action_id,
+            "action_id": action_id,
             "mission_id": (
                 self._world.mission.id if self._world.mission else None
             ),
@@ -84,13 +113,6 @@ class TopicBridgePersonReportAdapter(ReportPort, ActionResultSource):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self._report_pub.publish(msg)
-        self._submitted_ids.add(action.action_id)
-        self._submitted_targets[action.action_id] = person.id
-        return ActionSubmission(
-            action.action_id,
-            ActionSubmissionStatus.ACCEPTED,
-            "person report topic에 제출했습니다.",
-        )
 
     def drain_results(self) -> Sequence[ActionResult]:
         results = tuple(self._results)

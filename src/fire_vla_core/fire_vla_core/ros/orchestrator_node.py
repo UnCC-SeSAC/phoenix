@@ -315,6 +315,8 @@ class VLAOrchestratorNode(Node):
             self.world.update_observation_batch(
                 self.perception_normalizer.normalize(data)
             )
+            if isinstance(self.report, TopicBridgePersonReportAdapter):
+                self.report.publish_new_people()
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Observation parsing failed: {exc}")
 
