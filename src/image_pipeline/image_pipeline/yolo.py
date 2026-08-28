@@ -532,13 +532,21 @@ class HailoBackend:
     #:   YoloDetector.detect() 가 이 표시를 보고 블롭 왕복을 건너뜁니다.
     wants_uint8_nhwc = True
 
-    def __init__(self, hef_path: str, **_kwargs):
+    def __init__(self, hef_path: str, threads: int = 0, **_kwargs):
         if not os.path.exists(hef_path):
             raise FileNotFoundError(f"HEF 모델 파일이 없습니다: {hef_path}")
         try:
             from hailo_platform import FormatType, HEF, VDevice
         except ImportError as exc:
             raise ImportError("HailoRT Python runtime(hailo_platform)이 없습니다") from exc
+        # ★ 이 백엔드도 `threads` 를 실제로 씁니다. 예전에는 `**_kwargs` 로 삼켜서
+        #   make_detector 가 넘겨도 **조용히 무시**됐습니다 (OnnxCvBackend:441,
+        #   OnnxRuntimeBackend:469 는 처리하는데 여기만 빠져 있었습니다).
+        #   Hailo 경로에서 cv2 가 도는 곳은 letterbox 와 BGR->RGB 뿐인데,
+        #   RPi5 실측으로 기본(4스레드) 2.30ms vs 1스레드 0.74ms 였습니다.
+        self.threads = int(threads)
+        if self.threads > 0:
+            cv2.setNumThreads(self.threads)
         self.path = str(hef_path)
         self._hef = HEF(self.path)
         self.input_names = [
@@ -576,6 +584,38 @@ class HailoBackend:
             self.close()
             raise
 
+    @staticmethod
+    def _post_session_options(options, threads: int = 1):
+        """후처리 ONNX 세션 옵션. **스핀을 끄는 것이 핵심입니다.**
+
+        onnxruntime 은 기본으로 코어 수만큼 intra-op 워커를 만들고, run 사이에
+        **busy-wait 로 스핀**합니다. 그런데 이 백엔드의 `infer()` 는 NPU 결과를
+        약 19ms 동안 블록 대기합니다 (`job.wait` / `done.wait`). 그동안 워커
+        3개가 코어를 그냥 태웁니다.
+
+        RPi5 4코어, 15fps 페이싱 실측 (프로세스별 격리 측정):
+
+            설정 없음(현재까지)          코어 82%   <- 대부분이 스핀
+            intra_op=1                코어  9%
+            intra_op=1 + cv2 1스레드    코어  5%
+            intra_op=4 + 스핀 끔        코어  6%   <- 개수는 거의 무관
+
+        마지막 줄이 요점입니다 — **스레드 개수가 아니라 스핀이 원인**이라
+        `allow_spinning=0` 을 조건 없이 겁니다. 이렇게 해두면 나중에 후처리
+        모델이 커져서 누가 스레드를 늘려도 60ms 스핀이 되살아나지 않습니다.
+
+        `intra_op_num_threads` 기본이 1인 이유: 이 후처리 모델은 0.41ms 짜리라
+        병렬화로 얻는 게 0.2ms 뿐입니다. 모델이 커지면 올려도 안전합니다.
+
+        wall 과 검출 결과는 위 네 설정에서 모두 동일했습니다(20.3~20.5ms,
+        박스·점수까지 일치).
+        """
+        # 문자열 "0"/"1" 을 받는 항목입니다. 정수를 주면 무시됩니다.
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        options.intra_op_num_threads = max(1, int(threads))
+        options.inter_op_num_threads = 1
+        return options
+
     def _init_split(self, format_type, vdevice_type) -> None:
         """Configure the hardware-team split HEF plus its ONNX postprocess."""
         model_dir = os.path.dirname(self.path)
@@ -595,8 +635,13 @@ class HailoBackend:
             import onnxruntime as ort
         except ImportError as exc:
             raise ImportError("split HEF postprocess에 onnxruntime이 필요합니다") from exc
+        # 스레드 수를 일부러 `self.threads` 와 묶지 않았습니다 — `threads` 는 이
+        # 백엔드에서 cv2(letterbox/BGR->RGB) 몫이고, 후처리는 0.41ms 짜리라
+        # 1이 항상 가장 쌉니다. 모델이 커지면 여기서 올리세요.
         self._post_session = ort.InferenceSession(
-            post_path, providers=["CPUExecutionProvider"])
+            post_path,
+            self._post_session_options(ort.SessionOptions()),
+            providers=["CPUExecutionProvider"])
         self._post_input_names = {item.name for item in self._post_session.get_inputs()}
         self._post_output_names = [item.name for item in self._post_session.get_outputs()]
 
