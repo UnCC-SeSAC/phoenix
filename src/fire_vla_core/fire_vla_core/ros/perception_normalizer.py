@@ -41,6 +41,12 @@ class CanonicalPerceptionNormalizer:
             "fire": count(1),
         }
 
+    def reset_associations(self) -> None:
+        self._id_sequences = {
+            "person": count(1),
+            "fire": count(1),
+        }
+
     def normalize(self, data: dict[str, Any]) -> ObservationBatch:
         if not isinstance(data, dict):
             raise ValueError("canonical perception payload는 객체여야 합니다.")

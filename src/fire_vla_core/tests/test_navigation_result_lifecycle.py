@@ -225,6 +225,9 @@ def test_same_navigation_is_allowed_for_new_mission():
     publish_result(node, action.action_id, "SUCCEEDED")
     assert orchestrator.process_results(navigation) == 1
     world.set_mission("mission_02", "같은 사람에게 다시 이동")
+    world.people["person_01"] = PersonEntity(
+        "person_01", Pose2D(2.0, 1.0)
+    )
 
     second = orchestrator.decide_once()
 

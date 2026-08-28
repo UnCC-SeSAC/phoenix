@@ -305,6 +305,7 @@ class VLAOrchestratorNode(Node):
                 str(data.get("mission_id", "mission_001")),
                 str(data["text"]),
             )
+            self.perception_normalizer.reset_associations()
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Mission parsing failed: {exc}")
 

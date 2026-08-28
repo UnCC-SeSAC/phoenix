@@ -63,6 +63,8 @@ class WorldModel:
     _processed_terminal_action_id_set: set[str] = field(default_factory=set, repr=False)
 
     def set_mission(self, mission_id: str, text: str) -> None:
+        self.people.clear()
+        self.fires.clear()
         self.mission = Mission(id=mission_id, text=text, status=MissionStatus.RUNNING)
         self.exploration_status = ExplorationStatus.RUNNING
         if self.robot.pose and self.robot.home_pose is None:

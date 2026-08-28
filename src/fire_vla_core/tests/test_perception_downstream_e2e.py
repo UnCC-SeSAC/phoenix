@@ -83,6 +83,7 @@ def test_person_detection_runs_remote_qwen_validator_and_mock_result(monkeypatch
     )
     world = WorldModel()
     world.update_robot_pose(Pose2D(0., 0.))
+    world.set_mission("perception_remote", "인명을 우선 확인해")
     observations = bridge_into_world(payload, world)
     person = world.people["person_0001"]
     assert [item.entity_id for item in observations] == ["person_0001"]
@@ -98,7 +99,6 @@ def test_person_detection_runs_remote_qwen_validator_and_mock_result(monkeypatch
             "reason": "미보고 인명을 우선 확인한다",
         }),
     )
-    world.set_mission("perception_remote", "인명을 우선 확인해")
     results = MockResultQueue()
     navigation = MockNavigationAdapter(results)
     orchestrator = VLAOrchestrator(

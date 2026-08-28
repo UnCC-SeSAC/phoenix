@@ -115,6 +115,20 @@ def test_batch_association_is_one_to_one():
     assert len(set(ids)) == 2
 
 
+def test_mission_reset_restarts_fallback_entity_association_ids():
+    world = WorldModel()
+    normalizer = CanonicalPerceptionNormalizer(world)
+    first = apply(normalizer, world, payload(detection()))
+    assert first.observations[0].entity_id == "person_0001"
+
+    world.set_mission("mission_02", "새 임무")
+    normalizer.reset_associations()
+    second = normalizer.normalize(payload(detection(x=3.0, y=2.0)))
+
+    assert world.people == {}
+    assert second.observations[0].entity_id == "person_0001"
+
+
 def test_candidate_older_than_ttl_is_not_reused():
     world = WorldModel()
     old = (utc_now() - timedelta(seconds=3)).isoformat()

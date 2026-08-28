@@ -37,6 +37,28 @@ def test_observation_creates_entities():
     assert world.fires["fire_01"].robot_within_spray_range is True
 
 
+def test_new_mission_clears_entities_but_preserves_robot_and_home_pose():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.robot.home_pose = Pose2D(-1, -1)
+    world.unexplored_zones = [{"id": "zone_01", "x": 2.0, "y": 3.0}]
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_01", "person", .9, Pose2D(1, 2), now),
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    robot_pose = world.robot.pose
+    home_pose = world.robot.home_pose
+    map_zones = list(world.unexplored_zones)
+
+    world.set_mission("m2", "새 임무")
+
+    assert world.people == {}
+    assert world.fires == {}
+    assert world.robot.pose == robot_pose
+    assert world.robot.home_pose == home_pose
+    assert world.unexplored_zones == map_zones
+
+
 def test_terminal_result_clears_current_action_and_sets_last_action():
     world = make_world()
     action = Action("a1", ActionType.NAVIGATE_TO, "이동", target="x", target_pose=Pose2D(1, 0))

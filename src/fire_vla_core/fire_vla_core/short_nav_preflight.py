@@ -43,6 +43,7 @@ def run_short_nav_preflight() -> dict:
     for _ in range(3):
         world.update_robot_pose(Pose2D(0.0, 0.0, 0.0), utc_now_iso())
 
+    world.set_mission("vla07_short_nav_preflight", "인명을 우선 확인해.")
     observed_at = utc_now_iso()
     world.update_observation_batch(normalizer.normalize({
         "timestamp": observed_at,
@@ -55,8 +56,6 @@ def run_short_nav_preflight() -> dict:
             "map_position": {"x": 0.5, "y": 0.0, "yaw": 0.0},
         }],
     }))
-    world.set_mission("vla07_short_nav_preflight", "인명을 우선 확인해.")
-
     results = MockResultQueue()
     navigation = MockNavigationAdapter(results)
     dispatcher = ActionDispatcher(
