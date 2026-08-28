@@ -20,7 +20,6 @@ def launch_setup(context):
     base_frame = LaunchConfiguration('base_frame', default='base_footprint')
     imu_frame = LaunchConfiguration('imu_frame', default='imu_link')
     frame_prefix = LaunchConfiguration('frame_prefix', default='')
-    hardware_cpu_cores = LaunchConfiguration('hardware_cpu_cores', default='0')
 
     namespace_arg = DeclareLaunchArgument('namespace', default_value=namespace)
     use_namespace_arg = DeclareLaunchArgument('use_namespace', default_value=use_namespace)
@@ -31,7 +30,6 @@ def launch_setup(context):
     base_frame_arg = DeclareLaunchArgument('base_frame', default_value=base_frame)
     imu_frame_arg = DeclareLaunchArgument('imu_frame', default_value=imu_frame)
     frame_prefix_arg = DeclareLaunchArgument('frame_prefix', default_value=frame_prefix)
-    hardware_cpu_cores_arg = DeclareLaunchArgument('hardware_cpu_cores', default_value=hardware_cpu_cores)
 
     if compiled == 'True':
         peripherals_package_path = get_package_share_directory('peripherals')
@@ -50,17 +48,13 @@ def launch_setup(context):
             'imu_frame': imu_frame,
             'frame_prefix': frame_prefix,
             'base_frame': base_frame,
-            'odom_frame': odom_frame,
-            'hardware_cpu_cores': hardware_cpu_cores,
+            'odom_frame': odom_frame
         }.items()
     )
 
     imu_filter_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(peripherals_package_path, 'launch/imu_filter.launch.py')
-        ]),
-        launch_arguments={
-            'hardware_cpu_cores': hardware_cpu_cores,
-        }.items()
+        ])
     )
 
     if use_namespace == 'false':
@@ -81,7 +75,6 @@ def launch_setup(context):
             ('cmd_vel', 'controller/cmd_vel')
         ],
         condition=IfCondition(enable_odom),
-        prefix=['taskset -c ', hardware_cpu_cores],
     )
 
 
@@ -95,7 +88,6 @@ def launch_setup(context):
         map_frame_arg,
         imu_frame_arg,
         frame_prefix_arg,
-        hardware_cpu_cores_arg,
         imu_filter_launch,
         odom_publisher_launch,
         ekf_filter_node,

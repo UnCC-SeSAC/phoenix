@@ -1,14 +1,10 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, TimerAction
-from launch.substitutions import LaunchConfiguration
+from launch.actions import TimerAction
 import os
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    hardware_cpu_cores = LaunchConfiguration('hardware_cpu_cores', default='0')
-    hardware_cpu_cores_arg = DeclareLaunchArgument('hardware_cpu_cores', default_value=hardware_cpu_cores)
-
     compiled = os.environ.get('need_compile', 'False')
     if compiled == 'True':
         calibration_package_path = get_package_share_directory('calibration')
@@ -28,8 +24,7 @@ def generate_launch_description():
         remappings=[
             ('raw', '/ros_robot_controller/imu_raw'),
             ('corrected', 'imu_corrected')
-        ],
-        prefix=['taskset -c ', hardware_cpu_cores],
+        ]
     )
 
     imu_filter_node = Node(
@@ -49,12 +44,10 @@ def generate_launch_description():
             ('/tf', 'tf'),
             ('/imu/data_raw', 'imu_corrected'),
             ('imu/data', 'imu')
-        ],
-        prefix=['taskset -c ', hardware_cpu_cores],
+        ]
     )
 
     return LaunchDescription([
-        hardware_cpu_cores_arg,
         TimerAction(
             period=5.0,
             actions=[imu_calib_node, imu_filter_node]

@@ -29,12 +29,10 @@ from launch_ros.actions import Node
 def include_launch(
     path,
     condition=None,
-    launch_arguments=None,
 ):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(path),
         condition=condition,
-        launch_arguments=(launch_arguments or {}).items(),
     )
 
 
@@ -95,13 +93,6 @@ def generate_launch_description():
     # 막아준다. 예: "3" (코어 3만 사용), "2,3" (코어 2~3 사용).
     mission_cpu_cores = LaunchConfiguration("mission_cpu_cores")
 
-    slam_cpu_cores = LaunchConfiguration("slam_cpu_cores")
-
-    nav2_cpu_cores = LaunchConfiguration("nav2_cpu_cores")
-
-    # ekf 입력 체인(ros_robot_controller/odom_publisher/imu_calib/imu_filter/ekf) 전용 코어.
-    hardware_cpu_cores = LaunchConfiguration("hardware_cpu_cores")
-
     # =========================================
     # 1. Hardware
     # =========================================
@@ -112,9 +103,6 @@ def generate_launch_description():
             "hardware.launch.py",
         ),
         IfCondition(start_hardware),
-        launch_arguments={
-            "hardware_cpu_cores": hardware_cpu_cores,
-        },
     )
 
     # =========================================
@@ -146,9 +134,6 @@ def generate_launch_description():
                     "slam_mapping.launch.py",
                 ),
                 IfCondition(start_slam),
-                launch_arguments={
-                    "slam_cpu_cores": slam_cpu_cores,
-                },
             )
         ],
     )
@@ -166,9 +151,6 @@ def generate_launch_description():
                     "nav2_online.launch.py",
                 ),
                 IfCondition(start_nav2),
-                launch_arguments={
-                    "nav2_cpu_cores": nav2_cpu_cores,
-                },
             )
         ],
     )
@@ -410,19 +392,6 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "mission_cpu_cores",
                 default_value="3",
-            ),
-            DeclareLaunchArgument(
-                "slam_cpu_cores",
-                default_value="1,2",
-            ),
-            # 코어 1~3 제한 시 nav2 자체 루프가 밀려서(실측) 전체 허용으로 되돌림
-            DeclareLaunchArgument(
-                "nav2_cpu_cores",
-                default_value="0,1,2,3",
-            ),
-            DeclareLaunchArgument(
-                "hardware_cpu_cores",
-                default_value="0",
             ),
             hardware,
             lidar_app,

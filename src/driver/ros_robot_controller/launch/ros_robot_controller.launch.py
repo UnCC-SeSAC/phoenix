@@ -6,20 +6,16 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     imu_frame = LaunchConfiguration('imu_frame', default='imu_link')
     imu_frame_arg = DeclareLaunchArgument('imu_frame', default_value=imu_frame)
-    hardware_cpu_cores = LaunchConfiguration('hardware_cpu_cores', default='0')
-    hardware_cpu_cores_arg = DeclareLaunchArgument('hardware_cpu_cores', default_value=hardware_cpu_cores)
 
     ros_robot_controller_node = Node(
         package='ros_robot_controller',
         executable='ros_robot_controller',
         output='screen',
-        parameters=[{'imu_frame': imu_frame}],
-        prefix=['taskset -c ', hardware_cpu_cores],
+        parameters=[{'imu_frame': imu_frame}]
     )
 
     return LaunchDescription([
         imu_frame_arg,
-        hardware_cpu_cores_arg,
         ros_robot_controller_node
     ])
 

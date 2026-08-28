@@ -31,8 +31,6 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_teb = LaunchConfiguration('use_teb')
 
-    nav2_cpu_cores = LaunchConfiguration('nav2_cpu_cores')
-
     container = Node(
         name='nav2_container',
         package='rclcpp_components',
@@ -47,7 +45,6 @@ def generate_launch_description():
             ('/tf_static', 'tf_static'),
         ],
         output='screen',
-        prefix=['taskset -c ', nav2_cpu_cores],
     )
 
     navigation_base = IncludeLaunchDescription(
@@ -90,10 +87,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_teb',
             default_value='false',
-        ),
-        DeclareLaunchArgument(
-            'nav2_cpu_cores',
-            default_value='1,2,3',
         ),
         container,
         navigation_base,
