@@ -16,13 +16,13 @@ def generate_launch_description():
                 {"usb_bus_no": -1},
                 {"usb_path": "null"},
                 {"confiPath": "/home/ubuntu/third_party_ros2/third_party_ws/src/ascamera/configurationfiles"},
-                {"color_pcl": True},
+                {"color_pcl": False},
                 {"pub_tfTree": True},
                 {"depth_width": 640},
                 {"depth_height": 480},
                 {"rgb_width": 640},
                 {"rgb_height": 480},
-                {"fps": 15},
+                {"fps": 10},
             ]
 
         ),
