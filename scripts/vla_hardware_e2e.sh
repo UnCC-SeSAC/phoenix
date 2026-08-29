@@ -8,9 +8,9 @@ DRY_RUN="${VLA_E2E_DRY_RUN:-0}"
 CAMERA_WAIT_SEC=8
 STATUS_WAIT_SEC=15
 LOCK_FILE="/tmp/vla_hardware_e2e.lock"
-HEF_PATH="/shared/Hailo/models/baseline_yolo26_neural_norm.hef"
-ONNX_PATH="/shared/Hailo/models/best_sim_postprocess.onnx"
-JSON_PATH="/shared/Hailo/models/config_onnx_best_sim.json"
+HEF_PATH="/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef"
+ONNX_PATH="/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx"
+JSON_PATH="/ros2_ws/phoenix_vla/Hailo/models/config_onnx_best_sim.json"
 
 ENVIRONMENT='source /opt/ros/humble/setup.bash
 source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash

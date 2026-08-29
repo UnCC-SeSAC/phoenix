@@ -41,13 +41,13 @@ VLA production source/build/install은 팀 workspace와 분리한다.
 - authoritative overlay: `/ros2_ws/phoenix_vla/install`
 - inference module:
   `/ros2_ws/phoenix_vla/install/image_pipeline/lib/python3.10/site-packages/image_pipeline/yolo.py`
-- HEF: `/shared/Hailo/models/baseline_yolo26_neural_norm.hef`
+- HEF: `/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef`
   - size: `11288576` bytes
   - SHA-256: `67496fe3eefb710bef56ce9fd30af0102520c234f697f715ed0935a881e75aad`
-- postprocess: `/shared/Hailo/models/best_sim_postprocess.onnx`
+- postprocess: `/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx`
   - size: `106676` bytes
   - SHA-256: `b05022e4741258840e48143e7dc0f88cc676d11a842e6950623c59cf189f60b4`
-- output mapping: `/shared/Hailo/models/config_onnx_best_sim.json`
+- output mapping: `/ros2_ws/phoenix_vla/Hailo/models/config_onnx_best_sim.json`
   - size: `1073` bytes
   - SHA-256: `33afa6da43c84ceaa9cae992c8372acf8008bc19e56b9b86b8425997172d2278`
 - model binaries remain Git-untracked. The VLA copies were provisioned from the
@@ -909,7 +909,7 @@ ros2 launch peripherals depth_camera.launch.py
 # Camera initialization wait: 8 sec
 ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false
 ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough
-ros2 launch image_pipeline yolo.launch.py model_path:=/shared/Hailo/models/baseline_yolo26_neural_norm.hef postprocess_path:=/shared/Hailo/models/best_sim_postprocess.onnx backend:=hailo layout:=end2end class_names:="[fire,person]"
+ros2 launch image_pipeline yolo.launch.py model_path:=/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef postprocess_path:=/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx backend:=hailo layout:=end2end class_names:="[fire,person]"
 ros2 launch image_pipeline detection_3d.launch.py
 ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://192.168.1.37:8088/infer remote_qwen_timeout_sec:=10.0
 ros2 launch uncc_example vla_navigation_bridge.launch.py
