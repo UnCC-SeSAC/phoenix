@@ -833,3 +833,34 @@ runtime은 재사용한다. Process가 없을 때만 canonical clean start를 �
 Branch 전체 merge나 commit message만으로 복구를 시도하지 않는다. 현재 schema,
 Mission scope, 정상 Qwen 1회, Validator와 suppression verification 계약을 기준으로
 실제 증거가 있는 최소 commit만 선별한다.
+
+## Reported person이 같은 Mission에서 반복 생성·보고됨
+
+증상: ID 없는 동일 person 관측이 `2~4 s` 간격으로 들어올 때 fallback entity ID가
+매번 바뀌고 자동 report도 반복됐다. 실제 map 위치 변화는 최대 약 `3.8 mm`로
+association radius `0.50 m` 안이었다.
+
+직접 원인: 일반 person association은 `association_ttl_sec=2.0`을 넘긴 entity를
+후보에서 제외했다. 자동 보고된 person도 같은 TTL을 적용받아 안정된 위치인데도 새
+physical person으로 처리됐다.
+
+검증된 수정: 같은 Mission의 `reported=true` person은 TTL 이후에도 같은 class이고
+radius 안이면 기존 ID에 연결한다. Radius 밖 관측은 새 ID가 되며 Mission boundary는
+people와 association 상태를 초기화한다. Unreported person TTL과 fire lifecycle은
+그대로 유지한다.
+
+## Suppression startup에서 Pump가 의도 없이 작동함
+
+상태: `FAIL`, suppression `DISABLED`. Mission과 suppress goal 없이 node startup
+직후 Pump가 작동했다. 사용자가 물리적으로 OFF를 확인했고 관련 runtime은 종료했다.
+
+직접 증거: 현장 관찰 배선은 Servo physical pin 7 (`BCM4`), Pump physical pin 8
+(`BCM14`)이었다. Production 코드 핀/극성과 실제 배선 계약이 일치한다고 확인되지
+않았다. 실패한 `active_high=True` 변경은 별도 patch로 보존하고 source에는 반영하지
+않았다.
+
+최소 복구: Hardware team이 Servo/Pump의 BCM pin, physical pin, active level과 공통
+GND를 확정하기 전에는 suppression node, spray bridge, fire extinguisher launch,
+전체 Hardware wrapper start와 GPIO 접근을 실행하지 않는다. 확정 후 불 OFF에서
+suppression startup 무동작 단독 시험을 먼저 수행한다. 핀이나 극성을 추측해 바꾸지
+않는다.

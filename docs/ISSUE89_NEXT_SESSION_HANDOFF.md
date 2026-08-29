@@ -549,3 +549,24 @@ exploration 상태를 요구하지 않는다. Suppression 후에는 기존 `PEND
 0.5초 delay, 유효한 fire 미검출 3회, 5초 timeout 시 ACTIVE 복귀 계약을 그대로
 적용한다. 실제 Camera/Qwen/Nav2/Servo/Pump, 화염 제거, terminal SUCCESS는 여전히
 `HARDWARE_PENDING`이다.
+
+## 2026-08-29 latest restart point
+
+- Fire floor ROI Hardware 측정은 PASS다. 실측 `0.45~0.46 m`에서 세 건의 선택
+  Depth가 `0.456~0.457 m`, 최대 오차 약 `0.007 m`, `fallback_below`였다.
+  Production의 `band_offset=3.5`, `band_ratio=3.0`, `p25`는 유지하며 과거
+  `1.45 m`는 현재 배치에서 재현되지 않았다.
+- Person+fire Mission은 정확히 한 번 발행했지만, 정지 person의 ID 없는 관측 간격이
+  association TTL `2.0 s`를 넘겨 fallback ID와 자동 report가 반복됐다. 위치 변화는
+  최대 약 `3.8 mm`로 radius `0.50 m` 안이었다. 이 실행은 fire/Qwen/Nav2/spray
+  전에 중단됐다.
+- Software 수정은 같은 Mission의 reported person을 TTL 이후에도 radius 안에서 같은
+  ID로 연결한다. Mission boundary, unreported person TTL과 fire lifecycle은 유지한다.
+- Suppression은 `DISABLED`다. Servo/Pump 실제 핀과 극성이 미확정이고 suppression
+  startup에서 Pump가 의도 없이 작동했다. 실패한 `active_high=True` 실험은 commit
+  하지 않았다. Hardware team 확인 전 wrapper 전체 start, suppression, spray bridge와
+  GPIO 접근을 금지한다.
+
+다음 Hardware 시작점은 (1) Hardware team의 Pump/Servo pin·극성 확정, (2) 불 OFF에서
+suppression startup 무동작 단독 시험, (3) person+fire pre-spray E2E 재개 순서다.
+이전 Mission/entity/action은 재사용하지 않는다.

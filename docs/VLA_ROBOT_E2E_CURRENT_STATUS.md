@@ -1086,3 +1086,27 @@ thread 최적화는 현재 integration에 없지만 production HW E2E 증거가 
 별도 fire-status/suppression owner를 도입해 현재 VLA suppression lifecycle과 이중
 owner 위험이 있으므로 통합하지 않는다. 팀 branch 전체 merge는 금지하고 실제 증거가
 있는 commit만 계약 단위로 선별한다.
+
+## 2026-08-29 latest Hardware checkpoint
+
+Fire floor ROI를 실제 Hardware에서 다시 측정했다. 카메라 렌즈와 촛불 받침의 실측
+직선거리는 `0.45~0.46 m`였고, 세 관측의 선택 Depth는 `0.456~0.457 m`였다. 최대
+절대 오차는 약 `0.007 m`이며 세 건 모두 `fallback_below`였다. Production 설정
+`band_offset=3.5`, `band_ratio=3.0`, `p25`를 그대로 사용했다. 과거 `1.45 m`
+과대 측정은 현재 배치에서 재현되지 않았으므로 floor ROI production 변경은 필요하지
+않다.
+
+Person+fire pre-spray 실행은 Mission을 한 번 발행한 뒤 같은 정지 person이
+`person_0001`, `person_0002`처럼 반복 생성·보고되어 fire/Qwen/Nav2/spray 전에
+중단했다. ID 없는 관측 간격 `2~4 s`가 association TTL `2.0 s`를 넘었지만 map 위치
+변화는 최대 약 `0.0038 m`로 merge radius `0.50 m` 안이었다. 같은 Mission에서 이미
+reported인 person은 TTL 이후에도 동일 class와 radius 조건으로 기존 ID에 연결한다.
+Mission boundary 초기화, unreported person TTL, fire association lifecycle과 radius는
+변경하지 않는다.
+
+Suppression은 현재 `DISABLED`다. 현장 관찰은 Servo가 physical pin 7 (`BCM4`),
+Pump가 physical pin 8 (`BCM14`)에 연결된 것으로 보였지만 핀과 극성은 Hardware
+team이 아직 확정하지 않았다. Suppression node startup만으로 Pump가 작동한 incident가
+있어 `fire_suppression_node`, `fire_extinguisher`, `vla_spray_bridge`, 전체
+Hardware wrapper start와 GPIO 접근을 금지한다. 실패한 `active_high=True` 실험
+변경은 production commit에 포함하지 않았다.
