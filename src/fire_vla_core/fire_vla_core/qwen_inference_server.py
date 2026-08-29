@@ -39,6 +39,9 @@ def infer(backend: LLMPort, payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("allowed_actions가 server contract와 일치하지 않습니다.")
     decision = backend.decide(mission.strip(), world_model)
     return {
+        "mission_scope": (
+            decision.mission_scope.value if decision.mission_scope else None
+        ),
         "action": decision.action.value,
         "target": decision.target,
         "reason": decision.reason,

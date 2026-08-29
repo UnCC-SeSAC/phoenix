@@ -30,6 +30,10 @@ class VLAStatusTracker:
 
         self.decision = (
             {
+                "mission_scope": (
+                    cycle.decision.mission_scope.value
+                    if cycle.decision.mission_scope else None
+                ),
                 "action": cycle.decision.action.value,
                 "target": cycle.decision.target,
                 "reason": cycle.decision.reason,

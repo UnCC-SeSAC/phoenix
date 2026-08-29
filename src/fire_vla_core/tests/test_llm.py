@@ -19,7 +19,7 @@ from fire_vla_core.llm import (
 class FakeResponse:
     def __enter__(self): return self
     def __exit__(self, *args): return False
-    def read(self): return json.dumps({"message": {"content": json.dumps({"action": "WAIT", "target": None, "reason": "대기"})}}).encode()
+    def read(self): return json.dumps({"message": {"content": json.dumps({"mission_scope": "FULL_EXPLORATION", "action": "WAIT", "target": None, "reason": "대기"})}}).encode()
 
 
 def test_ollama_client_parses_decision(monkeypatch):
@@ -36,7 +36,7 @@ def test_ollama_client_raises_after_retry(monkeypatch):
 
 def test_strict_parser_accepts_normal_json():
     decision = parse_action_decision(
-        '{"action":"SEARCH","target":"zone_01","reason":"미탐색 구역을 탐색한다."}'
+        '{"mission_scope":"FULL_EXPLORATION","action":"SEARCH","target":"zone_01","reason":"미탐색 구역을 탐색한다."}'
     )
     assert decision.action == ActionType.SEARCH
     assert decision.target == "zone_01"
@@ -61,7 +61,7 @@ def test_strict_parser_rejects_invalid_output(content):
 
 def test_strict_parser_accepts_wait_with_json_null():
     decision = parse_action_decision(
-        '{"action":"WAIT","target":null,"reason":"현재 위치에서 대기한다."}'
+        '{"mission_scope":"FULL_EXPLORATION","action":"WAIT","target":null,"reason":"현재 위치에서 대기한다."}'
     )
     assert decision.action == ActionType.WAIT
     assert decision.target is None
@@ -126,7 +126,7 @@ class FakeBatch(dict):
 class FakeTokenizer:
     load_count = 0
     eos_token_id = 99
-    response = '{"action":"WAIT","target":null,"reason":"대기한다."}'
+    response = '{"mission_scope":"FULL_EXPLORATION","action":"WAIT","target":null,"reason":"대기한다."}'
     last_messages = None
 
     @classmethod
@@ -199,3 +199,13 @@ def test_transformers_adapter_does_not_fall_back_to_cpu(monkeypatch):
             TransformersQwenAdapter()
     finally:
         FakeXPU.available = True
+
+def test_strict_parser_rejects_missing_or_invalid_mission_scope():
+    with pytest.raises(LLMOutputError):
+        parse_action_decision(
+            '{"action":"WAIT","target":null,"reason":"대기"}'
+        )
+    with pytest.raises(LLMOutputError, match="mission_scope"):
+        parse_action_decision(
+            '{"mission_scope":"OTHER","action":"WAIT","target":null,"reason":"대기"}'
+        )

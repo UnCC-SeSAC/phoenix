@@ -94,6 +94,7 @@ def test_person_detection_runs_remote_qwen_validator_and_mock_result(monkeypatch
     monkeypatch.setattr(
         "urllib.request.urlopen",
         lambda _request, timeout: JsonResponse({
+            "mission_scope": "FULL_EXPLORATION",
             "action": "NAVIGATE_TO",
             "target": "person_0001",
             "reason": "미보고 인명을 우선 확인한다",

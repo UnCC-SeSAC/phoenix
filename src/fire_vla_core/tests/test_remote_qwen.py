@@ -80,6 +80,7 @@ def test_remote_backend_success_uses_existing_pipeline(monkeypatch):
         captured["timeout"] = timeout
         captured["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse({
+            "mission_scope": "FULL_EXPLORATION",
             "action": "NAVIGATE_TO",
             "target": "person_0001",
             "reason": "미보고 인명을 우선 확인한다",
@@ -179,6 +180,7 @@ def test_inference_server_health_and_synthetic_decision():
         with urllib.request.urlopen(request, timeout=2) as response:
             result = json.loads(response.read())
         assert result == {
+            "mission_scope": "FULL_EXPLORATION",
             "action": "NAVIGATE_TO",
             "target": "person_0001",
             "reason": "미보고 인명을 우선 확인한다",

@@ -1,9 +1,16 @@
 import json
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+
+from fire_vla_core.adapters.mock_adapters import (
+    MockNavigationAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter,
+)
+from fire_vla_core.dispatcher import ActionDispatcher
 
 from fire_vla_core.domain import (
     Action,
@@ -16,10 +23,18 @@ from fire_vla_core.domain import (
     ExecutionSource,
     FireEntity,
     FireState,
+    MissionScope,
+    ObservationBatch,
     PersonEntity,
     Pose2D,
+    SemanticObservation,
+    utc_now_iso,
 )
-from fire_vla_core.orchestrator import DecisionCycle
+from fire_vla_core.orchestrator import DecisionCycle, VLAOrchestrator
+from fire_vla_core.resolver import TargetResolver
+from fire_vla_core.ros.topic_bridge_person_report_adapter import (
+    TopicBridgePersonReportAdapter,
+)
 from fire_vla_core.ros.firefighter_ui_node import (
     FirefighterHTTPServer,
     StatusStore,
@@ -29,8 +44,8 @@ from fire_vla_core.ros.firefighter_ui_node import (
     validate_server_config,
 )
 from fire_vla_core.status import VLAStatusTracker
-from fire_vla_core.validator import ValidationResult
-from fire_vla_core.world_model import WorldModel
+from fire_vla_core.validator import ActionValidator, ValidationResult
+from fire_vla_core.world_model import WorldModel, WorldModelConfig
 
 
 def make_world():
@@ -70,7 +85,7 @@ def test_status_serializes_decision_reason_validation_and_submission():
     ))
     payload = tracker.create_payload({})
     assert payload["decision"] == {
-        "action": "WAIT", "target": None, "reason": "현 위치에서 대기"
+        "mission_scope": "FULL_EXPLORATION", "action": "WAIT", "target": None, "reason": "현 위치에서 대기"
     }
     assert payload["validation"] == {"approved": True, "reason": ""}
     assert payload["submission"] == {"status": "ACCEPTED", "detail": "ok"}
@@ -451,6 +466,7 @@ def test_navigation_report_and_spray_lifecycle_are_visible_in_snapshot():
     assert snapshot["last_action"]["action"] == "EXTINGUISH"
     assert snapshot["last_action"]["status"] == "SUCCEEDED"
     assert payload["decision"] == {
+        "mission_scope": "FULL_EXPLORATION",
         "action": "EXTINGUISH",
         "target": "fire_0001",
         "reason": "화재 진압을 수행합니다.",
@@ -463,3 +479,123 @@ def test_existing_launches_do_not_force_start_ui():
     launch_dir = Path(__file__).parents[2] / "fire_vla_bringup" / "launch"
     for name in ("local_mock_vla.launch.py", "topic_bridge_vla.launch.py"):
         assert "firefighter_ui" not in (launch_dir / name).read_text()
+
+def test_ui_software_e2e_completes_scoped_person_fire_mission():
+    world = WorldModel(WorldModelConfig())
+    world.update_robot_pose(Pose2D(0.0, 0.0))
+    store = StatusStore()
+    submitted = []
+
+    def submit(text):
+        payload = create_mission_payload(text)
+        submitted.append(payload)
+        world.set_mission(payload["mission_id"], payload["text"])
+        return payload
+
+    server = FirefighterHTTPServer("127.0.0.1", 0, store, submit)
+    server.start()
+    try:
+        status, _, _ = request(
+            server,
+            "/api/mission",
+            body=json.dumps({"text": "사람을 위협하는 화재를 진압해줘"}),
+        )
+        assert status == 202
+        now = utc_now_iso()
+        world.update_observation_batch(ObservationBatch(now, (
+            SemanticObservation(
+                "person_01", "person", .95, Pose2D(2.05, 0.0), now
+            ),
+            SemanticObservation(
+                "fire_01", "fire", .92, Pose2D(2.0, 0.0), now, "SMALL"
+            ),
+        )))
+
+        publisher = MagicMock()
+        node = MagicMock()
+        node.create_publisher.return_value = publisher
+        report = TopicBridgePersonReportAdapter(node, world)
+        assert report.publish_new_people() == 1
+        assert publisher.publish.call_count == 1
+
+        tracker = VLAStatusTracker()
+        active_payload = tracker.create_payload(world.create_snapshot())
+        store.update(active_payload)
+        _, _, active_body = request(server, "/api/status")
+        active = json.loads(active_body)
+        active_person = active["world_model"]["people"][0]
+        active_fire = active["world_model"]["fires"][0]
+        assert active_person["reported"] is True
+        assert active_fire["state"] == "ACTIVE"
+        assert active_fire["threatens_person"] is True
+        assert active_fire["threatened_person_id"] == "person_01"
+        _, _, html_body = request(server, "/")
+        html = html_body.decode("utf-8")
+        assert "보고 완료" in html
+        assert "사람 위협 화재" in html
+        assert "item.threatened_person_id" in html
+
+        class OneDecision:
+            calls = 0
+
+            def decide(self, mission, snapshot):
+                self.calls += 1
+                return ActionDecision(
+                    ActionType.NAVIGATE_TO,
+                    "위협 화점으로 접근",
+                    "fire_01",
+                    MissionScope.PERSON_FIRE,
+                )
+
+        results = MockResultQueue()
+        navigation = MockNavigationAdapter(results)
+        spray = MockSprayAdapter(results)
+        brain = OneDecision()
+        orchestrator = VLAOrchestrator(
+            world,
+            brain,
+            TargetResolver(),
+            ActionValidator(),
+            ActionDispatcher(
+                navigation, spray, report, MockWaitAdapter(results)
+            ),
+        )
+        nav_cycle = orchestrator.decide_once()
+        assert nav_cycle.decision.action == ActionType.NAVIGATE_TO
+        world.update_robot_pose(Pose2D(1.2, 0.0))
+        refreshed = utc_now_iso()
+        world.update_observation_batch(ObservationBatch(refreshed, (
+            SemanticObservation(
+                "person_01", "person", .95, Pose2D(2.05, 0.0), refreshed
+            ),
+            SemanticObservation(
+                "fire_01", "fire", .92, Pose2D(2.0, 0.0), refreshed, "SMALL"
+            ),
+        )))
+        assert orchestrator.process_results(results) == 1
+
+        spray_cycle = orchestrator.decide_once()
+        assert spray_cycle.decision.action == ActionType.EXTINGUISH
+        assert orchestrator.process_results(results) == 1
+        assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+
+        time.sleep(world.config.verification_delay_sec + 0.05)
+        for _ in range(world.config.verification_required_observations):
+            world.update_observation_batch(
+                ObservationBatch(utc_now_iso(), tuple())
+            )
+
+        final_payload = tracker.create_payload(world.create_snapshot())
+        store.update(final_payload)
+        _, _, final_body = request(server, "/api/status")
+        final = json.loads(final_body)["world_model"]
+        assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+        assert final["mission"]["status"] == "COMPLETED"
+        assert "world.mission?.status" in html
+        assert brain.calls == 1
+        assert len(submitted) == 1
+        assert len(navigation.calls) == 1
+        assert len(spray.calls) == 1
+        assert publisher.publish.call_count == 1
+    finally:
+        server.close()

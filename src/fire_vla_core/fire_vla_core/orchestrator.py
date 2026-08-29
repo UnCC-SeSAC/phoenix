@@ -91,6 +91,20 @@ class VLAOrchestrator:
                     # Do not overlap it with an unchanged timer-driven retry.
                     self._last_decision_input_signature = signature
                     return DecisionCycle(None, None, None, f"LLM_INFERENCE_FAILED: {exc}")
+                if decision.mission_scope is None:
+                    return DecisionCycle(
+                        decision, None, None,
+                        "MISSION_SCOPE_INVALID: mission_scope가 필요합니다.",
+                    )
+                try:
+                    self.world.bind_mission_scope(
+                        decision.mission_scope, decision.target
+                    )
+                except ValueError as exc:
+                    return DecisionCycle(
+                        decision, None, None,
+                        f"MISSION_SCOPE_INVALID: {exc}",
+                    )
                 self._last_decision_input_signature = signature
                 qwen_selected_navigation = (
                     decision.action == ActionType.NAVIGATE_TO
@@ -165,6 +179,7 @@ class VLAOrchestrator:
             ActionType.NAVIGATE_TO,
             "분사거리 밖 ACTIVE 화점으로 접근한다.",
             decision.target,
+            decision.mission_scope,
         )
 
     def process_results(self, source: ActionResultSource) -> int:

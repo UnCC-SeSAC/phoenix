@@ -23,6 +23,12 @@ class MissionStatus(str, Enum):
     ABORTED = "ABORTED"
 
 
+class MissionScope(str, Enum):
+    FIRE_ONLY = "FIRE_ONLY"
+    PERSON_FIRE = "PERSON_FIRE"
+    FULL_EXPLORATION = "FULL_EXPLORATION"
+
+
 class ExplorationStatus(str, Enum):
     NOT_STARTED = "NOT_STARTED"
     RUNNING = "RUNNING"
@@ -122,6 +128,9 @@ class Mission:
     id: str
     text: str
     status: MissionStatus = MissionStatus.READY
+    scope: MissionScope | None = None
+    target_fire_id: str | None = None
+    target_person_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -166,6 +175,7 @@ class ActionDecision:
     action: ActionType
     reason: str
     target: str | None = None
+    mission_scope: MissionScope = MissionScope.FULL_EXPLORATION
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ActionDecision":
@@ -173,10 +183,15 @@ class ActionDecision:
             action_type = ActionType(data["action"])
         except (KeyError, ValueError) as exc:
             raise ValueError("유효한 action 필드가 필요합니다.") from exc
+        try:
+            mission_scope = MissionScope(data["mission_scope"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("유효한 mission_scope 필드가 필요합니다.") from exc
         return cls(
             action=action_type,
             target=data.get("target"),
             reason=str(data.get("reason", "")).strip(),
+            mission_scope=mission_scope,
         )
 
 

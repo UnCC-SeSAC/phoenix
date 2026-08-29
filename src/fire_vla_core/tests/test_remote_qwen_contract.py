@@ -93,14 +93,16 @@ def test_qwen_prompt_states_strict_action_target_contract():
     assert "REPORT_PERSON" not in ALLOWED_ACTIONS
     assert "REPORT_PERSON targets" not in prompt
     assert "12 words or fewer" in prompt
+    assert "FIRE_ONLY, PERSON_FIRE, FULL_EXPLORATION" in prompt
+    assert "mission_scope, action" in prompt
 
 
 @pytest.mark.parametrize("payload, expected", [
-    ({"action": "NAVIGATE_TO", "target": "person_0001", "reason": "접근"}, ActionType.NAVIGATE_TO),
-    ({"action": "REPORT_PERSON", "target": "person_0001", "reason": "보고"}, ActionType.REPORT_PERSON),
-    ({"action": "EXTINGUISH", "target": "fire_0001", "reason": "진압"}, ActionType.EXTINGUISH),
-    ({"action": "SEARCH", "target": "zone_0001", "reason": "탐색"}, ActionType.SEARCH),
-    ({"action": "RETURN_HOME", "target": None, "reason": "복귀"}, ActionType.RETURN_HOME),
+    ({"mission_scope": "FULL_EXPLORATION", "action": "NAVIGATE_TO", "target": "person_0001", "reason": "접근"}, ActionType.NAVIGATE_TO),
+    ({"mission_scope": "FULL_EXPLORATION", "action": "REPORT_PERSON", "target": "person_0001", "reason": "보고"}, ActionType.REPORT_PERSON),
+    ({"mission_scope": "FULL_EXPLORATION", "action": "EXTINGUISH", "target": "fire_0001", "reason": "진압"}, ActionType.EXTINGUISH),
+    ({"mission_scope": "FULL_EXPLORATION", "action": "SEARCH", "target": "zone_0001", "reason": "탐색"}, ActionType.SEARCH),
+    ({"mission_scope": "FULL_EXPLORATION", "action": "RETURN_HOME", "target": None, "reason": "복귀"}, ActionType.RETURN_HOME),
 ])
 def test_representative_outputs_pass_strict_parser(payload, expected):
     assert parse_action_decision(json.dumps(payload)).action == expected

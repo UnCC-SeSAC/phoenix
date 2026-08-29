@@ -19,6 +19,7 @@ from .domain import (
     FireEntity,
     FireState,
     Mission,
+    MissionScope,
     MissionStatus,
     ObservationBatch,
     PersonEntity,
@@ -82,6 +83,31 @@ class WorldModel:
         self.exploration_status = ExplorationStatus.COMPLETED
         self._event("EXPLORATION_COMPLETED")
 
+    def bind_mission_scope(
+        self, scope: MissionScope, action_target: str | None
+    ) -> None:
+        if not self.mission or self.mission.status != MissionStatus.RUNNING:
+            raise ValueError("RUNNING Mission이 없습니다.")
+        if self.mission.scope is not None:
+            if self.mission.scope != scope:
+                raise ValueError("Mission 중 mission_scope를 변경할 수 없습니다.")
+            return
+        if scope == MissionScope.FIRE_ONLY:
+            if not action_target or action_target not in self.fires:
+                raise ValueError("FIRE_ONLY에는 WorldModel fire target이 필요합니다.")
+            self.mission.target_fire_id = action_target
+        elif scope == MissionScope.PERSON_FIRE:
+            fire = self.fires.get(action_target or "")
+            person_id = fire.threatened_person_id if fire else None
+            if fire is None or not person_id or person_id not in self.people:
+                raise ValueError(
+                    "PERSON_FIRE에는 threatened_person_id가 있는 fire target이 필요합니다."
+                )
+            self.mission.target_fire_id = fire.id
+            self.mission.target_person_id = person_id
+        self.mission.scope = scope
+        self._event("MISSION_SCOPE_SET", detail=scope.value)
+
     def update_robot_pose(self, pose: Pose2D, updated_at: str | None = None) -> None:
         self.robot.pose = pose
         self.robot.pose_updated_at = updated_at or utc_now_iso()
@@ -122,6 +148,7 @@ class WorldModel:
 
         self._update_fire_verification(seen_fires, batch.observed_at)
         self._refresh_spatial_flags()
+        self.complete_mission_if_resolved()
 
     def update_observations(self, observations: Iterable[SemanticObservation], timestamp: str | None = None) -> None:
         """Compatibility helper for non-ROS callers using already normalized DTOs."""
@@ -227,12 +254,36 @@ class WorldModel:
     def mission_goals_resolved(self) -> bool:
         if not self.mission or self.mission.status != MissionStatus.RUNNING:
             return False
-        if not self.perception_ready or self.exploration_status != ExplorationStatus.COMPLETED:
+        if not self.perception_ready or self.mission.scope is None:
             return False
         if self.current_action is not None:
             return False
-        people_done = all(p.state == PersonState.REPORTED for p in self.people.values())
-        fires_done = all(f.state in {FireState.EXTINGUISHED, FireState.INACCESSIBLE} for f in self.fires.values())
+        if self.mission.scope == MissionScope.FIRE_ONLY:
+            fire = self.fires.get(self.mission.target_fire_id or "")
+            return bool(
+                fire
+                and fire.state
+                in {FireState.EXTINGUISHED, FireState.INACCESSIBLE}
+            )
+        if self.mission.scope == MissionScope.PERSON_FIRE:
+            person = self.people.get(self.mission.target_person_id or "")
+            fire = self.fires.get(self.mission.target_fire_id or "")
+            return bool(
+                person
+                and person.state == PersonState.REPORTED
+                and fire
+                and fire.state
+                in {FireState.EXTINGUISHED, FireState.INACCESSIBLE}
+            )
+        if self.exploration_status != ExplorationStatus.COMPLETED:
+            return False
+        people_done = all(
+            p.state == PersonState.REPORTED for p in self.people.values()
+        )
+        fires_done = all(
+            f.state in {FireState.EXTINGUISHED, FireState.INACCESSIBLE}
+            for f in self.fires.values()
+        )
         return people_done and fires_done
 
     def find_unexplored_zone(self, zone_id: str | None) -> dict[str, Any] | None:

@@ -10,6 +10,7 @@ from fire_vla_core.domain import (
     ActionSubmissionStatus,
     ActionType,
     ExecutionSource,
+    MissionScope,
     FireState,
     ObservationBatch,
     PersonState,
@@ -164,6 +165,7 @@ def test_invalid_frame_does_not_count_as_negative_verification():
 def test_empty_world_does_not_complete_mission_before_exploration_complete():
     world = make_world()
     world.perception_ready = True
+    world.mission.scope = MissionScope.FULL_EXPLORATION
     assert world.mission_goals_resolved() is False
     world.mark_exploration_completed()
     assert world.mission_goals_resolved() is True
@@ -176,3 +178,64 @@ def test_stale_observation_is_ignored():
     world.update_observation_batch(ObservationBatch(old, (SemanticObservation("person_old", "person", .9, Pose2D(1, 1), old),)))
     assert "person_old" not in world.people
     assert any(e.event_type == "STALE_OBSERVATION_IGNORED" for e in world.event_log)
+
+def test_fire_only_scope_ignores_unrelated_entities_and_exploration():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_other", "person", .9, Pose2D(4, 0), now),
+        SemanticObservation("fire_target", "fire", .9, Pose2D(.5, 0), now),
+        SemanticObservation("fire_other", "fire", .9, Pose2D(3, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_target")
+    world.fires["fire_target"].state = FireState.EXTINGUISHED
+
+    assert world.mission_goals_resolved() is True
+
+
+def test_person_fire_scope_uses_bound_relation_only():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_target", "person", .9, Pose2D(.55, 0), now),
+        SemanticObservation("person_other", "person", .9, Pose2D(4, 0), now),
+        SemanticObservation("fire_target", "fire", .9, Pose2D(.5, 0), now),
+        SemanticObservation("fire_other", "fire", .9, Pose2D(3, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.PERSON_FIRE, "fire_target")
+    world.people["person_target"].reported = True
+    world.people["person_target"].state = PersonState.REPORTED
+    world.fires["fire_target"].state = FireState.EXTINGUISHED
+
+    assert world.mission.target_person_id == "person_target"
+    assert world.mission_goals_resolved() is True
+
+
+def test_full_exploration_scope_keeps_global_completion_contract():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_01", "person", .9, Pose2D(1, 0), now),
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.FULL_EXPLORATION, None)
+    assert world.mission_goals_resolved() is False
+    world.mark_exploration_completed()
+    assert world.mission_goals_resolved() is False
+    world.people["person_01"].reported = True
+    world.people["person_01"].state = PersonState.REPORTED
+    world.fires["fire_01"].state = FireState.EXTINGUISHED
+
+    assert world.mission_goals_resolved() is True
+
+
+def test_mission_scope_cannot_change_after_first_binding():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_01")
+
+    with pytest.raises(ValueError, match="변경"):
+        world.bind_mission_scope(MissionScope.FULL_EXPLORATION, None)

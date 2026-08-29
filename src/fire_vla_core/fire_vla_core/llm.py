@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from math import hypot
 from typing import Any
 
-from .domain import ActionDecision, ActionType
+from .domain import ActionDecision, ActionType, MissionScope
 from .ports import LLMPort
 
 
@@ -41,8 +41,14 @@ def parse_action_decision(content: str) -> ActionDecision:
         raise LLMOutputError(f"LLM 출력이 단일 JSON 객체가 아닙니다: {exc}") from exc
     if not isinstance(data, dict):
         raise LLMOutputError("LLM 출력은 JSON 객체여야 합니다.")
-    if set(data) != {"action", "target", "reason"}:
-        raise LLMOutputError("action, target, reason 세 필드만 허용됩니다.")
+    if set(data) != {"mission_scope", "action", "target", "reason"}:
+        raise LLMOutputError(
+            "mission_scope, action, target, reason 네 필드만 허용됩니다."
+        )
+    try:
+        mission_scope = MissionScope(data["mission_scope"])
+    except (TypeError, ValueError) as exc:
+        raise LLMOutputError("mission_scope가 허용된 값이 아닙니다.") from exc
     try:
         action = ActionType(data["action"])
     except (TypeError, ValueError) as exc:
@@ -65,7 +71,12 @@ def parse_action_decision(content: str) -> ActionDecision:
         raise LLMOutputError(f"{action.value}에는 문자열 target이 필요합니다.")
     if action in {ActionType.WAIT, ActionType.RETURN_HOME} and target is not None:
         raise LLMOutputError(f"{action.value}의 target은 JSON null이어야 합니다.")
-    return ActionDecision(action=action, target=target, reason=reason.strip())
+    return ActionDecision(
+        action=action,
+        target=target,
+        reason=reason.strip(),
+        mission_scope=mission_scope,
+    )
 
 
 def extract_valid_targets(world_model: dict[str, Any]) -> list[str]:
@@ -242,7 +253,11 @@ People are reported automatically outside Qwen. When several valid fires
 remain at the same priority, reason from explicit human-risk relations, action
 feasibility, and current robot state; do not invent risk.
 
-Output exactly one compact single-line JSON object with action, target, reason.
+Choose mission_scope once from FIRE_ONLY, PERSON_FIRE, FULL_EXPLORATION.
+Use FIRE_ONLY for a target-fire mission, PERSON_FIRE for a threatened-person
+and related-fire mission, and FULL_EXPLORATION only for site-wide exploration.
+Output exactly one compact single-line JSON object with mission_scope, action,
+target, reason.
 Keep reason at 12 words or fewer.
 action must be in allowed_actions.
 NAVIGATE_TO targets an existing fires id.
@@ -397,7 +412,8 @@ WorldModel에 없는 entity를 만들지 마라.
 좌표와 action_id를 생성하지 마라. 좌표는 Application이 WorldModel에서 해결한다.
 EXTINGUISH는 대상 화점의 robot_within_spray_range가 true이고 state가 ACTIVE일 때만 선택한다.
 current_action이 존재하면 WAIT를 선택한다.
-필수 키: action, target, reason.
+mission_scope은 FIRE_ONLY, PERSON_FIRE, FULL_EXPLORATION 중 하나다.
+필수 키: mission_scope, action, target, reason.
 target이 필요 없는 WAIT와 RETURN_HOME은 target을 null로 출력할 수 있다.
 reason은 현재 상태에 근거한 한국어 한 문장으로 작성한다."""
 

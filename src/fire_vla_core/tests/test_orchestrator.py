@@ -2,7 +2,7 @@ import pytest
 
 from fire_vla_core.adapters.mock_adapters import MockNavigationAdapter, MockReportAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter
 from fire_vla_core.dispatcher import ActionDispatcher
-from fire_vla_core.domain import ActionDecision, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
+from fire_vla_core.domain import ActionDecision, MissionScope, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
 from fire_vla_core.llm import LLMInferenceError, LLMOutputError, MockVLABrain
 from fire_vla_core.orchestrator import VLAOrchestrator
 from fire_vla_core.resolver import TargetResolver
@@ -498,3 +498,19 @@ def test_duplicate_navigation_terminal_does_not_duplicate_suppression():
 
     assert len(spray.calls) == 1
     assert llm.calls == 1
+
+def test_first_scoped_qwen_decision_is_bound_with_one_call():
+    world, _, orchestrator = make_orchestrator()
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.NAVIGATE_TO,
+        "대상 화점으로 이동",
+        "fire_01",
+        MissionScope.FIRE_ONLY,
+    ))
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.submission is not None
+    assert orchestrator.llm.calls == 1
+    assert world.mission.scope == MissionScope.FIRE_ONLY
+    assert world.mission.target_fire_id == "fire_01"
