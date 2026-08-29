@@ -12,6 +12,7 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -258,8 +259,14 @@ def generate_launch_description():
         output="both",
         parameters=[
             {
-                "low_battery_threshold": 7000,
-                "low_battery_confirm_sec": 3.0,
+                "low_battery_threshold": ParameterValue(
+                    LaunchConfiguration("low_battery_threshold"),
+                    value_type=int,
+                ),
+                "low_battery_confirm_sec": ParameterValue(
+                    LaunchConfiguration("low_battery_confirm_sec"),
+                    value_type=float,
+                ),
             }
         ],
     )
@@ -332,6 +339,16 @@ def generate_launch_description():
                 "threads",
                 default_value="3",
                 description="Pi 5(4코어) 기준 권장값 — ROS·다른 프로세스와 코어 분배",
+            ),
+            DeclareLaunchArgument(
+                "low_battery_threshold",
+                default_value="7000",
+                description="배터리 부족 판정 raw 값 임계치",
+            ),
+            DeclareLaunchArgument(
+                "low_battery_confirm_sec",
+                default_value="3.0",
+                description="배터리 부족 상태가 지속되어야 하는 시간(초)",
             ),
             hardware,
             camera,
