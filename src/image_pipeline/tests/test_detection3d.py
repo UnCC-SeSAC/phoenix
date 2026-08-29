@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +27,7 @@ from image_pipeline.depth import (  # noqa: E402
     ground_plane_depth,
     optical_to_base_link_matrix,
     project_box,
+    sample_distance_detail,
     synthetic_depth,
     to_base_link,
 )
@@ -192,6 +194,50 @@ class TestFallbackPolicy:
                             sc.k_color, sc.k_depth, _tf(), p)
         # 바닥은 아래로 갈수록 가까워지므로 중앙값은 **가깝게** 잡힙니다
         assert res.detections[0].distance_m < self.TRUE - 0.1
+
+
+class TestFireFloorBandSampling:
+    """Fire floor band 계약을 작은 synthetic depth 배열로 고정한다."""
+
+    BOX = (20.0, 10.0, 40.0, 20.0)
+    FIRE_KWARGS = dict(
+        region="below", method="p25", band_offset=3.5, band_ratio=3.0,
+    )
+
+    @staticmethod
+    def _scene(floor_depth=0.50):
+        depth = np.full((80, 80), 1.45, dtype=np.float32)
+        depth[10:20, 20:40] = 0.0
+        depth[55:80, 20:40] = floor_depth
+        return depth
+
+    def test_fire_uses_floor_band_instead_of_background(self):
+        sample = sample_distance_detail(
+            self._scene(), self.BOX, **self.FIRE_KWARGS,
+        )
+        assert sample.distance == pytest.approx(0.50, abs=1e-3)
+
+    def test_invalid_floor_band_stays_unknown(self):
+        sample = sample_distance_detail(
+            self._scene(floor_depth=0.0), self.BOX, **self.FIRE_KWARGS,
+        )
+        assert sample.distance is None
+        assert sample.reason == "no_valid_pixels"
+
+    def test_person_bottom_median_is_unchanged(self):
+        depth = np.full((80, 80), 1.45, dtype=np.float32)
+        depth[10:20, 20:40] = 0.64
+        sample = sample_distance_detail(
+            depth, self.BOX, region="bottom", method="median",
+        )
+        assert sample.distance == pytest.approx(0.64, abs=1e-3)
+
+    def test_floor_band_clips_at_image_boundary(self):
+        sample = sample_distance_detail(
+            self._scene(), (60.0, 72.0, 90.0, 79.0), **self.FIRE_KWARGS,
+        )
+        assert sample.distance is None
+        assert sample.reason == "box_outside_image"
 
 
 class TestStampMonitor:
