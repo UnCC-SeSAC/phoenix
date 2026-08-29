@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ros_robot_controller = ros_robot_controller.ros_robot_controller_node:main',
+            'ros_phoenix_controller = ros_robot_controller.ros_phoenix_controller_node:main',
         ],
     },
 )

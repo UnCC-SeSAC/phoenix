@@ -9,7 +9,8 @@ def generate_launch_description():
 
     ros_robot_controller_node = Node(
         package='ros_robot_controller',
-        executable='ros_robot_controller',
+        executable='ros_phoenix_controller',
+        name='ros_robot_controller',
         output='screen',
         parameters=[{'imu_frame': imu_frame}]
     )
