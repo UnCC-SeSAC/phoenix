@@ -48,8 +48,12 @@ void FrontierExplorerCore::try_send_next_goal()
 
   commit_deferred_costmap_search_input_updates();
 
-  if (awaiting_map_refresh && !post_goal_settle_ready()) {
-    // Settle window is still active after previous goal completion.
+  if (
+    awaiting_map_refresh &&
+    (map_generation <= post_goal_map_generation || decision_map_dirty))
+  {
+    // A post-goal dispatch requires a newer raw map that has completed the
+    // existing decision-map processing pipeline.
     return;
   }
 
@@ -214,6 +218,7 @@ void FrontierExplorerCore::reset_exploration_runtime_state(bool clear_maps)
     costmap.reset();
     local_costmap.reset();
     map_generation = 0;
+    post_goal_map_generation = 0;
     decision_map_generation = 0;
     costmap_generation = 0;
     local_costmap_generation = 0;
@@ -1034,6 +1039,12 @@ void FrontierExplorerCore::goal_response_callback(
       record_failed_frontier_attempt(context->frontier);
     }
     clear_active_goal_state();
+    if (context.has_value() && context->goal_kind == "frontier") {
+      post_goal_map_generation = map_generation;
+      awaiting_map_refresh = true;
+      post_goal_settle_active = false;
+      post_goal_settle_started_at_ns.reset();
+    }
     callbacks.log_error(error_message.empty() ? "Frontier goal was rejected" : error_message);
     return;
   }
@@ -1156,13 +1167,10 @@ void FrontierExplorerCore::get_result_callback(
     return;
   }
 
-  if (params.post_goal_settle_enabled) {
-    start_post_goal_settle();
-    return;
-  }
-
-  clear_post_goal_wait_state();
-  try_send_next_goal();
+  post_goal_map_generation = map_generation;
+  awaiting_map_refresh = true;
+  post_goal_settle_active = false;
+  post_goal_settle_started_at_ns.reset();
 }
 
 void FrontierExplorerCore::feedback_callback(double distance_remaining, int dispatch_id)

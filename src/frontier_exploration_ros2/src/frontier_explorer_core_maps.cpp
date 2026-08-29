@@ -168,6 +168,7 @@ void FrontierExplorerCore::processPendingMapUpdate()
     return;
   }
 
+  refresh_decision_map();
   try_send_next_goal();
 }
 

@@ -161,7 +161,7 @@ local_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
-      always_send_full_costmap: True
+      always_send_full_costmap: False
   local_costmap_rclcpp_node:
     ros__parameters:
       use_sim_time: False
@@ -204,7 +204,7 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5
         inflation_radius: 0.20
-      always_send_full_costmap: True
+      always_send_full_costmap: False
   global_costmap_client:
     ros__parameters:
       use_sim_time: False
@@ -293,11 +293,13 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.20, 0.0, 1.0] # Velocity Smoother의 최대 속도 [X, Y, 회전] (m/s, m/s, rad/s)
-    min_velocity: [-0.20, 0.0, -1.0] # Velocity Smoother의 최소 속도 [X, Y, 회전] (m/s, m/s, rad/s)
-    max_accel: [0.8, 0.0, 3.2] # Velocity Smoother의 최대 가속도 [X, Y, 회전] (m/s², m/s², rad/s²)
-    max_decel: [-0.8, 0.0, -3.2] # Velocity Smoother의 최대 감속도 [X, Y, 회전] (m/s², m/s², rad/s²)
+    max_velocity: [0.20, 0.0, 0.5] # Velocity Smoother의 최대 속도 [X, Y, 회전] (m/s, m/s, rad/s)
+    min_velocity: [0.0, -0.0, -0.5] # Velocity Smoother의 최소 속도 [X, Y, 회전] (m/s, m/s, rad/s)
+    max_accel: [0.8, 0.0, 1.5] # Velocity Smoother의 최대 가속도 [X, Y, 회전] (m/s², m/s², rad/s²)
+    max_decel: [-1.0, 0.0, -1.5] # Velocity Smoother의 최대 감속도 [X, Y, 회전] (m/s², m/s², rad/s²)
     odom_topic: odom
     odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
+    # Stop command residues (e.g. -2.22e-16 rad/s) before publishing /cmd_vel.
+    # The controller driver applies the same final safety deadband.
+    deadband_velocity: [0.001, 0.001, 0.001]
     velocity_timeout: 1.0

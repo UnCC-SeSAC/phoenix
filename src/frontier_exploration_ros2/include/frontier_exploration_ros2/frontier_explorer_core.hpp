@@ -423,6 +423,7 @@ public:
 
   // Post-goal settle and map-refresh gating state.
   bool awaiting_map_refresh{false};
+  int post_goal_map_generation{0};
   bool post_goal_settle_active{false};
   std::optional<int64_t> post_goal_settle_started_at_ns;
   bool decision_map_dirty{false};
