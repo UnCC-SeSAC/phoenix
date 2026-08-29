@@ -612,6 +612,83 @@ Publisher endpoint는 존재하지만 실제 frame callback 진행을 확인할 
 현재 상태는 `UNKNOWN`이다. 정확한 실패 경계도 vendor frame acquisition과 ROS
 publish 사이에서 미확정이다.
 
+### ASCamera RGB가 최초 발행 후 중단
+
+#### 증상과 실패 경계
+
+- `PASS`: Pi OS와 IntelPi에서 `3482:6723` 인식, USB `480 Mbps`, Depth와
+  CameraInfo 발행.
+- `FAIL`: RGB `640x480 bgr8` 첫 메시지 확인 뒤 raw RGB가 다시 0건이 됐다.
+- Camera log 순서는 `start streaming` → 약 1초 뒤 `stop streaming` →
+  `start streaming`이며, 이후 반복 frame callback 또는 RGB publish 증거가 없다.
+- 실패 경계는 ASCamera vendor RGB stream/callback과 ROS RGB publish 사이다. 전체 USB
+  미인식 incident와 구분하며, raw RGB 0건은 Preprocess, YOLO, HEF 실패가 아니다.
+- `getMjpegSize` 오류는 성공 runtime에도 존재한 fallback 로그이므로 단독 원인이 아니다.
+
+#### 검증된 일시 복구
+
+관련 runtime을 안전 종료한 뒤 Camera USB를 1회 재연결하고 Pi OS → IntelPi 순서로
+`3482:6723`과 `480 Mbps`를 확인했다. root Camera-first launch 1회와 8초 대기 후 raw
+RGB `640x480 bgr8` 발행이 일시 복구됐다. Downstream은 raw RGB의 지속성을 확인한
+뒤 시작한다.
+
+정확한 vendor/전원 원인은 `UNKNOWN`이다. 같은 session에서 RGB가 다시 중단됐으므로
+반복 restart를 검증된 해결책으로 기록하지 않는다. Partial restart가 실패한 뒤 cold
+power-cycle은 다음 후보일 뿐 `NOT_VERIFIED`다.
+
+### Raw RGB → Preprocess → YOLO → Detection3D 판정 순서
+
+- raw RGB가 0건이면 `/image_enhanced`와 `/yolo_result` 0건을 Preprocess나 YOLO
+  실패로 판정하지 않는다.
+- 같은 관찰 창에서 raw RGB → `/image_enhanced` → `/yolo_result` 순서로 첫 단절
+  경계를 확인한다.
+- `/fire/detections`는 Detection3D 이후 출력이다. 이 topic 0건만으로 raw
+  `/yolo_result`의 fire detection이 0건이라고 단정하지 않는다.
+- 기존 workspace 모델과 `/shared/Hailo/models`의 HEF, companion ONNX, mapping JSON은
+  SHA-256이 각각 동일했다. 경로만 변경됐고 모델 내용과 인식 성능은 동일하다.
+  Preprocess는 모델 로드 이전 단계이므로 `/image_enhanced` 0건의 원인이 될 수 없다.
+
+### Fire `fallback_below` Depth 과대 측정
+
+#### 증상과 판정
+
+- 실제 바닥거리 약 `0.4~0.6 m`에 대해 fire depth 약 `1.45~1.528 m`,
+  `depth_status=fallback_below`가 관찰됐다. 정상 오차 범위가 아니다.
+- 투명한 불꽃 대신 bbox 아래의 배경 바닥이나 벽을 읽었을 가능성이 크다. 이는 직접
+  측정값에 근거한 추론이며 sampling pixel/ROI 대조 전까지 원인은 `UNKNOWN`이다.
+- 과대 Depth는 map target과 Nav2 도착 위치를 실제 화재에서 멀어지게 할 수 있다.
+
+#### 다음 최소 검증 (`NOT_VERIFIED`)
+
+같은 source timestamp의 raw `/yolo_result` bbox와 Detection3D sampling ROI를 비교한다.
+같은 위치의 불투명 person/표적 Depth도 비교한다. Person도 틀리면 RGB-Depth 정렬,
+timestamp 동기화 또는 Depth 원본을 확인하고, person은 맞고 fire만 틀리면 fire
+sampling을 확인한다. YOLO 팀의 floor sampling 변경은 branch 전체 merge가 아니라 관련
+commit만 증거 기반으로 비교·선별한다.
+
+### Suppression GPIO 처리와 실물 actuator 불일치
+
+#### 확인된 결과
+
+Qwen `FIRE_ONLY` → `NAVIGATE_TO`, Nav2 `SUCCEEDED`, deterministic `EXTINGUISH`까지
+진행했으나 suppression은 `ABORTED`였고 실제 Servo와 Pump는 움직이지 않았다. VLA와
+Validator가 차단한 것은 아니다. Software는 GPIO 값을 쓴 경로를 완료했지만 실물
+actuator feedback은 없었다. `진압 실패 (최대 시도 횟수 도달)`은 원인이 아니라
+화재 제거를 확인하지 못한 최종 결과다. 정확한 GPIO/전원 원인은 `UNKNOWN`이다.
+
+#### 다음 최소 확인 (`NOT_VERIFIED`)
+
+불 OFF에서 실제 BCM pin과 physical pin, Servo/Pump 전원과 공통 GND, relay/MOSFET의
+active-high/active-low, GPIO 접근·점유를 확인한다. Hardware 승인을 받은 경우에만 Servo
+단독 후 Pump 단독 순서로 시험한다.
+
+### Nav2 성공과 소화 정렬을 구분
+
+Nav2 `SUCCEEDED`는 goal tolerance 도달을 뜻하며 노즐이 화재를 향한다는 보장은 없다.
+Fire Depth/map 좌표가 틀리면 goal도 틀어진다. Depth와 map 좌표를 먼저 검증한 뒤
+stand-off position과 goal yaw를 검증한다. 좌표 검증 전에는 Nav2 성공만으로 소화
+정렬을 `PASS` 처리하지 않는다.
+
 ### 불 OFF 준비
 
 1. 물리 연결과 배터리를 확인한다. 책상 위나 충전선 연결 상태에서는 motion 금지다.

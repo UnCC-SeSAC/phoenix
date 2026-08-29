@@ -44,27 +44,32 @@ root-owned build/install/log artifacts: 0
 
 ## Production model artifacts
 
-두 파일은 Git-untracked production artifact이며 `ubuntu:ubuntu` 소유다. 기존 검증
+세 파일은 Git-untracked production artifact이며 `ubuntu:ubuntu` 소유다. 기존 검증
 artifact와 byte-identical PASS했다. Git에 추가하지 않는다.
 
 ```text
 HEF:
-/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef
+/shared/Hailo/models/baseline_yolo26_neural_norm.hef
 size: 11288576 bytes
 SHA-256: 67496fe3eefb710bef56ce9fd30af0102520c234f697f715ed0935a881e75aad
 
 Postprocess:
-/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx
+/shared/Hailo/models/best_sim_postprocess.onnx
 size: 106676 bytes
 SHA-256: b05022e4741258840e48143e7dc0f88cc676d11a842e6950623c59cf189f60b4
+
+Output mapping:
+/shared/Hailo/models/config_onnx_best_sim.json
+size: 1073 bytes
+SHA-256: 33afa6da43c84ceaa9cae992c8372acf8008bc19e56b9b86b8425997172d2278
 ```
 
 ## Authoritative production and suppression contract
 
 ```text
 Container: IntelPi
-Suppression run user: root
-Suppression working directory: /
+Production run user: root
+Production working directory: /
 MACHINE_TYPE=MentorPi_Mecanum
 need_compile=True
 DEPTH_CAMERA_TYPE=ascamera
@@ -388,7 +393,7 @@ cd /
 Active production process 0개를 확인한 뒤 Camera를 정확히 1회 시작하고 8초 기다린다.
 그다음 아래 순서로 각각 정확히 1회 시작한다.
 각 launch/run은 위 environment를 source한 별도
-`docker exec IntelPi bash -lc` process에서 `nohup setsid ... </dev/null &`로 실행하고
+`docker exec -u root -w / IntelPi bash -lc` process에서 `nohup setsid ... </dev/null &`로 실행하고
 각각 별도 `/tmp/e2e_*.log`에 기록한다. 한 shell에서 foreground로 순차 실행하지 않는다.
 
 ```bash
@@ -396,9 +401,9 @@ ros2 launch peripherals depth_camera.launch.py
 sleep 8
 ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false
 ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough
-ros2 launch image_pipeline yolo.launch.py model_path:=/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef postprocess_path:=/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx backend:=hailo layout:=end2end class_names:="[fire,person]"
+ros2 launch image_pipeline yolo.launch.py model_path:=/shared/Hailo/models/baseline_yolo26_neural_norm.hef postprocess_path:=/shared/Hailo/models/best_sim_postprocess.onnx backend:=hailo layout:=end2end class_names:="[fire,person]"
 ros2 launch image_pipeline detection_3d.launch.py
-ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<PC_IP>:8088/infer
+ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<PC_IP>:8088/infer remote_qwen_timeout_sec:=10.0
 ros2 launch uncc_example vla_navigation_bridge.launch.py
 ros2 launch uncc_example fire_extinguisher.launch.py
 ```
@@ -511,9 +516,7 @@ scripts/vla_hardware_e2e.sh mission
 scripts/vla_hardware_e2e.sh stop
 ```
 
-`start`는 기존 process가 있으면 중복 시작하지 않는다. 새 runtime은 Camera 선기동,
-8초 대기, 나머지 canonical stack 순서를 유지하며 component 로그를
-`/tmp/e2e_<component>.log`에 저장한다. `mission`은 새 ID로 정확히 한 번 발행한다.
+`start`는 boot ID, zombie를 제외한 active runtime, Camera·LD19, `/shared`의 HEF·ONNX·JSON을 먼저 확인한다. 완전한 동일-boot runtime은 재사용하고 부분·중복 runtime만 1회 clean stop한다. 새 runtime은 모든 component를 root + `/`에서 Camera 선기동, 8초 대기, 나머지 canonical stack 순서로 시작하며 로그를 `/tmp/e2e_<component>.log`에 저장한다. `status`는 호환 QoS의 단일 통합 확인으로 RGB, Depth, CameraInfo, `/image_enhanced`, `/yolo_result`, Detection3D, map→base_footprint, Nav2·Suppression server와 Qwen health를 `PASS`/`FAIL`/`UNKNOWN`으로 출력한다. `/fire/detections` 0건을 raw YOLO 실패로 사용하지 않는다. `mission`은 새 ID로 정확히 한 번 발행한다.
 SSH 실패 뒤 `start`를 재전송하지 말고 `status`로 실제 process 상태를 먼저 확인한다.
 명령·경로 확인에는 `VLA_E2E_DRY_RUN=1`을 사용한다.
 

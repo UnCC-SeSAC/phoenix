@@ -43,7 +43,7 @@ Device.pin_factory = LGPIOFactory()
 
 # 하드웨어 설정
 PUMP_PIN = 13
-SERVO_PIN = 18
+SERVO_PIN = 14
 PWM_FREQUENCY = 1000
 
 SPRAY_SECONDS = 3.0
