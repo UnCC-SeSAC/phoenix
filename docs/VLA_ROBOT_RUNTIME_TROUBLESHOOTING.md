@@ -742,3 +742,17 @@ Mission ID를 한 번만 사용한다. Camera, YOLO, Detection3D, Nav2, Suppress
 active production process와 Mission/Nav2/Suppression 상태를 한 번 확인해 살아 있는
 runtime은 재사용한다. Process가 없을 때만 canonical clean start를 한 번 수행한다.
 접속되지 않으면 remote stop 상태는 `UNKNOWN`으로 남긴다.
+
+## 팀 branch 변경 선별 통합
+
+2026-08-29 remote branch read-only audit에서는 즉시 merge할 변경을 확정하지 않았다.
+
+- `albitro/image_opt@bfafdad`, `6ccf370`: Hailo 입력 변환과 thread 최적화 후보지만
+  production Pi의 동일 출력과 latency/CPU 측정 전까지 보류한다.
+- Nav2/SLAM parameter 변경: 실제 관련 오류가 재현되고 HW 증거가 있을 때만 검토한다.
+- `fire_service_v2@fc060a5`: Frontier 기반 fire-status/suppression owner를 별도로
+  도입하므로 현재 VLA suppression owner와 함께 사용하지 않는다.
+
+Branch 전체 merge나 commit message만으로 복구를 시도하지 않는다. 현재 schema,
+Mission scope, 정상 Qwen 1회, Validator와 suppression verification 계약을 기준으로
+실제 증거가 있는 최소 commit만 선별한다.

@@ -1,6 +1,7 @@
 # Issue #89 Next Session Handoff
 
 Date: 2026-08-22 KST
+Latest software update: 2026-08-29 KST
 
 이 문서는 새 Codex session이 workspace 복원이나 기존 PASS 항목 재진단 없이 Final
 Full E2E를 바로 이어가기 위한 authoritative handoff다. 먼저
@@ -10,7 +11,9 @@ Full E2E를 바로 이어가기 위한 authoritative handoff다. 먼저
 ## Git and isolated deployment checkpoint
 
 - branch: `integration/vla-robot-e2e`
-- runtime/model checkpoint before this handoff commit:
+- current software checkpoint before this documentation update:
+  `0a3af10882d29bfcc51aac34905fe1d84703b6ee`
+- historical runtime/model checkpoint (2026-08-22):
   `fc44b2b4cdabce3db4f4675616f479b6b1e068d8`
 - session 시작 시 local HEAD와 `origin/integration/vla-robot-e2e`가 일치하는지만
   확인한다. SHA가 docs-only 후속 commit이면 rebuild하지 않는다.
@@ -513,3 +516,33 @@ scripts/vla_hardware_e2e.sh stop
 `/tmp/e2e_<component>.log`에 저장한다. `mission`은 새 ID로 정확히 한 번 발행한다.
 SSH 실패 뒤 `start`를 재전송하지 말고 `status`로 실제 process 상태를 먼저 확인한다.
 명령·경로 확인에는 `VLA_E2E_DRY_RUN=1`을 사용한다.
+
+## 2026-08-29 next Hardware execution
+
+Software checkpoint는 `0a3af10882d29bfcc51aac34905fe1d84703b6ee`이며 focused
+`120 PASS`, full `273 PASS`, 신규 실패 0이다. UI 포함 SW-only E2E에서 Mission
+boundary, person 자동 보고와 위험 표시, Qwen 1회, Mock Nav2 성공, deterministic
+EXTINGUISH, suppression verification, Mission/UI `COMPLETED`, 중복 action 0을 확인했다.
+
+다음 실제 작업은 #89 fire-only actual Hardware E2E다. 과거 Hardware checkpoint와
+명령 원문은 historical evidence로 보존하되 새 실행은 wrapper를 사용한다.
+
+```text
+배터리/바닥/불 OFF 확인
+→ 현재 PC Qwen endpoint 설정
+→ scripts/vla_hardware_e2e.sh start
+→ scripts/vla_hardware_e2e.sh status
+→ READY_FOR_FIRE
+→ fresh ACTIVE fire
+→ scripts/vla_hardware_e2e.sh mission
+→ actual Qwen → Nav2 → Robot stop → Servo/Pump
+→ 실제 화염 제거 → terminal SUCCESS
+→ scripts/vla_hardware_e2e.sh stop
+```
+
+Mission scope는 첫 Qwen 구조화 응답에서 action과 함께 `FIRE_ONLY`, `PERSON_FIRE`,
+`FULL_EXPLORATION` 중 하나로 고정된다. Fire-only 완료에는 관계없는 person/fire와
+exploration 상태를 요구하지 않는다. Suppression 후에는 기존 `PENDING_VERIFICATION`,
+0.5초 delay, 유효한 fire 미검출 3회, 5초 timeout 시 ACTIVE 복귀 계약을 그대로
+적용한다. 실제 Camera/Qwen/Nav2/Servo/Pump, 화염 제거, terminal SUCCESS는 여전히
+`HARDWARE_PENDING`이다.

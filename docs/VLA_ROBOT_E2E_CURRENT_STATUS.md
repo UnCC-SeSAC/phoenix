@@ -3,8 +3,10 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Source checkpoint before this documentation update:
-  `eaa26d4156f70e3b48d7759bab1c838ca27c89ac`
+- Current software checkpoint before this documentation update:
+  `0a3af10882d29bfcc51aac34905fe1d84703b6ee`
+- Software regression: focused `120 PASS`, full `273 PASS`, new failures `0`
+- Firefighter UI 포함 SW-only E2E: `PASS`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
@@ -67,7 +69,8 @@ VLA production source/build/install은 팀 workspace와 분리한다.
 - Nav2: `uncc_example/launch/nav2_online.launch.py` (included by the entrypoint)
 - VLA: `ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<CURRENT_PC_IP>:8088/infer` plus `ros2 launch uncc_example vla_navigation_bridge.launch.py`. The last successful stationary suppression test used `192.168.100.124:8088`; confirm the current PC address instead of treating it as a fixed endpoint.
 - suppression bridge/action server: `ros2 launch uncc_example fire_extinguisher.launch.py`; starting it does not actuate Hardware, but an actual suppress goal still requires explicit operator approval
-- production thresholds: fire confidence `>= 0.60`, spray range `<= 0.80 m`
+- production thresholds: fire confidence `>= 0.40`, spray range `<= 0.80 m`
+  (`0.60`은 2026-08-27 이전 Hardware 기록의 historical 값)
 
 ### Suppression Hardware runtime contract
 
@@ -1017,3 +1020,67 @@ SSH는 정상 접속 뒤 reset, timeout, `No route to host`가 간헐적으로 �
 약 `85–125 ms`, packet loss `33%`였으나 이 정보만으로 production failure를
 확정하지 않는다. 세션 종료 시 SSH가 복구되지 않아 runtime clean stop, Robot stop,
 Pump OFF의 원격 확인 상태도 `UNKNOWN`이다.
+
+## Latest VLA software checkpoint (2026-08-29)
+
+`integration/vla-robot-e2e@0a3af10882d29bfcc51aac34905fe1d84703b6ee`에서
+#104~#108, #109, #111 범위가 완료됐다.
+
+- Mission 시작 시 이전 person/fire observation과 association을 초기화한다. Robot
+  pose, map, home pose는 유지한다.
+- Mission 중 새 person은 기존 report topic/schema로 자동 보고되고 Mission당 한 번만
+  `reported=true`가 된다. UI ACK 지연은 VLA 판단을 차단하지 않는다.
+- `person_fire_risk_distance_m=0.10`은 demo-scale 관계값이다. 범위 안 ACTIVE fire는
+  가장 가까운 person의 `threatens_person=true`와 `threatened_person_id`를 노출한다.
+- 유효한 분사거리 밖 ACTIVE fire에 대한 Qwen `EXTINGUISH`는 같은 target의
+  `NAVIGATE_TO`로 한 번 교정된다. #109 test expectation은 navigation 1건, spray
+  0건으로 현재 정책에 맞춰졌다.
+- Qwen이 선택한 fire의 Nav2가 성공하고 fire/pose가 유효·fresh하며 `0.8 m` 이내이고
+  의미 있는 WorldModel 변화가 없을 때 같은 fire의 `EXTINGUISH`를 deterministic하게
+  한 번 연결한다. 조건이 바뀌면 자동 분사하지 않고 Qwen이 재판단한다.
+- `scripts/vla_hardware_e2e.sh`가 canonical runtime의 `start`, `status`, `mission`,
+  `stop`을 제공한다. 여러 component terminal 대신 이 wrapper를 사용한다.
+
+Mission scope는 첫 유효 Qwen 구조화 응답에서 action/target과 함께 한 번 확정한다.
+정상 경로의 Qwen 호출은 1회이며 Mission 도중 scope 변경은 거절한다.
+
+- `FIRE_ONLY`: 선택한 fire가 `EXTINGUISHED` 또는 `INACCESSIBLE`, action 없음,
+  perception ready이면 완료한다. 관계없는 entity와 exploration은 blocker가 아니다.
+- `PERSON_FIRE`: 대상 person reported, 해당 person을 위협하는 대상 fire 처리 완료,
+  action 없음, perception ready이면 완료한다.
+- `FULL_EXPLORATION`: exploration completed, 모든 person reported, 모든 fire 처리 완료,
+  action 없음, perception ready인 기존 전역 계약을 유지한다.
+
+소화 성공은 즉시 `EXTINGUISHED`로 바꾸지 않는다. `PENDING_VERIFICATION`에서 delay
+`0.5 s` 이후 유효한 fire 미검출 3회를 요구하며, `5 s` timeout이면 `ACTIVE`로
+복귀한다. Invalid/future/stale frame은 소화 증거에서 제외한다. Validator, freshness,
+spray range, Robot stop, spray-count와 중복 action 차단도 유지된다.
+
+Firefighter UI 포함 SW-only E2E 결과:
+
+```text
+Mission input/boundary: PASS
+person auto report + UI reported display: PASS
+person-threat fire + threatened person ID UI display: PASS
+Qwen calls: 1
+Mock Nav2: SUCCESS (dispatch 1)
+deterministic EXTINGUISH: 1
+Mock suppression: SUCCESS
+fire verification: EXTINGUISHED
+Mission/UI terminal: COMPLETED
+duplicate Mission/Nav2/report/suppression: 0
+focused: 120 PASS
+full fire_vla_core regression: 273 PASS
+new failures: 0
+Hardware commands: 0
+```
+
+### Latest team-branch comparison (2026-08-29)
+
+현재 merge 대상은 없다. `albitro/image_opt@bfafdad`와 `6ccf370`의 Hailo 입력 및
+thread 최적화는 현재 integration에 없지만 production HW E2E 증거가 없어 Pi에서
+동일 출력과 latency/CPU를 측정하기 전까지 보류한다. Nav2/SLAM parameter 변경은
+실제 관련 오류가 재현될 때만 검토한다. `fire_service_v2@fc060a5`는 Frontier 기반
+별도 fire-status/suppression owner를 도입해 현재 VLA suppression lifecycle과 이중
+owner 위험이 있으므로 통합하지 않는다. 팀 branch 전체 merge는 금지하고 실제 증거가
+있는 commit만 계약 단위로 선별한다.
