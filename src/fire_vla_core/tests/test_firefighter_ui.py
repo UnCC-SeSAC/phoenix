@@ -256,8 +256,12 @@ def test_http_root_serves_required_v2_panels(http_server):
     for canonical_field in (
         "world.people", "world.fires", "world.current_action",
         "world.last_action", "decision.reason", "current.target_pose",
+        "item.reported", "item.threatens_person", "item.threatened_person_id",
     ):
         assert canonical_field in html
+    assert "보고 완료" in html
+    assert "미보고" in html
+    assert "사람 위협 화재" in html
 
 
 def test_submission_replay_fixture_is_explicit_and_renderable(http_server):
