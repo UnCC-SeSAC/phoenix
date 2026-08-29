@@ -155,6 +155,9 @@ class CanonicalPerceptionNormalizer:
                 continue
             last_seen = self._parse_timestamp(entity.last_seen)
             age = max(0.0, (observed_time - last_seen).total_seconds())
+            person_is_trackable = (
+                class_name == "person" and entity.reported
+            )
             fire_is_trackable = (
                 class_name == "fire"
                 and entity.state in {
@@ -162,7 +165,11 @@ class CanonicalPerceptionNormalizer:
                     FireState.PENDING_VERIFICATION,
                 }
             )
-            if age > self._ttl_sec and not fire_is_trackable:
+            if (
+                age > self._ttl_sec
+                and not person_is_trackable
+                and not fire_is_trackable
+            ):
                 continue
             distance = position.distance_to(entity.position)
             if distance <= self._radius_m:

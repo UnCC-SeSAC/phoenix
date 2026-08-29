@@ -6,6 +6,7 @@ from fire_vla_core.domain import (
     FireEntity,
     FireState,
     PersonEntity,
+    PersonState,
     Pose2D,
     utc_now,
 )
@@ -120,13 +121,20 @@ def test_mission_reset_restarts_fallback_entity_association_ids():
     normalizer = CanonicalPerceptionNormalizer(world)
     first = apply(normalizer, world, payload(detection()))
     assert first.observations[0].entity_id == "person_0001"
+    first_entity = world.people["person_0001"]
+    first_entity.reported = True
+    first_entity.state = PersonState.REPORTED
 
     world.set_mission("mission_02", "새 임무")
     normalizer.reset_associations()
-    second = normalizer.normalize(payload(detection(x=3.0, y=2.0)))
+    second = normalizer.normalize(payload(detection()))
 
     assert world.people == {}
     assert second.observations[0].entity_id == "person_0001"
+    world.update_observation_batch(second)
+    assert world.people["person_0001"] is not first_entity
+    assert world.people["person_0001"].reported is False
+
 
 
 def test_candidate_older_than_ttl_is_not_reused():
@@ -138,6 +146,40 @@ def test_candidate_older_than_ttl_is_not_reused():
     normalizer = CanonicalPerceptionNormalizer(world)
 
     batch = normalizer.normalize(payload(detection(x=2.0, y=1.0)))
+
+    assert batch.observations[0].entity_id == "person_0002"
+
+
+def test_reported_person_keeps_id_after_association_ttl():
+    world = WorldModel()
+    old = (utc_now() - timedelta(seconds=3)).isoformat()
+    world.people["person_0001"] = PersonEntity(
+        "person_0001",
+        Pose2D(2.0, 1.0),
+        reported=True,
+        state=PersonState.REPORTED,
+        last_seen=old,
+    )
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = normalizer.normalize(payload(detection(x=2.004, y=1.0)))
+
+    assert batch.observations[0].entity_id == "person_0001"
+
+
+def test_reported_person_outside_radius_gets_new_id_after_ttl():
+    world = WorldModel()
+    old = (utc_now() - timedelta(seconds=3)).isoformat()
+    world.people["person_0001"] = PersonEntity(
+        "person_0001",
+        Pose2D(2.0, 1.0),
+        reported=True,
+        state=PersonState.REPORTED,
+        last_seen=old,
+    )
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = normalizer.normalize(payload(detection(x=2.6, y=1.0)))
 
     assert batch.observations[0].entity_id == "person_0002"
 

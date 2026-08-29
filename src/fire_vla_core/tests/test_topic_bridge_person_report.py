@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -18,6 +18,7 @@ from fire_vla_core.domain import (
     PersonEntity,
     PersonState,
     Pose2D,
+    utc_now,
     utc_now_iso,
 )
 from fire_vla_core.orchestrator import VLAOrchestrator
@@ -173,6 +174,45 @@ def test_same_person_is_auto_reported_once_per_mission():
     assert report.publish_new_people() == 1
     assert report.publish_new_people() == 0
     assert len(node.publishers["/vla/person_report"].messages) == 2
+
+
+def test_idless_reported_person_after_ttl_is_not_reported_again():
+    world = WorldModel()
+    world.set_mission("mission_01", "사람 위치를 보고해")
+    node = FakeNode()
+    report = TopicBridgePersonReportAdapter(node, world)
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    first = {
+        "timestamp": utc_now().isoformat(),
+        "frame_id": "map",
+        "detections": [{
+            "class_name": "person",
+            "confidence": 0.91,
+            "map_position": {"x": 2.0, "y": 1.0},
+        }],
+    }
+    world.update_observation_batch(normalizer.normalize(first))
+    assert report.publish_new_people() == 1
+    assert world.people["person_0001"].reported is True
+    world.people["person_0001"].last_seen = (
+        utc_now() - timedelta(seconds=3)
+    ).isoformat()
+
+    second = {
+        "timestamp": utc_now().isoformat(),
+        "frame_id": "map",
+        "detections": [{
+            "class_name": "person",
+            "confidence": 0.91,
+            "map_position": {"x": 2.004, "y": 1.0},
+        }],
+    }
+    world.update_observation_batch(normalizer.normalize(second))
+
+    assert list(world.people) == ["person_0001"]
+    assert report.publish_new_people() == 0
+    assert len(node.publishers["/vla/person_report"].messages) == 1
 
 
 def test_success_result_marks_person_reported_only_after_terminal_result():
