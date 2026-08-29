@@ -100,7 +100,9 @@ controller_server:
       RotateToGoal.lookahead_time: -1.0
 
       Oscillation.scale: 1.0
-      Oscillation.oscillation_rest_time: 3.0
+      Oscillation.oscillation_reset_dist: 0.10
+      Oscillation.oscillation_reset_angle: 0.25
+      Oscillation.oscillation_reset_time: -1.0
 
 
 bt_navigator:
@@ -192,7 +194,7 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5 # 장애물에서 멀어질수록 위험 비용이 얼마나 빠르게 감소할지 결정
+        cost_scaling_factor: 2.0 # 장애물에서 멀어질수록 위험 비용이 얼마나 빠르게 감소할지 결정
         inflation_radius: 0.20 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -212,7 +214,7 @@ local_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
-      always_send_full_costmap: False
+      always_send_full_costmap: True
   local_costmap_rclcpp_node:
     ros__parameters:
       use_sim_time: False
@@ -255,7 +257,7 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5
         inflation_radius: 0.20
-      always_send_full_costmap: False
+      always_send_full_costmap: True
   global_costmap_client:
     ros__parameters:
       use_sim_time: False
