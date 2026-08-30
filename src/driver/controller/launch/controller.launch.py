@@ -57,6 +57,11 @@ def launch_setup(context):
         ])
     )
 
+    rf2o_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(controller_package_path, 'launch/rf2o_laser_odometry.launch.py')
+        ])
+    )
+
     if use_namespace == 'false':
         ekf_param = ReplaceString(source_file=os.path.join(controller_package_path, 'config/ekf.yaml'), replacements={'namespace/': ''})
     else:
@@ -90,6 +95,7 @@ def launch_setup(context):
         frame_prefix_arg,
         imu_filter_launch,
         odom_publisher_launch,
+        rf2o_launch,
         ekf_filter_node,
     ]
 
