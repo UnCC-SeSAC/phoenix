@@ -896,6 +896,12 @@ bool FrontierExplorerCore::send_frontier_goal(
     callbacks.log_info(
       "Skipping blocked frontier goal before dispatch: " + *cost_status +
       "; " + describe_frontier(candidate_frontier));
+    // Blocked-before-dispatch never reaches goal_in_progress, so the no-progress
+    // watchdog never sees it. Feed it into the same failure-memory suppression
+    // used for in-progress failures, or a permanently blocked candidate (e.g. a
+    // frontier point inside the robot's own inscribed-radius clearance) can be
+    // re-selected and re-skipped forever.
+    record_failed_frontier_attempt(std::optional<FrontierLike>{candidate_frontier});
   }
 
   if (dispatch_index >= frontier_sequence.size()) {
