@@ -4,28 +4,18 @@
   recovery actions specific to planning / control as well as general system issues.
   This will be continuous if a kinematically valid planner is selected.
 
-  Modified from the nav2_bt_navigator stock default: BackUp moved to 2nd in the
-  RecoveryActions round-robin (right after clearing costmaps, before Spin/Wait) so a
-  robot boxed in on the sides but clear behind gets a chance to back off before
-  burning through the other recovery attempts. backup_speed raised 0.05 -> 0.1 m/s
-  to halve the time the maneuver itself takes (0.30m backup_dist unchanged).
-
-  Added a combined BackUpAndSpin step right after the plain BackUp: a single
-  straight-line backup or in-place spin can each fail to escape a spot that only
-  a short reposition-then-turn maneuver clears (DWB and DriveOnHeading only ever
-  evaluate single constant-curvature/straight segments, not multi-step paths).
-  Uses a much shorter 0.10m backup_dist than the standalone BackUp above, since
-  the goal here is just to shift pose slightly, not to retreat; a shorter
-  segment is more likely to pass BackUp's own collision check in tight spots.
+  RecoveryActions round-robin currently just alternates BackUpAndSpin / Spin.
+  ClearingActions and Wait are commented out for now (test setup, re-enable later
+  if needed). Standalone BackUp and the opposing Spin(-1.57) were dropped as
+  redundant with BackUpAndSpin's own spin.
 
   FollowPath's inner RecoveryNode dropped from number_of_retries="1" to "0":
   that retry only cleared the local costmap and re-ran the identical path once
   before giving up outward, which just duplicated the RecoveryActions round-robin's
-  first item (ClearingActions, local+global). It cost a full extra
-  movement_time_allowance cycle (~15s) before each round-robin slot could be
-  reached, roughly doubling the time to get to BackUp/Spin. Frontier_explorer's
-  external no-progress watchdog cannot see BT internals, so every second spent
-  here was a second closer to it preempting the goal before recovery ever ran.
+  first item. It cost a full extra movement_time_allowance cycle (~15s) before
+  each round-robin slot could be reached. Frontier_explorer's external
+  no-progress watchdog cannot see BT internals, so every second spent here was
+  a second closer to it preempting the goal before recovery ever ran.
 -->
 
 <root main_tree_to_execute="MainTree">
@@ -46,18 +36,18 @@
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
         <RoundRobin name="RecoveryActions">
+          <!--
           <Sequence name="ClearingActions">
             <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
           </Sequence>
-          <BackUp backup_dist="0.30" backup_speed="0.1"/>
+          -->
           <Sequence name="BackUpAndSpin">
-            <BackUp backup_dist="0.10" backup_speed="0.1"/>
+            <BackUp backup_dist="0.20" backup_speed="0.1"/>
             <Spin spin_dist="1.57"/>
           </Sequence>
           <Spin spin_dist="1.57"/>
-          <Spin spin_dist="-1.57"/>
-          <Wait wait_duration="5"/>
+          <!-- <Wait wait_duration="5"/> -->
         </RoundRobin>
       </ReactiveFallback>
     </RecoveryNode>
