@@ -33,8 +33,9 @@ controller_server:
       # Rotation Shim
       angular_dist_threshold: 0.785
       forward_sampling_distance: 0.25
-      angular_disengage_threshold: 0.17
-      rotate_to_heading_angular_vel: 0.40
+      angular_disengage_threshold: 0.08
+      rotate_to_heading_once: true
+      rotate_to_heading_angular_vel: 0.30
       max_angular_accel: 1.5
       simulate_ahead_time: 1.0
       rotate_to_goal_heading: false
@@ -89,7 +90,7 @@ controller_server:
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.1
 
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
 
       PathDist.scale: 20.0
