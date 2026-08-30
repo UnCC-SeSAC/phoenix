@@ -90,7 +90,7 @@ frontier_explorer:
 
     # Replan while navigating if target-pose visible reveal gain for active goal is exhausted.
     # Disable if you are having performance issues.
-    goal_preemption_enabled: true
+    goal_preemption_enabled: false
 
      # Minimum seconds between consecutive goal preemption attempts.
     # Also effects performance.
