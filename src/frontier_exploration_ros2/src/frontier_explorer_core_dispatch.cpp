@@ -188,6 +188,7 @@ void FrontierExplorerCore::reset_exploration_runtime_state(bool clear_maps)
   return_to_start_started = false;
   return_to_start_completed = false;
   suppressed_return_to_start_started = false;
+  return_to_start_consecutive_failures = 0;
   cancel_request_in_progress = false;
   pending_cancel_reason.reset();
   pending_frontier_sequence.clear();
@@ -1088,6 +1089,7 @@ void FrontierExplorerCore::get_result_callback(
     if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED && goal_kind == "return_to_start") {
       // Return path uses dedicated completion latch consumed by scheduler.
       return_to_start_completed = true;
+      return_to_start_consecutive_failures = 0;
       callbacks.log_info("Returned to start pose");
     } else if (
       status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED &&
@@ -1108,8 +1110,19 @@ void FrontierExplorerCore::get_result_callback(
       }
     } else {
       if (goal_kind == "return_to_start") {
-        // Failed/aborted return-to-start should permit a future retry.
+        // Failed/aborted return-to-start should permit a future retry, but only up to a
+        // limit: without frontier_suppression's failure-memory (there is no FrontierLike to
+        // key off of here), an unreachable start pose would otherwise be retried forever,
+        // recomputing the same deterministic path into the same failure every time.
         return_to_start_started = false;
+        return_to_start_consecutive_failures += 1;
+        if (return_to_start_consecutive_failures >= params.frontier_suppression_attempt_threshold) {
+          return_to_start_completed = true;
+          callbacks.log_warn(
+            "Giving up on return_to_start after " +
+            std::to_string(return_to_start_consecutive_failures) +
+            " consecutive failed attempts; staying put");
+        }
       } else if (goal_kind == "suppressed_return_to_start") {
         suppressed_return_to_start_started = false;
       }

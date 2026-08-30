@@ -433,6 +433,10 @@ public:
   bool return_to_start_started{false};
   bool return_to_start_completed{false};
   bool suppressed_return_to_start_started{false};
+  // Consecutive full-goal failures for return_to_start. Unlike frontier goals, this target
+  // has no FrontierLike to key off of, so it cannot go through frontier_suppression_'s
+  // failure-memory path and needs its own give-up counter.
+  int return_to_start_consecutive_failures{0};
 
   // Preemption/cancel pipeline and pending replacement goal state.
   bool cancel_request_in_progress{false};
