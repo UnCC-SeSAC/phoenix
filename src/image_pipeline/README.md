@@ -69,7 +69,7 @@ ros2 launch image_pipeline dummy_check.launch.py
 ros2 launch image_pipeline dummy_check.launch.py flame_hole:=true   # depth:null 이 정상
 ```
 
-ROS 없이 도는 테스트 422개:
+ROS 없이 도는 테스트 440개:
 
 ```bash
 python3 -m pytest tests/ -q

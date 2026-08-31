@@ -25,7 +25,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from image_pipeline.depth import (  # noqa: E402
     DEFAULT_CASCADE,
+    METHODS,
+    REGIONS,
     DistanceSample,
+    resolve_depth_scale,
     cascade_to_str,
     parse_cascade,
     sample_distance_cascade,
@@ -1179,3 +1182,217 @@ class TestParseCascade:
         """★ 콜백 안에서 터지면 '검출이 조용히 사라지는' 형태로 보입니다."""
         with pytest.raises(ValueError):
             parse_cascade(bad)
+
+
+# ==================================================== 크롭 먼저 변환 (2026-08-31)
+
+from image_pipeline import depth as _depth_mod  # noqa: E402
+
+
+def _sample_whole_frame(depth, box, *, region, method, central, ring_margin,
+                        band_ratio, band_offset, min_valid_ratio,
+                        encoding=None, depth_scale=None):
+    """**예전 방식**: 프레임 전체를 미터로 바꾼 뒤 크롭해서 집계.
+
+    2026-08-31 이전 `sample_distance_detail`의 구조입니다. 기하(어느 사각형을
+    고르는가)는 그때도 지금도 `_region_box`와 같은 코드라 여기서도 그걸 쓰고,
+    **다른 것은 변환 시점 하나뿐**입니다 — 그게 이 테스트가 재려는 것입니다.
+    """
+    depth_m = to_meters(depth, encoding=encoding, depth_scale=depth_scale)
+    height, width = depth_m.shape[:2]
+    clipped = clip_box(box, width, height)
+    if clipped is None:
+        return DistanceSample(None, 0, 0, 0.0, 0.0, region, "box_outside_image")
+    rects = _depth_mod._region_box(clipped, region, central, ring_margin,
+                                   band_ratio, band_offset, width, height)
+    if rects is None:
+        return DistanceSample(None, 0, 0, 0.0, 0.0, region, "box_outside_image")
+
+    ox1, oy1, ox2, oy2 = rects[0]
+    if len(rects) == 1:
+        vals = depth_m[oy1:oy2, ox1:ox2].reshape(-1)
+    else:
+        ix1, iy1, ix2, iy2 = rects[1]
+        mask = np.ones((oy2 - oy1, ox2 - ox1), dtype=bool)
+        mask[max(0, iy1 - oy1):max(0, iy2 - oy1),
+             max(0, ix1 - ox1):max(0, ix2 - ox1)] = False
+        vals = depth_m[oy1:oy2, ox1:ox2][mask]
+    if vals.size == 0:
+        return DistanceSample(None, 0, 0, 0.0, 0.0, region, "box_outside_image")
+
+    n_total = int(vals.size)
+    good = vals[np.isfinite(vals) & (vals >= DEFAULT_Z_MIN) & (vals <= DEFAULT_Z_MAX)]
+    n_valid = int(good.size)
+    ratio = n_valid / n_total if n_total else 0.0
+    if n_valid == 0:
+        return DistanceSample(None, 0, n_total, 0.0, 0.0, region, "no_valid_pixels")
+    if ratio < min_valid_ratio or n_valid < 1:
+        return DistanceSample(None, n_valid, n_total, ratio, 0.0, region,
+                              "low_valid_ratio")
+    q25, q75 = (float(v) for v in np.percentile(good, [25.0, 75.0]))
+    dist = {"median": lambda: float(np.median(good)),
+            "p25": lambda: q25, "p75": lambda: q75,
+            "max": lambda: float(np.max(good)),
+            "min": lambda: float(np.min(good))}[method]()
+    return DistanceSample(dist, n_valid, n_total, ratio, q75 - q25, region, "ok")
+
+
+def _messy_depth(rng, h, w):
+    """실패 픽셀 30% + 포화 2% + 범위 밖이 섞인 뎁스 프레임."""
+    d = (rng.random((h, w)) * 4500).astype(np.uint16)
+    d[rng.random((h, w)) < 0.30] = 0          # 측정 실패
+    d[rng.random((h, w)) < 0.02] = 65535      # 포화
+    return d
+
+
+class TestCropFirstEquivalence:
+    """변환을 **프레임 전체 -> 고른 사각형만**으로 옮긴 것이 출력을 안 바꾸는지.
+
+    ★ 왜 이 테스트가 필요한가: `to_meters`는 원소별 연산뿐이고 포화 판정도
+      데이터가 아니라 **dtype 기준**(`np.iinfo(arr.dtype).max`)이라, 잘라서
+      변환하든 변환해서 자르든 같아야 합니다. "같아야 한다"와 "같다"는 다르므로
+      전 조합을 돌려 잠급니다.
+
+    ★ preprocess의 `dehaze` 복원식 교체와는 성격이 다릅니다. 그쪽은 `cv2`의
+      반올림이 달라 **1레벨 차이가 실제로 났고** 허용오차를 둬야 했습니다.
+      여기는 허용오차가 없습니다 — 완전히 같아야 하고, 아니면 버그입니다.
+    """
+
+    def test_all_regions_methods_and_offsets_are_identical(self):
+        rng = np.random.default_rng(20260831)
+        n_case = 0
+        for _ in range(24):
+            h, w = 120, 160
+            depth = _messy_depth(rng, h, w)
+            # 화면 밖에 걸친 박스도 섞습니다 — clip 경로가 크롭 인덱스와
+            # 어긋나면 여기서 잡힙니다.
+            x1 = int(rng.integers(-40, w))
+            y1 = int(rng.integers(-40, h))
+            box = (float(x1), float(y1),
+                   float(x1 + int(rng.integers(4, 90))),
+                   float(y1 + int(rng.integers(4, 90))))
+            for region in REGIONS:
+                for method in METHODS:
+                    for band_offset, band_ratio in ((0.0, 0.15), (3.5, 3.0)):
+                        for min_ratio in (0.0, 0.2):
+                            kw = dict(region=region, method=method,
+                                      central=0.5, ring_margin=0.25,
+                                      band_ratio=band_ratio,
+                                      band_offset=band_offset,
+                                      min_valid_ratio=min_ratio,
+                                      encoding="16UC1")
+                            new = sample_distance_detail(depth, box, **kw)
+                            old = _sample_whole_frame(depth, box, **kw)
+                            n_case += 1
+                            assert new == old, (
+                                f"{region}/{method} offset={band_offset} "
+                                f"box={box}: {new} != {old}")
+        assert n_case >= 1000, "조합이 줄었다면 커버리지가 샌 것입니다"
+
+    def test_full_resolution_frame_matches(self):
+        """640x480 실해상도에서도 같은지 — 크롭 비율이 실기와 다릅니다."""
+        rng = np.random.default_rng(7)
+        depth = _messy_depth(rng, 480, 640)
+        for region in REGIONS:
+            kw = dict(region=region, method="median", central=0.5,
+                      ring_margin=0.25, band_ratio=3.0, band_offset=3.5,
+                      min_valid_ratio=0.0, encoding="16UC1")
+            assert sample_distance_detail(depth, (100., 100., 160., 180.), **kw) \
+                == _sample_whole_frame(depth, (100., 100., 160., 180.), **kw)
+
+    def test_saturation_outside_the_crop_does_not_leak_in(self):
+        """★ 포화 판정이 **dtype 기준**이라 크롭해도 안 바뀐다는 것의 증거.
+
+        데이터의 최댓값 기준이었다면, 크롭 밖에만 65535가 있을 때 크롭 안의
+        판정이 달라졌을 겁니다. 그러면 잘라서 변환하는 순간 값이 틀어집니다.
+        """
+        depth = np.full((100, 100), 2000, dtype=np.uint16)
+        depth[0, 0] = 65535                      # 크롭 밖에만 포화
+        kw = dict(region="center", method="median", central=0.5,
+                  ring_margin=0.25, band_ratio=0.15, band_offset=0.0,
+                  min_valid_ratio=0.2, encoding="16UC1")
+        box = (60., 60., 90., 90.)
+        got = sample_distance_detail(depth, box, **kw)
+        assert got.distance == pytest.approx(2.0)
+        assert got == _sample_whole_frame(depth, box, **kw)
+
+    def test_saturation_inside_the_crop_is_still_invalid(self):
+        """반대 방향 — 크롭 안의 65535는 여전히 '못 쟀다'로 빠져야 합니다."""
+        depth = np.full((100, 100), 2000, dtype=np.uint16)
+        depth[60:90, 60:90] = 65535
+        kw = dict(region="center", method="median", central=1.0,
+                  ring_margin=0.25, band_ratio=0.15, band_offset=0.0,
+                  min_valid_ratio=0.2, encoding="16UC1")
+        got = sample_distance_detail(depth, (60., 60., 90., 90.), **kw)
+        assert got.distance is None
+        assert got.reason == "no_valid_pixels"
+
+
+class TestOnlyTheCropIsConverted:
+    """구조 자체를 잠급니다 — 되돌아가도 결과는 같아서 위 테스트로는 안 잡힙니다."""
+
+    def test_conversion_never_sees_the_whole_frame(self, monkeypatch):
+        seen = []
+        real = _depth_mod.to_meters
+
+        def spy(arr, **kwargs):
+            seen.append(np.asarray(arr).shape)
+            return real(arr, **kwargs)
+
+        monkeypatch.setattr(_depth_mod, "to_meters", spy)
+        depth = np.full((480, 640), 2000, dtype=np.uint16)
+        sample_distance_detail(depth, (100., 100., 160., 180.),
+                              region="bottom", encoding="16UC1")
+
+        assert seen, "변환이 한 번은 일어나야 합니다"
+        assert (480, 640) not in seen, (
+            f"프레임 전체가 변환됐습니다: {seen} — 크롭 먼저 변환이 풀렸습니다")
+        assert all(s[0] * s[1] < 480 * 640 * 0.1 for s in seen), seen
+
+    def test_cost_scales_with_boxes_not_with_frame(self, monkeypatch):
+        """박스가 늘면 변환 횟수는 늘어도 **면적**은 프레임에 안 묶입니다."""
+        seen = []
+        real = _depth_mod.to_meters
+        monkeypatch.setattr(_depth_mod, "to_meters",
+                            lambda a, **k: (seen.append(np.asarray(a).size),
+                                            real(a, **k))[1])
+        depth = np.full((480, 640), 2000, dtype=np.uint16)
+        for x in (50, 200, 350, 500):
+            sample_distance_detail(depth, (float(x), 100., float(x + 60), 180.),
+                                  region="bottom", encoding="16UC1")
+        assert sum(seen) < 480 * 640, (
+            f"박스 4개의 변환 면적 합({sum(seen)})이 프레임 하나보다 큽니다")
+
+
+class TestResolveDepthScale:
+    """단위 결정을 떼어낸 함수. 우선순위가 바뀌면 거리가 1000배 틀립니다."""
+
+    def test_explicit_scale_beats_encoding(self):
+        assert resolve_depth_scale(np.uint16, "32FC1", 0.001) == 0.001
+
+    def test_encoding_beats_dtype(self):
+        """★ float32에 mm를 담아 발행하는 드라이버가 실재합니다."""
+        assert resolve_depth_scale(np.float32, "16UC1") == 0.001
+
+    def test_dtype_is_the_last_resort(self):
+        assert resolve_depth_scale(np.uint16) == 0.001
+        assert resolve_depth_scale(np.float32) == 1.0
+
+    def test_unknown_encoding_raises(self):
+        with pytest.raises(ValueError):
+            resolve_depth_scale(np.uint16, "rgb8")
+
+    def test_typo_raises_even_when_the_box_is_off_screen(self):
+        """★ 변환을 크롭으로 미룬 탓에 생길 수 있었던 구멍.
+
+        박스가 화면 밖이면 크롭이 안 일어나므로, 단위를 크롭에서만 정했다면
+        encoding 오타가 그 프레임에서 조용히 넘어갔을 겁니다. 박스 위치와
+        무관하게 똑같이 터져야 합니다.
+        """
+        depth = np.full((100, 100), 2000, dtype=np.uint16)
+        with pytest.raises(ValueError):
+            sample_distance_detail(depth, (-500., -500., -400., -400.),
+                                  region="center", encoding="rgb8")
+        with pytest.raises(ValueError):
+            sample_distance_detail(depth, (10., 10., 40., 40.),
+                                  region="center", encoding="rgb8")
