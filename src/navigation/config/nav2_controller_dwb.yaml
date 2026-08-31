@@ -29,7 +29,7 @@ controller_server:
       # 0.20+0.195=0.395m로 32cm를 넘어 대각선 접근 시 keepout
       # 경계 안으로 못 들어가 "도착" 판정이 안 날 수 있음(후속 과제)
       xy_goal_tolerance: 0.32
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 3.14
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -64,7 +64,7 @@ controller_server:
       ObstacleFootprint: 0.02
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 20.0
       GoalDist.scale: 24.0
