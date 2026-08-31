@@ -129,7 +129,7 @@
       #odom0_twist_rejection_threshold: 1.0
 
       # Further input parameter examples
-      odom1: odom_rf2o
+      odom1: odom_rf2o_fixed
       odom1_config: [true, true, false,
                      false, false, true,
                      false, false, false,
