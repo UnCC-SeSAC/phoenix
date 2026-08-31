@@ -62,6 +62,13 @@ def launch_setup(context):
         ])
     )
 
+    rf2o_covariance_relay_node = Node(
+        package='controller',
+        executable='rf2o_covariance_relay',
+        name='rf2o_covariance_relay',
+        output='screen',
+    )
+
     if use_namespace == 'false':
         ekf_param = ReplaceString(source_file=os.path.join(controller_package_path, 'config/ekf.yaml'), replacements={'namespace/': ''})
     else:
@@ -96,6 +103,7 @@ def launch_setup(context):
         imu_filter_launch,
         odom_publisher_launch,
         rf2o_launch,
+        rf2o_covariance_relay_node,
         ekf_filter_node,
     ]
 
