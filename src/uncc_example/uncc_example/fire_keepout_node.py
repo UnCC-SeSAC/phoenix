@@ -1,0 +1,272 @@
+import json
+
+import rclpy
+
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
+
+from std_msgs.msg import String
+from nav_msgs.msg import OccupancyGrid
+from nav2_msgs.msg import CostmapFilterInfo
+
+from .log_utils import make_event_logger
+
+
+# fire/person 은 state_manager 가 한 번 기록하면 위치를 다시 안 바꾸므로
+# (재감지는 dedup 되어 무시됨), round() 로 만든 좌표 키가 그대로 안정적인
+# 식별자가 된다 — 위치 변경 추적/갱신 로직이 따로 필요 없다.
+_COORD_PRECISION = 2
+
+
+class FireKeepoutNode(Node):
+    """
+    /mission/found_targets(state_manager 가 발행하는 fire/person 발견
+    기록 전체 스냅샷)를 구독해서, 각 대상 주변 반경을 Nav2 KeepoutFilter
+    용 OccupancyGrid(/fire_keepout_mask)로 변환해 발행한다.
+
+    - fire 는 LiDAR보다 낮아서 기존 costmap obstacle_layer 가 못 보므로
+      별도 semantic keepout 이 필요하다.
+    - person(테스트 중엔 마네킹)도 로봇이 그 위로 올라타면 안 되므로
+      마찬가지로 keepout 대상이다.
+    - 한 번 등록된 대상은 상태(진압 완료 등)가 바뀌어도 계속 keepout
+      으로 유지한다 — 화재 받침대/컵 같은 실제 물체가 꺼진 뒤에도
+      바닥에 남아있고 LiDAR 는 여전히 못 보기 때문.
+    """
+
+    def __init__(self):
+        super().__init__('fire_keepout_node')
+
+        self._event_logger = make_event_logger(self)
+
+        # -----------------------------
+        # Parameters
+        # -----------------------------
+        self.declare_parameter('map_topic', '/map')
+        self.declare_parameter('targets_topic', '/mission/found_targets')
+        self.declare_parameter('mask_topic', '/fire_keepout_mask')
+        self.declare_parameter('filter_info_topic', '/fire_keepout_mask_info')
+
+        # 실측 반경(fire 0.05m / person 0.15m) + 위치·depth 오차 여유.
+        # xy_goal_tolerance(nav2_controller_dwb.yaml) 는 이 값들보다
+        # 커야 fire/person 접근 goal 이 keepout 바로 바깥에서 정상적으로
+        # "도착" 판정을 받는다.
+        self.declare_parameter('fire_keepout_radius', 0.20)
+        self.declare_parameter('person_keepout_radius', 0.25)
+
+        self.fire_keepout_radius = (
+            self.get_parameter('fire_keepout_radius').value
+        )
+        self.person_keepout_radius = (
+            self.get_parameter('person_keepout_radius').value
+        )
+
+        # -----------------------------
+        # State
+        # -----------------------------
+        self._map_info = None  # (resolution, width, height, origin_x, origin_y)
+        # key -> radius. key = (kind, round(x, _COORD_PRECISION), round(y, ...))
+        self._tracked = {}
+
+        # -----------------------------
+        # QoS
+        # -----------------------------
+        # map_server/costmap static_layer 와 동일한 관례 — 최신 값 1개만
+        # 유지하고, 늦게 붙는 구독자(새 costmap 등)에게도 그대로 전달.
+        transient_local_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        # -----------------------------
+        # Subscriptions
+        # -----------------------------
+        self.create_subscription(
+            OccupancyGrid,
+            self.get_parameter('map_topic').value,
+            self._map_callback,
+            transient_local_qos,
+        )
+
+        self.create_subscription(
+            String,
+            self.get_parameter('targets_topic').value,
+            self._targets_callback,
+            10,
+        )
+
+        # -----------------------------
+        # Publishers
+        # -----------------------------
+        self.mask_pub = self.create_publisher(
+            OccupancyGrid,
+            self.get_parameter('mask_topic').value,
+            transient_local_qos,
+        )
+
+        self.filter_info_pub = self.create_publisher(
+            CostmapFilterInfo,
+            self.get_parameter('filter_info_topic').value,
+            transient_local_qos,
+        )
+
+    # =========================================================
+    # /map — grid 크기/해상도 기준 확보용. 한 번만 받아도 충분하지만
+    # (맵이 갱신되는 경우를 대비해) 새로 들어올 때마다 기존 keepout 을
+    # 새 grid 기준으로 다시 그린다.
+    # =========================================================
+
+    def _map_callback(self, msg):
+
+        self._map_info = {
+            'resolution': msg.info.resolution,
+            'width': msg.info.width,
+            'height': msg.info.height,
+            'origin_x': msg.info.origin.position.x,
+            'origin_y': msg.info.origin.position.y,
+        }
+
+        if self._tracked:
+            self._publish_mask()
+
+    # =========================================================
+    # /mission/found_targets — fire/person 발견 스냅샷. 새 대상이
+    # 생겼을 때만(이미 기록된 대상은 위치가 안 바뀌므로) mask 를
+    # 재생성한다.
+    # =========================================================
+
+    def _targets_callback(self, msg):
+
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f'Invalid found_targets JSON: {e}')
+            return
+
+        changed = False
+
+        for target in payload.get('targets', []):
+
+            kind = self._keepout_kind(target.get('type', ''))
+
+            if kind is None:
+                continue
+
+            key = (
+                kind,
+                round(target['x'], _COORD_PRECISION),
+                round(target['y'], _COORD_PRECISION),
+            )
+
+            if key in self._tracked:
+                continue
+
+            radius = (
+                self.fire_keepout_radius if kind == 'fire'
+                else self.person_keepout_radius
+            )
+            self._tracked[key] = radius
+            changed = True
+
+            self._event_logger.info(
+                f'keepout 등록: {kind} '
+                f'({key[1]:.2f}, {key[2]:.2f}) radius={radius:.2f}m'
+            )
+
+        if changed and self._map_info is not None:
+            self._publish_mask()
+
+    @staticmethod
+    def _keepout_kind(category):
+        """state_manager 가 붙이는 7분류(fire_unvisited 등) 접두어로
+        fire/person 을 가른다. 그 외(예: 미확인 문자열)는 keepout 대상 아님."""
+
+        if category.startswith('fire_'):
+            return 'fire'
+
+        if category.startswith('person_'):
+            return 'person'
+
+        return None
+
+    # =========================================================
+    # Mask 생성/발행
+    # =========================================================
+
+    def _publish_mask(self):
+
+        info = self._map_info
+        resolution = info['resolution']
+        width = info['width']
+        height = info['height']
+        origin_x = info['origin_x']
+        origin_y = info['origin_y']
+
+        grid = [0] * (width * height)
+
+        for (kind, x, y), radius in self._tracked.items():
+
+            center_col = int((x - origin_x) / resolution)
+            center_row = int((y - origin_y) / resolution)
+            radius_cells = int(radius / resolution) + 1
+
+            for row in range(
+                max(0, center_row - radius_cells),
+                min(height, center_row + radius_cells + 1),
+            ):
+                for col in range(
+                    max(0, center_col - radius_cells),
+                    min(width, center_col + radius_cells + 1),
+                ):
+                    dx = col - center_col
+                    dy = row - center_row
+                    if dx * dx + dy * dy <= radius_cells * radius_cells:
+                        grid[row * width + col] = 100
+
+        stamp = self.get_clock().now().to_msg()
+
+        mask_msg = OccupancyGrid()
+        mask_msg.header.frame_id = 'map'
+        mask_msg.header.stamp = stamp
+        mask_msg.info.resolution = resolution
+        mask_msg.info.width = width
+        mask_msg.info.height = height
+        mask_msg.info.origin.position.x = origin_x
+        mask_msg.info.origin.position.y = origin_y
+        mask_msg.data = grid
+
+        self.mask_pub.publish(mask_msg)
+
+        filter_info_msg = CostmapFilterInfo()
+        filter_info_msg.header.frame_id = 'map'
+        filter_info_msg.header.stamp = stamp
+        filter_info_msg.type = 0  # keepout/lanes filter
+        filter_info_msg.filter_mask_topic = (
+            self.get_parameter('mask_topic').value
+        )
+        filter_info_msg.base = 0.0
+        filter_info_msg.multiplier = 1.0
+
+        self.filter_info_pub.publish(filter_info_msg)
+
+
+def main(args=None):
+
+    rclpy.init(args=args)
+
+    node = FireKeepoutNode()
+
+    try:
+        rclpy.spin(node)
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

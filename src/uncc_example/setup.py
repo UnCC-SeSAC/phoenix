@@ -50,6 +50,7 @@ setup(
             "state_manager = uncc_example.state_manager:main",
             "mission_executor = uncc_example.mission_executor:main",
             "vision_detector = uncc_example.vision_detector:main",
+            "fire_keepout_node = uncc_example.fire_keepout_node:main",
             "mission_test = uncc_example.mission_test_publisher:main",
             "fire_suppression_node = uncc_example.fire_suppression_node:main",
             "mission_manager = uncc_example.mission_manager:main",
