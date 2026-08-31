@@ -12,6 +12,7 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -19,8 +20,12 @@ def generate_launch_description():
     카메라 -> YOLO26 -> 탐사/이동 -> 진압(GPIO) -> YOLO26로 꺼짐 재확인까지
     더미 없이 실제 노드로 도는 하드웨어-인-더-루프 테스트용 launch.
     탐사용 감지와 진압 후 상태확인 둘 다 같은 YOLO26 결과를 쓴다
-    (fire_detections_bridge 가 /fire/detections 를 fire_status_service_node
-    용 포맷으로 재발행 — 모델을 두 번 안 띄움).
+    (fire_status_service_node 가 yolo_node 의 /yolo_result 를 직접 구독 —
+    모델을 두 번 안 띄움).
+
+    ★ /fire/detections 를 쓰지 않는다. 검출 0건이면 침묵하는 이벤트
+      토픽이라 "불이 꺼졌다"를 증명할 수 없다. /yolo_result 는 검출 0건이면
+      빈 배열이 오고, 그 빈 배열이 소화 판정의 유일한 근거다.
 
     Nav2 이동도 더미가 아니라 실제 스택을 띄운다 (uncc_frontier.launch.py
     와 동일한 조합):
@@ -259,24 +264,23 @@ def generate_launch_description():
         output='both',
     )
 
-    # detection_3d_node(/fire/detections, 실제 YOLO26 인식)를
-    # fire_status_service_node가 기대하는 형식(/yolo_result_fire,
-    # interfaces/msg/ObjectsInfo)으로 재발행 — 모델을 두 번 안 띄우고
-    # 같은 실제 인식 결과를 재사용한다.
-    fire_detections_bridge = Node(
-        package='uncc_example',
-        executable='fire_detections_bridge',
-        name='fire_detections_bridge',
-        output='both',
-    )
-
-    # 더미 아닌 진짜 노드 — 위 브리지가 주는 실제 YOLO 인식 이력으로
-    # check_fire_status 를 판정한다.
+        # 더미 아닌 진짜 노드 — yolo_node 의 /yolo_result 를 직접 구독해
+    # check_fire_status 를 판정한다. 브리지는 필요 없다:
+    # /fire/detections 는 검출 0건이면 침묵해서 '꺼짐'을 증명할 수 없다.
     fire_status_real = Node(
         package='uncc_example',
         executable='fire_status_service_node',
         name='fire_status_service_node',
         output='both',
+        parameters=[{
+            'detections_topic': '/yolo_result',
+            # ★ 학습에 쓴 라벨과 정확히 같아야 함 (대소문자 포함)
+            'fire_class_name': 'fire',
+            'min_score': ParameterValue(
+                LaunchConfiguration('fire_min_score'), value_type=float),
+            'extinguished_ratio': ParameterValue(
+                LaunchConfiguration('fire_extinguished_ratio'), value_type=float),
+        }],
     )
 
     # 실제 GPIO13(펌프)/GPIO18(서보) 구동 노드.
@@ -292,7 +296,6 @@ def generate_launch_description():
         actions=[
             state_manager,
             mission_executor,
-            fire_detections_bridge,
             fire_status_real,
             fire_suppression_real,
         ],
@@ -312,6 +315,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'threads', default_value='3',
             description='Pi 5(4코어) 기준 권장값 — ROS·다른 프로세스와 코어 분배'),
+        DeclareLaunchArgument(
+            'fire_min_score', default_value='0.0',
+            description='이 점수 미만 화재 검출은 무시. 0.0=끔. '
+                        'fire_status_service_node 의 주기 통계 로그에 찍히는 '
+                        'score 분포를 보고 정할 것'),
+        DeclareLaunchArgument(
+            'fire_extinguished_ratio', default_value='0.3',
+            description='관찰 구간 내 화재 프레임 비율이 이 값 미만이면 꺼짐 판정'),
         hardware,
         camera,
         slam,
