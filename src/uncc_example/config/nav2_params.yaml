@@ -141,8 +141,8 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5 # 장애물에서 멀어질수록 위험 비용이 얼마나 빠르게 감소할지 결정
-        inflation_radius: 0.20 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
+        cost_scaling_factor: 2.0 # 장애물에서 멀어질수록 위험 비용이 얼마나 빠르게 감소할지 결정
+        inflation_radius: 0.15 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -294,7 +294,7 @@ velocity_smoother:
     scale_velocities: False
     feedback: "OPEN_LOOP"
     max_velocity: [0.20, 0.0, 1.0] # Velocity Smoother의 최대 속도 [X, Y, 회전] (m/s, m/s, rad/s)
-    min_velocity: [-0.20, 0.0, -1.0] # Velocity Smoother의 최소 속도 [X, Y, 회전] (m/s, m/s, rad/s)
+    min_velocity: [0.0, 0.0, -1.0] # Velocity Smoother의 최소 속도 [X, Y, 회전] (m/s, m/s, rad/s)
     max_accel: [0.8, 0.0, 3.2] # Velocity Smoother의 최대 가속도 [X, Y, 회전] (m/s², m/s², rad/s²)
     max_decel: [-0.8, 0.0, -3.2] # Velocity Smoother의 최대 감속도 [X, Y, 회전] (m/s², m/s², rad/s²)
     odom_topic: odom

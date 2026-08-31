@@ -13,9 +13,11 @@ controller_server:
 
     # Progress checker parameters
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
+      plugin: "nav2_controller::PoseProgressChecker"
       required_movement_radius: 0.10
       movement_time_allowance: 15.0
+      # 회전도 progress로 인정
+      required_movement_angle: 0.10
 
     general_goal_checker:
       stateful: True
@@ -25,12 +27,23 @@ controller_server:
       # 앞에서 멈추게 하기 위한 값 (uncc_example state_manager 의
       # fire/person 접근 목적)
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 3.14
     # DWB parameters
     FollowPath:
+      # global plan 방향으로 회전하기
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      angular_dist_threshold: 0.785
+      forward_sampling_distance: 0.25
+      angular_disengage_threshold: 0.17
+      rotate_to_heading_angular_vel: 0.40
+      max_angular_accel: 1.5
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
+      # Rotation Shim 이후에 DWB local plan 동작
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
-      min_vel_x: -0.20 # 앞뒤 이동
+      min_vel_x: 0.0 # 앞뒤 이동
       min_vel_y: 0.0 # 좌우 이동
       max_vel_x: 0.2 # 앞뒤 이동
       max_vel_y: 0.0 # 좌우 이동
