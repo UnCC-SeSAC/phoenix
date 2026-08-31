@@ -24,7 +24,8 @@ setup(
     entry_points={
         'console_scripts': [
             'odom_publisher = controller.odom_publisher_node:main',
-            'init_pose = controller.init_pose:main'
+            'init_pose = controller.init_pose:main',
+            'rf2o_covariance_relay = controller.rf2o_covariance_relay:main',   # 추가
         ],
     },
 )
