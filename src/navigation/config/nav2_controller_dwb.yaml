@@ -20,11 +20,15 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      # 목표 좌표까지 25cm 이내면 도착으로 판단하고 정지 — 불/사람
-      # 좌표를 goal 로 그대로 보내도 그 위로 올라가지 않고 25cm
-      # 앞에서 멈추게 하기 위한 값 (uncc_example state_manager 의
-      # fire/person 접근 목적)
-      xy_goal_tolerance: 0.25
+      # 목표 좌표까지 32cm 이내면 도착으로 판단하고 정지 — 불/사람
+      # 좌표를 goal 로 그대로 보내도 그 위로 올라가지 않고 keepout
+      # zone(fire 0.10m / person 0.20m, fire_keepout_node.py) 바로
+      # 바깥에서 멈추게 하기 위한 값. 로봇 footprint(29cm x 19cm)
+      # 대각선 기준 최대 약 0.195m 여유가 필요해서: fire는
+      # 0.10+0.195=0.295m로 32cm 이내라 안전하지만, person은
+      # 0.20+0.195=0.395m로 32cm를 넘어 대각선 접근 시 keepout
+      # 경계 안으로 못 들어가 "도착" 판정이 안 날 수 있음(후속 과제)
+      xy_goal_tolerance: 0.32
       yaw_goal_tolerance: 0.25
     # DWB parameters
     FollowPath:
@@ -51,7 +55,7 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.32
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True

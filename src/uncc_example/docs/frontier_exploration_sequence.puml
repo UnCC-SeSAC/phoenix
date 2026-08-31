@@ -1,5 +1,8 @@
 @startuml
 ' Frontier exploration sequence diagram for current Hiwonder/Nav2 stack
+' 주의: 초기 프로토타입(ExplorerNode/HazardMapNode) 기준 다이어그램.
+' 두 클래스 다 commit eb9eaab 에서 삭제됨 — 지금은 frontier_exploration_ros2
+' + state_manager/mission_executor/vision_detector/fire_keepout_node 로 대체됨.
 
 skinparam shadowing false
 skinparam sequenceMessageAlign center

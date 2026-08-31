@@ -46,7 +46,9 @@ def generate_launch_description():
             description='auto | v8 | end2end — 실측 후 못박을 것'),
         DeclareLaunchArgument(
             'threads', default_value='0',
-            description='Pi 5에서는 3 권장 (ROS·Hailo 드라이버와 코어 분배)'),
+            description='cv2 스레드 수. 0=건드리지 않음. '
+                        'Hailo 백엔드는 cv2가 letterbox/BGR->RGB 에만 쓰여 '
+                        '1이 가장 쌉니다 (RPi5 15fps 실측 코어 9% -> 5%)'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
     ]
 

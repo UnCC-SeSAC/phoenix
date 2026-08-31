@@ -491,6 +491,104 @@ class TestBackendSelection:
             make_detector("model.hef")
 
 
+class FakeSessionOptions:
+    """`ort.SessionOptions` 대역. onnxruntime 없이 정책만 검증합니다."""
+
+    def __init__(self):
+        self.entries: dict[str, str] = {}
+        self.intra_op_num_threads = None
+        self.inter_op_num_threads = None
+
+    def add_session_config_entry(self, key, value):
+        self.entries[key] = value
+
+
+class TestHailoPostSessionOptions:
+    """★ 후처리 ONNX 세션의 스레드 정책.
+
+    onnxruntime 기본 설정은 워커를 코어 수만큼 만들고 run 사이에 **스핀**합니다.
+    이 백엔드는 NPU 결과를 19ms 블록 대기하므로, 그동안 워커가 코어를 태웁니다.
+    RPi5 15fps 실측으로 코어 82% -> 5% 차이였습니다. 회귀하면 조용히 CPU만
+    먹으므로(지연도 검출도 안 변합니다) 테스트로 잠급니다.
+    """
+
+    def test_spinning_is_always_disabled(self):
+        from image_pipeline.yolo import HailoBackend
+        for threads in (1, 2, 4, 8):
+            opts = HailoBackend._post_session_options(FakeSessionOptions(), threads)
+            assert opts.entries["session.intra_op.allow_spinning"] == "0", (
+                f"threads={threads}: 스핀이 켜져 있으면 NPU 대기 동안 코어를 태웁니다")
+
+    def test_defaults_to_single_intra_op_thread(self):
+        """후처리 모델이 0.41ms 짜리라 병렬화 이득이 없습니다."""
+        from image_pipeline.yolo import HailoBackend
+        opts = HailoBackend._post_session_options(FakeSessionOptions())
+        assert opts.intra_op_num_threads == 1
+        assert opts.inter_op_num_threads == 1
+
+    def test_thread_count_is_overridable_but_never_zero(self):
+        """0 이나 음수가 들어가면 onnxruntime이 '코어 수'로 해석해 되돌아갑니다."""
+        from image_pipeline.yolo import HailoBackend
+        assert HailoBackend._post_session_options(
+            FakeSessionOptions(), 3).intra_op_num_threads == 3
+        for bad in (0, -1):
+            opts = HailoBackend._post_session_options(FakeSessionOptions(), bad)
+            assert opts.intra_op_num_threads == 1, f"threads={bad} 가 새어나갔습니다"
+
+
+class TestHailoBackendThreads:
+    """`threads` 가 Hailo 백엔드까지 실제로 도달하는지.
+
+    예전에는 `**_kwargs` 로 삼켜서 `make_detector` 가 넘겨도 무시됐습니다.
+    """
+
+    def test_signature_accepts_threads(self):
+        import inspect
+        from image_pipeline.yolo import HailoBackend
+        params = inspect.signature(HailoBackend.__init__).parameters
+        assert "threads" in params, (
+            "threads 를 **_kwargs 로 삼키면 파라미터를 줘도 조용히 무시됩니다")
+        assert params["threads"].default == 0     # 0 = 건드리지 않음 (다른 백엔드와 동일)
+
+    def test_make_detector_passes_threads_through(self, monkeypatch):
+        """`make_detector` -> `HailoBackend` 배선. 여기가 끊기면 파라미터를 줘도
+        무시되는데, 지연도 검출도 안 변해서 로그로는 안 보입니다."""
+        from image_pipeline import yolo as Y
+
+        seen = {}
+
+        class FakeBackend:
+            kind = "hailo"
+            wants_uint8_nhwc = True
+
+            def __init__(self, path, threads=0, **kw):
+                seen["path"], seen["threads"] = path, threads
+
+            def infer(self, blob):
+                return [np.zeros((1, 0, 6), np.float32)]
+
+        monkeypatch.setattr(Y, "HailoBackend", FakeBackend)
+        Y.make_detector("model.hef", backend="hailo", threads=3,
+                        class_names=("fire",), warmup=False)
+        assert seen == {"path": "model.hef", "threads": 3}
+
+    def test_cv2_threads_are_not_touched_before_backend_is_usable(self, monkeypatch):
+        """★ 백엔드 초기화가 실패하면 cv2 전역 설정을 남기면 안 됩니다.
+
+        `cv2.setNumThreads` 는 **프로세스 전역**입니다. HailoRT 가 없는 PC에서
+        생성만 시도했다가 실패했는데 스레드 수가 바뀌어 있으면, 같은 프로세스의
+        다른 코드가 영문 모를 성능 변화를 겪습니다.
+        """
+        import cv2
+        from image_pipeline import yolo as Y
+
+        calls = []
+        monkeypatch.setattr(cv2, "setNumThreads", lambda n: calls.append(n))
+        with pytest.raises((ImportError, FileNotFoundError)):
+            Y.HailoBackend(__file__, threads=2)
+        assert calls == []
+
+
 class TestHailoNmsAdapter:
     def test_converts_nms_layout_to_existing_end2end_contract(self):
         from image_pipeline.yolo import HailoBackend, decode
