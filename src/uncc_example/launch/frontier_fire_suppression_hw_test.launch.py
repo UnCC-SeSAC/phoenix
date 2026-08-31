@@ -291,6 +291,17 @@ def generate_launch_description():
         output='both',
     )
 
+    # LiDAR보다 낮아서 obstacle_layer 가 못 보는 fire/person 위치를
+    # Nav2 KeepoutFilter 용 mask 로 변환해 발행. state_manager 가
+    # found_targets 를 publish 하기 시작하는 시점(t=11) 이후에 떠도
+    # 상관없다 — 구독만 하다가 이후 갱신을 받으면 되므로.
+    fire_keepout = Node(
+        package='uncc_example',
+        executable='fire_keepout_node',
+        name='fire_keepout_node',
+        output='both',
+    )
+
     mission_stack = TimerAction(
         period=11.0,
         actions=[
@@ -298,6 +309,7 @@ def generate_launch_description():
             mission_executor,
             fire_status_real,
             fire_suppression_real,
+            fire_keepout,
         ],
     )
 
