@@ -55,6 +55,11 @@ class StateManager(Node):
         # 이 반경 안의 같은 종류(fire/person) 감지는 하나의 목적지로 병합
         self.declare_parameter('target_merge_radius', 0.5)
 
+        # 같은 위치(target_merge_radius 이내)에서 이 횟수만큼 감지돼야
+        # 확정된 target 으로 등록한다 — depth/TF 지연으로 한두 프레임
+        # 튄 좌표가 그대로 target 이 되는 걸 막기 위함(연속일 필요는 없음)
+        self.declare_parameter('target_confirm_hits', 3)
+
         # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
         # 불부터 끄고, 멀면 사람부터 확인한다
         self.declare_parameter('fire_person_proximity_threshold', 0.2)
@@ -72,6 +77,9 @@ class StateManager(Node):
         )
         self.target_merge_radius = (
             self.get_parameter('target_merge_radius').value
+        )
+        self.target_confirm_hits = (
+            self.get_parameter('target_confirm_hits').value
         )
         self.fire_person_proximity_threshold = (
             self.get_parameter('fire_person_proximity_threshold').value
@@ -103,6 +111,10 @@ class StateManager(Node):
         # 미션 시작부터 끝까지 유지되는 발견 기록 (완료된 것도 안 지움).
         # 신규 감지 중복 판단(dedup)과, 나중에 지도에 표시할 데이터로 쓴다.
         self.found_targets = []
+
+        # target_confirm_hits 번 감지되기 전까지 대기하는 후보 목록.
+        # {'type', 'pose'(최초 감지 좌표, 갱신 안 함), 'hits'} 원소.
+        self._pending_candidates = []
 
         self._last_published_state = None
         self._last_published_target_id = None
@@ -215,18 +227,40 @@ class StateManager(Node):
             self._publish_found_targets()
 
     def _add_detection(self, target_type, pose_stamped):
-        """중복이면 None, 새로 추가됐으면 그 entry 를 반환한다.
-        무리 묶기는 여기서 안 하고 _update_clusters 에서 한꺼번에 처리한다."""
+        """이미 확정된 대상과 겹치면 None. 아직 확정 전(후보)이면 카운트만
+        올리고 target_confirm_hits 미달이면 None. 도달하면 그때 비로소
+        확정해 등록하고 그 entry 를 반환한다. 무리 묶기는 여기서 안 하고
+        _update_clusters 에서 한꺼번에 처리한다."""
 
         pose = pose_stamped.pose
 
         if self._find_found_target(target_type, pose) is not None:
-            # 이미 기록된 대상은 다시 감지돼도 무시한다(위치 갱신 안 함).
+            # 이미 확정된 대상은 다시 감지돼도 무시한다(위치 갱신 안 함).
             return None
+
+        candidate = self._find_pending_candidate(target_type, pose)
+
+        if candidate is None:
+            self._pending_candidates.append({
+                'type': target_type,
+                'pose': pose_stamped,
+                'hits': 1,
+            })
+            return None
+
+        candidate['hits'] += 1
+
+        if candidate['hits'] < self.target_confirm_hits:
+            return None
+
+        self._pending_candidates.remove(candidate)
+
+        # 확정 좌표는 후보의 최초 감지 좌표를 그대로 쓴다(갱신 안 함).
+        confirmed_pose = candidate['pose']
 
         entry = {
             'type': target_type,
-            'pose': pose_stamped,
+            'pose': confirmed_pose,
             'status': 'pending',
             # 임계값 이내로 묶인 무리. 무리원끼리 같은 리스트를 공유해서
             # 무리 전체가 같은 우선순위를 갖게 한다.
@@ -240,12 +274,31 @@ class StateManager(Node):
         self.found_targets.append(entry)
         self.target_queue.append(entry)
 
+        confirmed_position = confirmed_pose.pose.position
+
         self._event_logger.info(
             f"새 객체 인식: {target_type} "
-            f"({pose.position.x:.2f}, {pose.position.y:.2f})"
+            f"({confirmed_position.x:.2f}, {confirmed_position.y:.2f})"
         )
 
         return entry
+
+    def _find_pending_candidate(self, target_type, pose):
+
+        for candidate in self._pending_candidates:
+
+            if candidate['type'] != target_type:
+                continue
+
+            if (
+                self._planar_distance_xy(
+                    pose.position.x, pose.position.y, candidate['pose'].pose
+                )
+                <= self.target_merge_radius
+            ):
+                return candidate
+
+        return None
 
     def _update_clusters(self):
         """무리 없는 불/사람 중 임계값 이내인 불-사람 쌍을 무리로 묶는다
