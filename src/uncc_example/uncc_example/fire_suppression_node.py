@@ -282,7 +282,7 @@ class FireSuppressionNode(Node):
             result = SuppressFire.Result()
 
             self._event_logger.info(f"진압 시작. 최대 {max_attempts}회 시도.")
-            await self.set_exploration_running(False)
+            # await self.set_exploration_running(False)
 
             try:
                 for attempt in range(1, max_attempts + 1):
@@ -348,7 +348,8 @@ class FireSuppressionNode(Node):
                 return result
 
             finally:
-                await self.set_exploration_running(True)
+                # await self.set_exploration_running(True)
+                pass
 
         finally:
             self._busy = False
