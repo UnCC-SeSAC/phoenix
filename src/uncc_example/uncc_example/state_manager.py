@@ -11,6 +11,7 @@ from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener, TransformException
 
 from std_msgs.msg import String, UInt16
+from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 from interfaces.srv import SetString
 
@@ -19,6 +20,9 @@ from .log_utils import make_event_logger
 
 class StateManager(Node):
 
+    # bringup 직후 초기 상태: start_mission 서비스로 신호를 받기 전까지
+    # 대기하며, frontier/nav2 쪽으로 어떤 START 요청도 보내지 않는다
+    STANDBY = 'STANDBY'
     # 화재/인명 정보가 전혀 없을 때: Frontier 가 알려주는 미탐사 위치로 이동
     EXPLORING = 'EXPLORING'
     # 대기중인 목적지 중 사람이 가장 가까움: 구조 접근
@@ -88,7 +92,9 @@ class StateManager(Node):
         # -----------------------------
         # State
         # -----------------------------
-        self.state = self.EXPLORING
+        self.state = self.STANDBY
+        # start_mission 서비스가 호출되기 전까지 True 로 안 바뀐다
+        self._mission_started = False
 
         self.robot_x = None
         self.robot_y = None
@@ -176,6 +182,15 @@ class StateManager(Node):
             SetString,
             '~/target_complete',
             self.target_complete_callback,
+        )
+
+        # bringup(카메라/YOLO/서보모터 등)이 전부 끝난 뒤 운용자가 직접
+        # 호출해서 탐사를 시작시키는 신호.
+        # ros2 service call /state_manager/start_mission std_srvs/srv/Trigger "{}"
+        self.create_service(
+            Trigger,
+            '~/start_mission',
+            self.start_mission_callback,
         )
 
         # State machine timer
@@ -474,6 +489,24 @@ class StateManager(Node):
         return response
 
     # =========================================================
+    # Mission start signal (bringup 완료 후 운용자가 호출)
+    # =========================================================
+
+    def start_mission_callback(self, request, response):
+
+        if self._mission_started:
+            response.success = True
+            response.message = 'Mission already started'
+            return response
+
+        self._mission_started = True
+        self._event_logger.info('Mission start signal received')
+
+        response.success = True
+        response.message = 'Mission started'
+        return response
+
+    # =========================================================
     # Timer / State machine
     # =========================================================
 
@@ -482,6 +515,10 @@ class StateManager(Node):
         self._refresh_state()
 
     def _refresh_state(self):
+
+        if not self._mission_started:
+            self._enter_standby()
+            return
 
         if self.is_battery_low():
             self._enter_returning_to_charge()
@@ -494,6 +531,12 @@ class StateManager(Node):
             return
 
         self._enter_exploring()
+
+    def _enter_standby(self):
+        self.state = self.STANDBY
+        self.active_target = None
+
+        self._publish(None)
 
     def _enter_returning_to_charge(self):
         self.state = self.RETURNING_TO_CHARGE
