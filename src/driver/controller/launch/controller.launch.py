@@ -77,6 +77,13 @@ def launch_setup(context):
         condition=IfCondition(enable_odom),
     )
 
+    # IMU 보정과 complementary filter가 먼저 준비되도록 EKF만 짧게 지연한다.
+    # 이로써 EKF가 시작 직후 /odom_raw만 받는 구간을 줄인다.
+    delayed_ekf_filter_node = TimerAction(
+        period=1.0,
+        actions=[ekf_filter_node],
+    )
+
 
     return [
         namespace_arg,
@@ -90,7 +97,7 @@ def launch_setup(context):
         frame_prefix_arg,
         imu_filter_launch,
         odom_publisher_launch,
-        ekf_filter_node,
+        delayed_ekf_filter_node,
     ]
 
 def generate_launch_description():

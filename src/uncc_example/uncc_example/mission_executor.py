@@ -119,6 +119,11 @@ class MissionExecutor(Node):
 
     def state_callback(self, msg):
 
+        # halt trace 로그
+        if self.state != msg.data:
+            self.get_logger().info(f"[MISSION_STATE] {self.state} -> {msg.data}")
+        ###
+
         if (
             self.state == StateManager.FIRE_DETECTED
             and msg.data != StateManager.FIRE_DETECTED
@@ -213,6 +218,17 @@ class MissionExecutor(Node):
         request.delay_seconds = 0.0
         request.quit_after_stop = False
 
+        # halt trace 로그
+        action_name = (
+            "START" if action == ControlExploration.Request.ACTION_START else "STOP"
+        )
+
+        self.get_logger().info(
+            f"[FRONTIER_CONTROL_REQUEST] "
+            f"action={action_name}, mission_state={self.state}"
+        )
+        ###
+
         self._frontier_request_pending = True
 
         future = self.frontier_control_client.call_async(request)
@@ -287,7 +303,9 @@ class MissionExecutor(Node):
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped
 
-        self._event_logger.info(f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})")
+        self._event_logger.info(
+            f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})"
+        )
 
         send_future = self._nav_client.send_goal_async(goal)
         send_future.add_done_callback(
