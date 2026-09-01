@@ -79,39 +79,37 @@ def generate_launch_description():
         # rviz2 등으로 map/odom/base_footprint TF, /scan, 실제 이동 확인
     """
 
-    uncc_share = get_package_share_directory('uncc_example')
-    frontier_share = get_package_share_directory('frontier_exploration_ros2')
-    peripherals_share = get_package_share_directory('peripherals')
-    image_pipeline_share = get_package_share_directory('image_pipeline')
-    launch_dir = os.path.join(uncc_share, 'launch')
-    frontier_params = os.path.join(frontier_share, 'config', 'params.yaml')
+    uncc_share = get_package_share_directory("uncc_example")
+    frontier_share = get_package_share_directory("frontier_exploration_ros2")
+    peripherals_share = get_package_share_directory("peripherals")
+    image_pipeline_share = get_package_share_directory("image_pipeline")
+    launch_dir = os.path.join(uncc_share, "launch")
+    frontier_params = os.path.join(frontier_share, "config", "params.yaml")
 
     # detection_3d.launch.py / full_chain_check.launch.py 와 동일한 실카메라
     # 토픽 접두어 (ascamera 드라이버 기준).
-    ASCAMERA = '/ascamera/camera_publisher'
+    ASCAMERA = "/ascamera/camera_publisher"
 
     def include_launch(name):
         return IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(launch_dir, name)
-            ),
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, name)),
         )
 
     # =========================================
     # 실제 하드웨어 + SLAM + Nav2
     # =========================================
 
-    hardware = include_launch('hardware.launch.py')
+    hardware = include_launch("hardware.launch.py")
 
     # depth_camera.launch.py 는 os.environ['need_compile']/['DEPTH_CAMERA_TYPE']
     # 를 읽는다 — need_compile 은 hardware.launch.py 가 이미 True 로 설정.
     camera = TimerAction(
         period=1.0,
         actions=[
-            SetEnvironmentVariable(name='DEPTH_CAMERA_TYPE', value='ascamera'),
+            SetEnvironmentVariable(name="DEPTH_CAMERA_TYPE", value="ascamera"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(peripherals_share, 'launch', 'depth_camera.launch.py')
+                    os.path.join(peripherals_share, "launch", "depth_camera.launch.py")
                 ),
             ),
         ],
@@ -119,12 +117,12 @@ def generate_launch_description():
 
     slam = TimerAction(
         period=3.0,
-        actions=[include_launch('slam_mapping.launch.py')],
+        actions=[include_launch("slam_mapping.launch.py")],
     )
 
     nav2 = TimerAction(
         period=7.0,
-        actions=[include_launch('nav2_online.launch.py')],
+        actions=[include_launch("nav2_online.launch.py")],
     )
 
     # =========================================
@@ -137,58 +135,67 @@ def generate_launch_description():
         period=13.0,
         actions=[
             Node(
-                package='image_pipeline',
-                executable='preprocess_node',
-                name='rgb_preprocess_node',
-                output='screen',
+                package="image_pipeline",
+                executable="preprocess_node",
+                name="rgb_preprocess_node",
+                output="screen",
                 parameters=[
-                    os.path.join(image_pipeline_share, 'config', 'preprocess.yaml'),
+                    os.path.join(image_pipeline_share, "config", "preprocess.yaml"),
                     {
                         # YAML(더미 카메라 토픽)보다 나중에 와서 실카메라로 덮어씀.
-                        'input_topic': f'{ASCAMERA}/rgb0/image',
-                        'camera_info_topic': f'{ASCAMERA}/rgb0/camera_info',
-                        'output_topic': '/image_enhanced',
-                        'output_camera_info_topic': '/image_enhanced/camera_info',
+                        "input_topic": f"{ASCAMERA}/rgb0/image",
+                        "camera_info_topic": f"{ASCAMERA}/rgb0/camera_info",
+                        "output_topic": "/image_enhanced",
+                        "output_camera_info_topic": "/image_enhanced/camera_info",
                     },
                 ],
             ),
             Node(
-                package='image_pipeline',
-                executable='yolo_node',
-                name='yolo_node',
-                output='screen',
-                parameters=[{
-                    'model_path': LaunchConfiguration('model_path'),
-                    'class_names': LaunchConfiguration('class_names'),
-                    'layout': LaunchConfiguration('layout'),
-                    'threads': LaunchConfiguration('threads'),
-                    'input_topic': '/image_enhanced',
-                    'detections_topic': '/yolo_result',
-                }],
+                package="image_pipeline",
+                executable="yolo_node",
+                name="yolo_node",
+                output="screen",
+                parameters=[
+                    {
+                        "model_path": LaunchConfiguration("model_path"),
+                        "class_names": LaunchConfiguration("class_names"),
+                        "layout": LaunchConfiguration("layout"),
+                        "threads": LaunchConfiguration("threads"),
+                        "conf": ParameterValue(
+                            LaunchConfiguration("conf"), value_type=float
+                        ),
+                        "input_topic": "/image_enhanced",
+                        "detections_topic": "/yolo_result",
+                    }
+                ],
             ),
             Node(
-                package='image_pipeline',
-                executable='detection_3d_node',
-                name='detection_3d_node',
-                output='screen',
-                parameters=[{
-                    'detections_topic': '/yolo_result',
-                    'depth_topic': f'{ASCAMERA}/depth0/image_raw',
-                    'depth_info_topic': f'{ASCAMERA}/depth0/camera_info',
-                    'color_info_topic': '/image_enhanced/camera_info',
-                    'rgb0_info_topic': f'{ASCAMERA}/rgb0/camera_info',
-                    'output_topic': '/fire/detections',
-                }],
+                package="image_pipeline",
+                executable="detection_3d_node",
+                name="detection_3d_node",
+                output="screen",
+                parameters=[
+                    {
+                        "detections_topic": "/yolo_result",
+                        "depth_topic": f"{ASCAMERA}/depth0/image_raw",
+                        "depth_info_topic": f"{ASCAMERA}/depth0/camera_info",
+                        "color_info_topic": "/image_enhanced/camera_info",
+                        "rgb0_info_topic": f"{ASCAMERA}/rgb0/camera_info",
+                        "output_topic": "/fire/detections",
+                    }
+                ],
             ),
             Node(
-                package='uncc_example',
-                executable='vision_detector',
-                name='vision_detector',
-                output='screen',
-                parameters=[{
-                    'camera_info_topic': '/image_enhanced/camera_info',
-                    'depth_frame_id': 'ascamera_color_0',
-                }],
+                package="uncc_example",
+                executable="vision_detector",
+                name="vision_detector",
+                output="screen",
+                parameters=[
+                    {
+                        "camera_info_topic": "/image_enhanced/camera_info",
+                        "depth_frame_id": "ascamera_color_0",
+                    }
+                ],
             ),
         ],
     )
@@ -202,25 +209,25 @@ def generate_launch_description():
         period=9.0,
         actions=[
             Node(
-                package='frontier_exploration_ros2',
-                executable='frontier_explorer',
-                name='frontier_explorer',
-                output='both',
+                package="frontier_exploration_ros2",
+                executable="frontier_explorer",
+                name="frontier_explorer",
+                output="both",
                 parameters=[
                     frontier_params,
                     {
                         # avoidance_manager / fire_suppression_node 에서
                         # STOP / START 를 호출하기 위해 필수
-                        'control_service_enabled': True,
+                        "control_service_enabled": True,
                         # Frontier Controller 로 진행하기 때문에 False 로
-                        'autostart': False,
+                        "autostart": False,
                         # Raspberry Pi 5 에서는 먼저 가볍게 시작
-                        'mrtsp_solver': 'greedy',
-                        'map_processing_rate_hz': 0.5,
+                        "mrtsp_solver": "greedy",
+                        "map_processing_rate_hz": 0.5,
                         # 처음에는 기능을 단순하게
-                        'goal_preemption_enabled': False,
+                        "goal_preemption_enabled": False,
                         # 탐사 완료 후, 시작지점 복귀 True
-                        'return_to_start_on_complete': True,
+                        "return_to_start_on_complete": True,
                     },
                 ],
             ),
@@ -231,14 +238,16 @@ def generate_launch_description():
         period=10.0,
         actions=[
             Node(
-                package='uncc_example',
-                executable='frontier_state_controller',
-                name='frontier_state_controller',
-                output='both',
-                parameters=[{
-                    'frontier_control_service': '/control_exploration',
-                    'stop_timeout_sec': 5.0,
-                }],
+                package="uncc_example",
+                executable="frontier_state_controller",
+                name="frontier_state_controller",
+                output="both",
+                parameters=[
+                    {
+                        "frontier_control_service": "/control_exploration",
+                        "stop_timeout_sec": 5.0,
+                    }
+                ],
             ),
         ],
     )
@@ -251,44 +260,48 @@ def generate_launch_description():
     # =========================================
 
     state_manager = Node(
-        package='uncc_example',
-        executable='state_manager',
-        name='state_manager',
-        output='both',
+        package="uncc_example",
+        executable="state_manager",
+        name="state_manager",
+        output="both",
     )
 
     mission_executor = Node(
-        package='uncc_example',
-        executable='mission_executor',
-        name='mission_executor',
-        output='both',
+        package="uncc_example",
+        executable="mission_executor",
+        name="mission_executor",
+        output="both",
     )
 
-        # 더미 아닌 진짜 노드 — yolo_node 의 /yolo_result 를 직접 구독해
+    # 더미 아닌 진짜 노드 — yolo_node 의 /yolo_result 를 직접 구독해
     # check_fire_status 를 판정한다. 브리지는 필요 없다:
     # /fire/detections 는 검출 0건이면 침묵해서 '꺼짐'을 증명할 수 없다.
     fire_status_real = Node(
-        package='uncc_example',
-        executable='fire_status_service_node',
-        name='fire_status_service_node',
-        output='both',
-        parameters=[{
-            'detections_topic': '/yolo_result',
-            # ★ 학습에 쓴 라벨과 정확히 같아야 함 (대소문자 포함)
-            'fire_class_name': 'fire',
-            'min_score': ParameterValue(
-                LaunchConfiguration('fire_min_score'), value_type=float),
-            'extinguished_ratio': ParameterValue(
-                LaunchConfiguration('fire_extinguished_ratio'), value_type=float),
-        }],
+        package="uncc_example",
+        executable="fire_status_service_node",
+        name="fire_status_service_node",
+        output="both",
+        parameters=[
+            {
+                "detections_topic": "/yolo_result",
+                # ★ 학습에 쓴 라벨과 정확히 같아야 함 (대소문자 포함)
+                "fire_class_name": "fire",
+                "min_score": ParameterValue(
+                    LaunchConfiguration("fire_min_score"), value_type=float
+                ),
+                "extinguished_ratio": ParameterValue(
+                    LaunchConfiguration("fire_extinguished_ratio"), value_type=float
+                ),
+            }
+        ],
     )
 
     # 실제 GPIO13(펌프)/GPIO18(서보) 구동 노드.
     fire_suppression_real = Node(
-        package='uncc_example',
-        executable='fire_suppression_node',
-        name='fire_suppression_node',
-        output='both',
+        package="uncc_example",
+        executable="fire_suppression_node",
+        name="fire_suppression_node",
+        output="both",
     )
 
     # LiDAR보다 낮아서 obstacle_layer 가 못 보는 fire/person 위치를
@@ -296,10 +309,10 @@ def generate_launch_description():
     # found_targets 를 publish 하기 시작하는 시점(t=11) 이후에 떠도
     # 상관없다 — 구독만 하다가 이후 갱신을 받으면 되므로.
     fire_keepout = Node(
-        package='uncc_example',
-        executable='fire_keepout_node',
-        name='fire_keepout_node',
-        output='both',
+        package="uncc_example",
+        executable="fire_keepout_node",
+        name="fire_keepout_node",
+        output="both",
     )
 
     mission_stack = TimerAction(
@@ -313,34 +326,53 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            'model_path', default_value='',
-            description='실제 YOLO 가중치 절대경로 (.onnx | .hef). '
-                        '비우면 yolo_node 가 즉시 에러로 알림'),
-        DeclareLaunchArgument(
-            'class_names', default_value="['fire','person']",
-            description='★ 학습 때 순서 그대로. 순서가 틀리면 불을 사람으로 발행'),
-        DeclareLaunchArgument(
-            'layout', default_value='auto',
-            description='auto | v8 | end2end — 첫 실행 로그의 "레이아웃=" 확인 후 못박을 것'),
-        DeclareLaunchArgument(
-            'threads', default_value='3',
-            description='Pi 5(4코어) 기준 권장값 — ROS·다른 프로세스와 코어 분배'),
-        DeclareLaunchArgument(
-            'fire_min_score', default_value='0.0',
-            description='이 점수 미만 화재 검출은 무시. 0.0=끔. '
-                        'fire_status_service_node 의 주기 통계 로그에 찍히는 '
-                        'score 분포를 보고 정할 것'),
-        DeclareLaunchArgument(
-            'fire_extinguished_ratio', default_value='0.3',
-            description='관찰 구간 내 화재 프레임 비율이 이 값 미만이면 꺼짐 판정'),
-        hardware,
-        camera,
-        slam,
-        nav2,
-        vision,
-        frontier,
-        frontier_state_controller,
-        mission_stack,
-    ])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "model_path",
+                default_value="",
+                description="실제 YOLO 가중치 절대경로 (.onnx | .hef). "
+                "비우면 yolo_node 가 즉시 에러로 알림",
+            ),
+            DeclareLaunchArgument(
+                "class_names",
+                default_value="['fire','person']",
+                description="★ 학습 때 순서 그대로. 순서가 틀리면 불을 사람으로 발행",
+            ),
+            DeclareLaunchArgument(
+                "layout",
+                default_value="auto",
+                description='auto | v8 | end2end — 첫 실행 로그의 "레이아웃=" 확인 후 못박을 것',
+            ),
+            DeclareLaunchArgument(
+                "threads",
+                default_value="3",
+                description="Pi 5(4코어) 기준 권장값 — ROS·다른 프로세스와 코어 분배",
+            ),
+            DeclareLaunchArgument(
+                "conf",
+                default_value="0.75",
+                description="이 confidence 미만 검출은 버림 (0.0~1.0)",
+            ),
+            DeclareLaunchArgument(
+                "fire_min_score",
+                default_value="0.0",
+                description="이 점수 미만 화재 검출은 무시. 0.0=끔. "
+                "fire_status_service_node 의 주기 통계 로그에 찍히는 "
+                "score 분포를 보고 정할 것",
+            ),
+            DeclareLaunchArgument(
+                "fire_extinguished_ratio",
+                default_value="0.3",
+                description="관찰 구간 내 화재 프레임 비율이 이 값 미만이면 꺼짐 판정",
+            ),
+            hardware,
+            camera,
+            slam,
+            nav2,
+            vision,
+            frontier,
+            frontier_state_controller,
+            mission_stack,
+        ]
+    )
