@@ -117,10 +117,10 @@ bt_navigator:
     #enable_groot_monitoring: True
     #groot_zmq_publisher_port: 1666
     #groot_zmq_server_port: 1667
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+    # through_poses 는 안 써서 nav2_bt_navigator 기본값 그대로 둔다.
+    # nav_to_pose 만 odom 기준 0.30m 이동마다 재계획하는 커스텀 트리로 교체
+    # (navigation/behavior_trees/navigate_to_pose_distance_replanning.xml).
+    default_nav_to_pose_bt_xml: "/home/ubuntu/ros2_ws/src/navigation/behavior_trees/navigate_to_pose_distance_replanning.xml"
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
