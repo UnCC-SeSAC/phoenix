@@ -17,14 +17,6 @@ from .log_utils import make_event_logger
 # 식별자가 된다 — 위치 변경 추적/갱신 로직이 따로 필요 없다.
 _COORD_PRECISION = 2
 
-# state_manager 의 7분류 중 아직 처리 전(진압/접근 시도 전)인 상태.
-# 감지 직후 이 상태로 바로 등록해버리면, depth/TF 지연으로 튄 좌표가
-# 진짜 새 화재처럼 여러 개 등록되는 문제가 있어 — 진압이 끝나거나
-# (성공/실패 무관) 사람에게 실제로 도착한(확인/도달불가 무관) 뒤에만
-# keepout 을 등록한다.
-_PENDING_CATEGORIES = frozenset({'fire_unvisited', 'person_unconfirmed'})
-
-
 class FireKeepoutNode(Node):
     """
     /mission/found_targets(state_manager 가 발행하는 fire/person 발견
@@ -38,9 +30,9 @@ class FireKeepoutNode(Node):
     - 한 번 등록된 대상은 상태(진압 완료 등)가 바뀌어도 계속 keepout
       으로 유지한다 — 화재 받침대/컵 같은 실제 물체가 꺼진 뒤에도
       바닥에 남아있고 LiDAR 는 여전히 못 보기 때문.
-    - 감지된 즉시(fire_unvisited/person_unconfirmed 상태)가 아니라,
-      진압/접근이 끝난 뒤에만 등록한다 — depth/TF 지연으로 좌표가
-      튀면 감지 단계에서 같은 대상이 여러 개로 등록될 수 있어서다.
+    - 감지 즉시(fire_unvisited/person_unconfirmed 단계부터) 등록한다 —
+      방문/확인이 끝난 뒤에 등록하면, 그 시점엔 로봇이 이미 바로 옆에
+      서 있어서 자기가 만든 keepout 안에 갇히는 문제가 있었다.
     """
 
     def __init__(self):
@@ -197,11 +189,7 @@ class FireKeepoutNode(Node):
     @staticmethod
     def _keepout_kind(category):
         """state_manager 가 붙이는 7분류(fire_unvisited 등)로 fire/person
-        을 가른다. 아직 처리 전(_PENDING_CATEGORIES)이면 keepout 등록
-        대상이 아니다 — 진압/접근이 끝난 뒤에만 등록한다."""
-
-        if category in _PENDING_CATEGORIES:
-            return None
+        을 가른다."""
 
         if category.startswith('fire_'):
             return 'fire'
