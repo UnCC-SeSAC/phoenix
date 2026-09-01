@@ -162,6 +162,8 @@ def generate_launch_description():
                     'class_names': LaunchConfiguration('class_names'),
                     'layout': LaunchConfiguration('layout'),
                     'threads': LaunchConfiguration('threads'),
+                    'conf': ParameterValue(
+                        LaunchConfiguration('conf'), value_type=float),
                     'input_topic': '/image_enhanced',
                     'detections_topic': '/yolo_result',
                 }],
@@ -327,6 +329,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'threads', default_value='3',
             description='Pi 5(4코어) 기준 권장값 — ROS·다른 프로세스와 코어 분배'),
+        DeclareLaunchArgument(
+            'conf', default_value='0.75',
+            description='이 confidence 미만 검출은 버림 (0.0~1.0)'),
         DeclareLaunchArgument(
             'fire_min_score', default_value='0.0',
             description='이 점수 미만 화재 검출은 무시. 0.0=끔. '
