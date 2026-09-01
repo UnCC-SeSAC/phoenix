@@ -69,11 +69,24 @@ ros2 launch image_pipeline dummy_check.launch.py
 ros2 launch image_pipeline dummy_check.launch.py flame_hole:=true   # depth:null 이 정상
 ```
 
-ROS 없이 도는 테스트 341개:
+ROS 없이 도는 테스트 422개:
 
 ```bash
 python3 -m pytest tests/ -q
 ```
+
+## CPU가 부족할 때
+
+전처리가 코어를 얼마나 먹는지는 **벽시계 시간이 아니라 CPU 시간**으로 봐야
+합니다. OpenCV가 스레드를 늘리면 지연은 줄지만 총 CPU는 늘어나서, 4코어를
+nav2/SLAM/YOLO와 나눠 쓰는 RPi5에서는 손해입니다.
+
+```bash
+python3 tools/bench_cpu.py 연기사진.jpg --stages     # 스레드 수 x 단계별 분해
+```
+
+`config/preprocess.yaml`의 `threads`가 그 손잡이입니다 (기본 1). 해상도를
+올렸다면 노드의 `[perf]` 로그를 보고 2~3으로 올리세요.
 
 ## YOLO 가중치가 오면
 

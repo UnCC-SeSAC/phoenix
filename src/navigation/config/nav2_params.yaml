@@ -137,11 +137,18 @@ local_costmap:
       height: 3
       resolution: 0.03
       robot_radius: 0.05
-      plugins: ["voxel_layer", "inflation_layer"]
+      plugins: ["voxel_layer", "keepout_filter", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0
         inflation_radius: 0.05
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        # fire_keepout_node 가 발행하는 CostmapFilterInfo — 이 안에
+        # filter_mask_topic(/fire_keepout_mask) 정보가 들어있어서
+        # 별도로 mask 토픽을 지정할 필요는 없다.
+        filter_info_topic: "/fire_keepout_mask_info"
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -185,7 +192,11 @@ global_costmap:
       robot_radius: 0.05
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "keepout_filter", "inflation_layer"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/fire_keepout_mask_info"
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True

@@ -13,6 +13,10 @@ class MissionTestPublisher(Node):
     """
     로봇/카메라 없이 state_manager 를 테스트하기 위한 CLI 발행기.
 
+    state_manager 는 start_mission 서비스가 호출되기 전까지 STANDBY 로
+    대기하므로, 상태 전이까지 보려면 먼저 아래를 호출해야 한다:
+    ros2 service call /state_manager/start_mission std_srvs/srv/Trigger "{}"
+
     ros2 run uncc_example mission_test --fire 1.0 2.0
     ros2 run uncc_example mission_test --person 3.0 0.5
     ros2 run uncc_example mission_test --battery 6000

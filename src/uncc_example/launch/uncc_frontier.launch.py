@@ -313,6 +313,11 @@ def generate_launch_description():
     #    이 false 여도 vision_detector 는 이 안에서 같이 뜨지만,
     #    depth 카메라 하드웨어 자체가 안 켜져있으면 그냥 데이터
     #    없이 대기만 한다)
+    #
+    #    state_manager 는 STANDBY 로 시작해서 launch 가 끝나도 자동으로
+    #    탐사를 시작하지 않는다. 카메라/YOLO/서보모터 등 모든 노드가
+    #    bringup 된 걸 확인한 뒤 아래 명령으로 직접 신호를 줘야 한다:
+    #    ros2 service call /state_manager/start_mission std_srvs/srv/Trigger "{}"
     # =========================================
 
     mission = TimerAction(

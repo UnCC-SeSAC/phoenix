@@ -288,6 +288,128 @@ class TestDehazer:
         assert cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).mean() > bg + 20
 
 
+# ------------------------------------------------------- 복원식 최적화 동등성
+
+
+def restore_previous(bgr, t, a):
+    """복원식의 **최적화 전 numpy 구현**. 비교 기준점입니다.
+
+    `DarkChannelDehazer.process` 는 이 식을 cv2 산술로 바꿔 CPU를 절반 이하로
+    줄였습니다(RPi5 10.7ms -> 4.9ms). 여기는 건드리지 마세요.
+
+    ★ 두 구현은 **비트 동일하지 않습니다.** 이쪽은 0~1 영역을 경유했다가
+      (÷255 -> 계산 -> ×255) 마지막에 절단하고, 신규 구현은 0~255 영역에서
+      바로 계산해 반올림합니다. 그래서 수학적으로 정수인 값에서 이쪽은
+      15.9999990 을 얻어 15 로 절단합니다. 차이는 항상 1 레벨 이하이고,
+      float64 정답 기준으로는 **신규 쪽이 더 정확합니다**
+      (평균 절대오차 0.48 vs 0.50 — TestRestoreEquivalence 참고).
+    """
+    img_f = bgr.astype(np.float32) / 255.0
+    out = (img_f - a) / t[..., None] + a
+    return np.clip(out * 255.0, 0, 255).astype(np.uint8)
+
+
+def restore_exact(bgr, t, a):
+    """float64 로 계산한 '정답'. 양쪽 구현의 정확도를 재는 자입니다."""
+    img_f = bgr.astype(np.float64) / 255.0
+    out = (img_f - a.astype(np.float64)) / t[..., None].astype(np.float64) + a.astype(np.float64)
+    return np.clip(out * 255.0, 0.0, 255.0)
+
+
+def _equivalence_images(scene, hazy_set):
+    """★ `t == 1.0` 영역이 넓은 영상을 반드시 포함해야 합니다.
+
+    t=1 이면 복원식이 항등이 되어 결과가 정확히 정수에 떨어지고, 바로 거기서
+    절단/반올림이 갈립니다. 매끈한 합성 영상은 그 영역이 거의 없어 불일치가
+    0.001% 밖에 안 나오는데, **실제 실내 프레임은 7~40%**가 t=1 입니다
+    (한 채널이 0인 어두운/채도 높은 영역 -> 다크채널 0 -> t=1).
+    합성 영상만으로 검증하면 이 차이를 통째로 놓칩니다 — 실제로 놓쳤습니다.
+    """
+    clear, _, _ = scene
+    _, hazy, _, _ = hazy_set
+    rng = np.random.default_rng(7)
+
+    h, w = 240, 320
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    grad = (40 + 180 * (yy / h) + 25 * np.sin(xx / 17.0)).clip(0, 255)
+    zero_ch = np.dstack([grad, grad * 0.8, grad * 0.6]).clip(0, 255).astype(np.uint8)
+    zero_ch[:, : w // 2, 1:] = 0          # 왼쪽 절반의 G,R 을 0 으로 -> t=1 영역
+
+    return {
+        "합성 연기": hazy,
+        "원본": clear,
+        "채널0 영역(t=1 다수)": zero_ch,
+        "랜덤": rng.integers(0, 256, (120, 160, 3), dtype=np.uint8),
+        "포화(흰색)": np.full((64, 64, 3), 255, np.uint8),
+        "암부(검정)": np.zeros((64, 64, 3), np.uint8),
+    }
+
+
+class TestRestoreEquivalence:
+    """★ cv2 복원식이 이전 numpy 식과 **1 레벨 이내로** 같은지 잠급니다.
+
+    비트 동일을 요구하지 않습니다(위 restore_previous 참고). 대신 세 가지를
+    봅니다 — 차이가 1을 넘지 않을 것, 체계적 편향이 없을 것, 정확도가
+    떨어지지 않을 것. 이게 깨지면 전처리 출력 분포가 바뀐 것이고, 필터본으로
+    학습한 YOLO 가중치(`yolo26/0822_filtered_model.pt`)의 입력이 어긋납니다.
+    """
+
+    @pytest.mark.parametrize("a_smoothing", [0.0, 0.85])
+    def test_never_differs_by_more_than_one_level(self, scene, hazy_set, a_smoothing):
+        for name, img in _equivalence_images(scene, hazy_set).items():
+            d = DarkChannelDehazer(scale=0.25, a_smoothing=a_smoothing)
+            out = d.process(img)
+            prev = restore_previous(img, d.last_transmission, d.last_a)
+
+            gap = np.abs(out.astype(np.int16) - prev.astype(np.int16)).max()
+            assert gap <= 1, f"{name}: 최대 차이 {gap} (반올림 범위 초과)"
+
+    def test_no_systematic_bias(self, scene, hazy_set):
+        """★ CV_8U 변환은 반올림인데 이전 구현은 절단이라, A 에서 0.5를 빼는
+        보정이 빠지면 결과가 통째로 +1 밀립니다. 최대차 검사로는 못 잡습니다
+        (그래도 1이니까) — 부호 있는 평균이라야 잡힙니다."""
+        for name, img in _equivalence_images(scene, hazy_set).items():
+            d = DarkChannelDehazer(scale=0.25)
+            out = d.process(img)
+            prev = restore_previous(img, d.last_transmission, d.last_a)
+
+            bias = (out.astype(np.int16) - prev.astype(np.int16)).mean()
+            assert abs(bias) < 0.1, \
+                f"{name}: 체계적 편향 {bias:+.4f} — 절단/반올림 보정이 어긋났습니다"
+
+    def test_accuracy_comparable_to_previous(self, scene, hazy_set):
+        """★ float64 정답 기준으로 두 구현의 정확도가 비슷한 급이어야 합니다.
+
+        '더 정확할 것'을 요구하지 **않습니다.** t=1.0 인 픽셀에서는 복원값이
+        정확히 정수라 `round(N - 0.5)` 가 타이가 되고, OpenCV 는 짝수 반올림이라
+        절반이 위로 절반이 아래로 갑니다. 그래서 영상에 따라 신규가 조금 더
+        정확하기도(실제 프레임 0.480 vs 0.504) 조금 덜 정확하기도(합성 영상
+        0.342 vs 0.316) 합니다. 어느 쪽이든 **0.05 레벨 미만**이면 됩니다.
+
+        타이를 옮겨(0.5 대신 0.499 를 빼서) 정확도를 항상 개선할 수는 있지만,
+        그러면 이전 출력에서 **더 멀어집니다**(불일치 4.4% -> 10.8%). 우리가
+        지키려는 건 절대 정확도가 아니라 학습 때와 같은 출력 분포입니다.
+        """
+        for name, img in _equivalence_images(scene, hazy_set).items():
+            d = DarkChannelDehazer(scale=0.25)
+            out = d.process(img)
+            t, a = d.last_transmission, d.last_a
+            exact = restore_exact(img, t, a)
+
+            err_new = np.abs(out.astype(np.float64) - exact).mean()
+            err_prev = np.abs(restore_previous(img, t, a).astype(np.float64) - exact).mean()
+            assert abs(err_new - err_prev) < 0.05, \
+                f"{name}: 정확도 차이 {err_new - err_prev:+.4f} (신규 {err_new:.4f} / 이전 {err_prev:.4f})"
+
+    def test_still_uint8_and_saturated(self, hazy_set):
+        """cv2 포화 변환이 clip 을 제대로 흡수했는지 (음수 -> 0, 초과 -> 255)."""
+        _, hazy, _, _ = hazy_set
+        # t0 를 낮추면 1/t 가 커져 복원값이 0~255 밖으로 크게 벗어납니다.
+        out = DarkChannelDehazer(scale=0.25, t0=0.02).process(hazy)
+        assert out.dtype == np.uint8
+        assert out.min() >= 0 and out.max() <= 255
+
+
 # ---------------------------------------------------------------- CLAHE
 
 

@@ -48,6 +48,21 @@ class PreprocessNode(Node):
         self._declare_params()
         p = self.get_parameter
 
+        # ★ OpenCV 스레드 수. **다른 무엇보다 먼저** 잡아야 이후 cv2 호출에 적용됩니다.
+        #   기본값(=코어 수)이면 지연시간은 줄지만 총 CPU가 오히려 늘어납니다.
+        #   RPi5 4코어, 640x480, mode=full, 현재 코드 실측 (프레임당):
+        #       threads=4  wall 14.2ms / CPU 34.1ms (코어 2.40개)
+        #       threads=2  wall 15.8ms / CPU 24.5ms
+        #       threads=1  wall 19.3ms / CPU 19.3ms  <- CPU -43%
+        #   CLAHE가 특히 심해서 wall 3.3ms 를 위해 CPU 13.2ms(코어 4.00)를 씁니다.
+        #   카메라가 15fps(ascamera.launch.py)라 예산이 66ms고, threads=1 이어도
+        #   51fps 여력이 남습니다. nav2/SLAM/YOLO와 코어를 나눠 쓰므로 지연보다
+        #   CPU 점유를 줄이는 쪽이 이득입니다.
+        #   ⚠ 프로세스 전역 설정입니다. 0이면 건드리지 않음(yolo_node와 같은 규약).
+        threads = int(p("threads").value)
+        if threads > 0:
+            cv2.setNumThreads(threads)
+
         mode = p("mode").value
         if mode not in MODES:
             self.get_logger().warn(f"알 수 없는 mode '{mode}' -> 'full'로 대체")
@@ -134,7 +149,10 @@ class PreprocessNode(Node):
 
         self.get_logger().info(
             f"[태스크①] {in_topic} -> {out_topic} | mode={self.pipe.mode} "
-            f"| process_width={self.process_width or '원본'}"
+            f"| process_width={self.process_width or '원본'} "
+            # 실제로 몇 스레드로 도는지 남깁니다. 파라미터를 줬는데 안 먹은 경우
+            # (오타로 declare 가 안 됐다든지) 로그만 보고 알 수 있어야 합니다.
+            f"| cv2 threads={cv2.getNumThreads()}"
         )
 
     # ------------------------------------------------------------------ params
@@ -179,6 +197,9 @@ class PreprocessNode(Node):
         self.declare_parameter("auto_tune_every", 10)
         self.declare_parameter("auto_tune_haze_baseline", -1.0)  # 음수 = 자동 학습
 
+        # OpenCV 스레드 수. 0 = 건드리지 않음(= 코어 수). __init__ 의 주석 참고.
+        self.declare_parameter("threads", 0)
+
         self.declare_parameter("stats_period_sec", 5.0)
 
     def on_param_update(self, params):
@@ -192,6 +213,15 @@ class PreprocessNode(Node):
                     )
                 self.pipe.set_mode(v)
                 self.get_logger().info(f"mode -> {v}")
+            elif n == "threads":
+                # 여기서 안 받으면 `ros2 param set ... threads 4` 가 **성공만 하고
+                # 아무 일도 안 합니다.** 로봇에서 스레드 수를 A/B 비교할 때
+                # 재실행 없이 돌려볼 수 있어야 하므로 런타임 반영합니다.
+                # (0 = 건드리지 않음이므로 되돌리려면 명시적으로 값을 줘야 합니다)
+                if int(v) > 0:
+                    cv2.setNumThreads(int(v))
+                self.get_logger().info(
+                    f"threads -> {v} (실제 cv2 스레드 {cv2.getNumThreads()})")
             elif n == "process_width":
                 self.process_width = int(v)
             elif n == "gamma":

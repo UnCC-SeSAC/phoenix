@@ -34,7 +34,6 @@ from rclpy.task import Future
 
 from interfaces.action import SuppressFire
 from interfaces.srv import CheckFireStatus
-from frontier_exploration_ros2.srv import ControlExploration
 
 from .log_utils import make_event_logger
 
@@ -79,8 +78,7 @@ SERVO_SETTLE_SECONDS = 0.6
 SLEEP_TICK_SECONDS = 0.05
 
 # ControlExploration 서비스는 frontier_exploration_ros2가 이미 제공 (수정 불필요)
-CONTROL_EXPLORATION_SERVICE = "control_exploration"
-CHECK_FIRE_STATUS_SERVICE = "check_fire_status"
+CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
 
 
 class FireSuppressionNode(Node):
@@ -101,12 +99,7 @@ class FireSuppressionNode(Node):
             initial_angle=None,
         )
 
-        self.yolo_client = self.create_client(
-            CheckFireStatus, CHECK_FIRE_STATUS_SERVICE
-        )
-        self.exploration_client = self.create_client(
-            ControlExploration, CONTROL_EXPLORATION_SERVICE
-        )
+        self.yolo_client = self.create_client(CheckFireStatus, CHECK_FIRE_STATUS_SERVICE)
 
         # _rclpy_sleep 전용 재사용 타이머. 매 sleep 마다 타이머를 새로
         # 만들고 없애던 방식(과거) 대신, 이 타이머 하나를 계속 돌리면서
@@ -144,45 +137,6 @@ class FireSuppressionNode(Node):
         self.get_logger().info("취소 요청 수신, 다음 안전 시점에 정지합니다.")
         return CancelResponse.ACCEPT
 
-    # ---------------- 탐사 제어 (기존 서비스 재사용) ----------------
-    async def set_exploration_running(self, running: bool):
-        if not self.exploration_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn(
-                "control_exploration 서비스에 연결할 수 없습니다. 탐사 상태를 건드리지 않고 진행합니다."
-            )
-            return
-
-        req = ControlExploration.Request()
-        req.action = (
-            ControlExploration.Request.ACTION_START
-            if running
-            else ControlExploration.Request.ACTION_STOP
-        )
-        req.delay_seconds = 0.0
-        req.quit_after_stop = False
-
-        # no motion trace 로그
-        action_name = "START" if running else "STOP"
-
-        self.get_logger().info(f"[FIRE_FRONTIER_CONTROL_REQUEST] action={action_name}")
-        ###
-
-        future = self.exploration_client.call_async(req)
-        response = await future
-
-        # no motion trace 로그
-        self.get_logger().info(
-            f"[FIRE_FRONTIER_CONTROL_RESPONSE] "
-            f"action={action_name} "
-            f"accepted={response.accepted} "
-            f"state={response.state} "
-            f"message='{response.message}'"
-        )
-
-        self.get_logger().info(
-            f'탐사 {"재개" if running else "정지"} 요청: accepted={response.accepted}, '
-            f"message={response.message}"
-        )
 
     # ---------------- 취소 지원 ----------------
     def _on_sleep_tick(self):
@@ -281,82 +235,60 @@ class FireSuppressionNode(Node):
             feedback_msg = SuppressFire.Feedback()
             result = SuppressFire.Result()
 
-            self._event_logger.info(f"진압 시작. 최대 {max_attempts}회 시도.")
-            # await self.set_exploration_running(False)
+            self._event_logger.info(f'진압 시작. 최대 {max_attempts}회 시도.')
 
-            try:
-                for attempt in range(1, max_attempts + 1):
-                    if goal_handle.is_cancel_requested:
-                        return await self._handle_cancel(goal_handle, attempt - 1)
+            for attempt in range(1, max_attempts + 1):
+                if goal_handle.is_cancel_requested:
+                    return await self._handle_cancel(goal_handle, attempt - 1)
 
-                    self._event_logger.info(f"{attempt}차 진압 시도 시작")
+                self._event_logger.info(f'{attempt}차 진압 시도 시작')
 
-                    feedback_msg.current_attempt = attempt
-                    feedback_msg.status = f"{attempt}차 진압 로직 수행 중"
-                    goal_handle.publish_feedback(feedback_msg)
+                feedback_msg.current_attempt = attempt
+                feedback_msg.status = f'{attempt}차 진압 로직 수행 중'
+                goal_handle.publish_feedback(feedback_msg)
 
-                    cancelled = await self.run_suppression_routine(goal_handle)
-                    if cancelled:
-                        return await self._handle_cancel(goal_handle, attempt)
+                cancelled = await self.run_suppression_routine(goal_handle)
+                if cancelled:
+                    return await self._handle_cancel(goal_handle, attempt)
 
-                    feedback_msg.status = f"{attempt}차 판정 대기 중"
-                    goal_handle.publish_feedback(feedback_msg)
+                feedback_msg.status = f'{attempt}차 상태 확인 중'
+                goal_handle.publish_feedback(feedback_msg)
 
-                    # 관찰 구간이 분사 중 프레임을 덮지 않도록 창 길이만큼 대기.
-                    # interruptible_sleep 이라 대기 중에도 취소는 즉시 먹는다.
-                    cancelled = await self.interruptible_sleep(
-                        goal_handle, STATUS_SETTLE_SECONDS
+                status = await self.check_fire_status_async(STATUS_CHECK_SECONDS)
+
+                if status is None:
+                    self.get_logger().warn('YOLO 응답 없음. 이번 시도는 실패로 간주하고 재시도.')
+                    is_extinguished = False
+                else:
+                    is_extinguished = status.is_extinguished
+                    self._event_logger.info(
+                        f'{attempt}차 판별 결과: {"꺼짐" if is_extinguished else "안꺼짐"} '
+                        f'(확신도 {status.confidence:.2f})'
                     )
+
+                if is_extinguished:
+                    goal_handle.succeed()
+                    result.success = True
+                    result.attempts = attempt
+                    result.message = '진압 성공'
+                    return result
+
+                if attempt < max_attempts:
+                    cancelled = await self.interruptible_sleep(goal_handle, RETRY_WAIT_SECONDS)
                     if cancelled:
                         return await self._handle_cancel(goal_handle, attempt)
 
-                    feedback_msg.status = f"{attempt}차 상태 확인 중"
-                    goal_handle.publish_feedback(feedback_msg)
-
-                    status = await self.check_fire_status_async(STATUS_CHECK_SECONDS)
-
-                    if status is None:
-                        self.get_logger().warn(
-                            "YOLO 응답 없음. 이번 시도는 실패로 간주하고 재시도."
-                        )
-                        is_extinguished = False
-                    else:
-                        is_extinguished = status.is_extinguished
-                        self._event_logger.info(
-                            f'{attempt}차 판별 결과: {"꺼짐" if is_extinguished else "안꺼짐"} '
-                            f"(확신도 {status.confidence:.2f})"
-                        )
-
-                    if is_extinguished:
-                        goal_handle.succeed()
-                        result.success = True
-                        result.attempts = attempt
-                        result.message = "진압 성공"
-                        return result
-
-                    if attempt < max_attempts:
-                        cancelled = await self.interruptible_sleep(
-                            goal_handle, RETRY_WAIT_SECONDS
-                        )
-                        if cancelled:
-                            return await self._handle_cancel(goal_handle, attempt)
-
-                goal_handle.succeed()
-                result.success = False
-                result.attempts = max_attempts
-                result.message = "진압 실패 (최대 시도 횟수 도달)"
-                return result
-
-            finally:
-                # await self.set_exploration_running(True)
-                pass
+            goal_handle.succeed()
+            result.success = False
+            result.attempts = max_attempts
+            result.message = '진압 실패 (최대 시도 횟수 도달)'
+            return result
 
         finally:
             self._busy = False
 
     async def _handle_cancel(self, goal_handle, attempts_done: int):
-        """취소 확정 처리: 펌프 즉시 정지, 서보 중앙 복귀 후 detach, 취소 결과 반환.
-        set_exploration_running(True)는 execute_callback의 finally에서 처리됨."""
+        # 취소 확정 처리: 펌프 즉시 정지, 서보 중앙 복귀 후 detach, 취소 결과 반환.
         self.pump.value = 0.0
         await self._settle_and_detach()
         goal_handle.canceled()
