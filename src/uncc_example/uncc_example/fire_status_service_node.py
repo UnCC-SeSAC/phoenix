@@ -283,7 +283,7 @@ class FireStatusServiceNode(Node):
         else:
             dist = 'score 표본 없음'
 
-        self._event_logger.info(
+        self._event_logger.debug(
             f'프레임 {self._n_frames}건 (화재 {self._n_fire_frames}건) | '
             f'히스토리 {len(self._history)}건 | {dist}')
         self._n_frames = 0

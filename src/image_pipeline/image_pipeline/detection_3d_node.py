@@ -503,17 +503,24 @@ class Detection3DNode(Node):
                f"| 뎁스 {self._n_depth_seen / elapsed:4.1f}Hz "
                f"| 동기화 {self._n_in / elapsed:4.1f}Hz | 발행 {self._n_out}개 "
                f"(누적 불명 {self._n_unknown} / 폴백 {self._n_fallback})")
+        anomaly = False
         if self._n_det_seen and self._n_in == 0:
             # 검출은 오는데 하나도 안 맞음 = stamp 가 뎁스와 전혀 다른 시간대
             msg += "  <-- ★ 검출이 오는데 동기화가 0건입니다. stamp 불일치(slop 초과)를 " \
                    "의심하세요"
+            anomaly = True
         if self._t_proc:
             msg += f" | 처리 {np.mean(self._t_proc):5.2f}ms"
         if self._reasons:
             # ★ "왜 좌표가 안 나오는지"를 현장에서 알 수 없으면 5-1 대응을 못 고릅니다
             msg += " | 제외: " + ", ".join(f"{k}={v}" for k, v in
                                            sorted(self._reasons.items()))
-        self.get_logger().info(msg)
+        # 정상 범위에서는 확인용 주기 로그라 debug로. 동기화가 끊기는 등
+        # 실제 문제가 있을 때만 warn으로 남깁니다.
+        if anomaly:
+            self.get_logger().warn(msg)
+        else:
+            self.get_logger().debug(msg)
         self._n_in = self._n_out = self._n_det_seen = self._n_depth_seen = 0
         self._reasons.clear()
         self._t_proc.clear()
