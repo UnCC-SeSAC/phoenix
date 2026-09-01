@@ -61,8 +61,8 @@ STATUS_SETTLE_SECONDS = STATUS_CHECK_SECONDS
 
 # 서보 스윕 설정 (단순 왕복 방식)
 SERVO_CENTER_ANGLE = 90
-SERVO_SWEEP_RANGE_DEG = 10               # 중앙 기준 +-범위
-SERVO_SWEEP_STEP_SECONDS = 0.6           # 한쪽 끝에서 반대쪽 끝까지 이동하는 데 걸리는 시간
+SERVO_SWEEP_RANGE_DEG = 10  # 중앙 기준 +-범위
+SERVO_SWEEP_STEP_SECONDS = 0.6  # 한쪽 끝에서 반대쪽 끝까지 이동하는 데 걸리는 시간
 
 # 서보 펄스폭 (테스트 스크립트에서 확인된 안전 범위로 조정: 0.0005~0.0025 -> 0.0006~0.0024)
 SERVO_MIN_PULSE_WIDTH = 0.0006
@@ -83,7 +83,7 @@ CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
 
 class FireSuppressionNode(Node):
     def __init__(self):
-        super().__init__('fire_suppression_node')
+        super().__init__("fire_suppression_node")
         self._event_logger = make_event_logger(self)
         self._busy = False
 
@@ -91,8 +91,11 @@ class FireSuppressionNode(Node):
             PUMP_PIN, active_high=False, frequency=PWM_FREQUENCY, initial_value=0.0
         )
         self.servo = AngularServo(
-            SERVO_PIN, min_angle=0, max_angle=180,
-            min_pulse_width=SERVO_MIN_PULSE_WIDTH, max_pulse_width=SERVO_MAX_PULSE_WIDTH,
+            SERVO_PIN,
+            min_angle=0,
+            max_angle=180,
+            min_pulse_width=SERVO_MIN_PULSE_WIDTH,
+            max_pulse_width=SERVO_MAX_PULSE_WIDTH,
             initial_angle=None,
         )
 
@@ -110,13 +113,13 @@ class FireSuppressionNode(Node):
         self._action_server = ActionServer(
             self,
             SuppressFire,
-            'suppress_fire',
+            "suppress_fire",
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
 
-        self.get_logger().info('🔥 화재진압 노드 준비 완료 (Action: suppress_fire)')
+        self.get_logger().info("🔥 화재진압 노드 준비 완료 (Action: suppress_fire)")
 
     def goal_callback(self, goal_request):
         """이미 진압 중이면 새 goal을 거부한다. 이게 없으면 rclpy가
@@ -124,14 +127,14 @@ class FireSuppressionNode(Node):
         돌 수 있고, 그러면 servo/pump/sleep 상태를 여러 코루틴이
         동시에 건드려서 꼬인다."""
         if self._busy:
-            self.get_logger().warn('이미 진압 작업 실행 중 — 새 goal 거부')
+            self.get_logger().warn("이미 진압 작업 실행 중 — 새 goal 거부")
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
         """취소 요청을 받아들일지 결정. rclpy 기본값은 REJECT라서
         명시적으로 ACCEPT 해주지 않으면 취소 요청이 계속 씹힌다."""
-        self.get_logger().info('취소 요청 수신, 다음 안전 시점에 정지합니다.')
+        self.get_logger().info("취소 요청 수신, 다음 안전 시점에 정지합니다.")
         return CancelResponse.ACCEPT
 
 
@@ -159,7 +162,9 @@ class FireSuppressionNode(Node):
         finally:
             self._sleep_future = None
 
-    async def interruptible_sleep(self, goal_handle, seconds: float, poll_interval: float = 0.1):
+    async def interruptible_sleep(
+        self, goal_handle, seconds: float, poll_interval: float = 0.1
+    ):
         """일반 sleep과 달리 취소 요청이 오면 즉시 빠져나온다.
         반환값 True면 도중에 취소된 것."""
         elapsed = 0.0
@@ -212,7 +217,7 @@ class FireSuppressionNode(Node):
     # ---------------- YOLO 상태 확인 ----------------
     async def check_fire_status_async(self, observation_seconds: float):
         if not self.yolo_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().error('check_fire_status 서비스에 연결할 수 없습니다.')
+            self.get_logger().error("check_fire_status 서비스에 연결할 수 없습니다.")
             return None
 
         req = CheckFireStatus.Request()
@@ -291,8 +296,10 @@ class FireSuppressionNode(Node):
         result = SuppressFire.Result()
         result.success = False
         result.attempts = attempts_done
-        result.message = '진압 취소됨 (사용자 요청)'
-        self.get_logger().info(f'진압 작업이 취소되었습니다 ({attempts_done}회 시도 후). 펌프 정지.')
+        result.message = "진압 취소됨 (사용자 요청)"
+        self.get_logger().info(
+            f"진압 작업이 취소되었습니다 ({attempts_done}회 시도 후). 펌프 정지."
+        )
         return result
 
 
@@ -324,5 +331,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
