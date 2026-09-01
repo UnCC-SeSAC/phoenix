@@ -13,31 +13,45 @@ controller_server:
 
     # Progress checker parameters
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
+      plugin: "nav2_controller::PoseProgressChecker" # SimpleProgressChecker
       required_movement_radius: 0.10
       movement_time_allowance: 15.0
+      # 회전도 progress로 인정
+      required_movement_angle: 0.10
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      # 목표 좌표까지 25cm 이내면 도착으로 판단하고 정지 — 불/사람
-      # 좌표를 goal 로 그대로 보내도 그 위로 올라가지 않고 25cm
-      # 앞에서 멈추게 하기 위한 값 (uncc_example state_manager 의
-      # fire/person 접근 목적)
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      # 목표 좌표까지 32cm 이내면 도착으로 판단하고 정지 — 불/사람
+      # 좌표를 goal 로 그대로 보내도 그 위로 올라가지 않고 keepout
+      # zone(fire 0.10m / person 0.20m, fire_keepout_node.py) 바로
+      # 바깥에서 멈추게 하기 위한 값. 로봇 footprint(29cm x 19cm)
+      # 대각선 기준 최대 약 0.195m 여유가 필요해서: fire는
+      # 0.10+0.195=0.295m로 32cm 이내라 안전하지만, person은
+      # 0.20+0.195=0.395m로 32cm를 넘어 대각선 접근 시 keepout
+      # 경계 안으로 못 들어가 "도착" 판정이 안 날 수 있음(후속 과제)
+      xy_goal_tolerance: 0.32
+      yaw_goal_tolerance: 3.14
     # DWB parameters
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      angular_dist_threshold: 0.785
+      forward_sampling_distance: 0.25
+      angular_disengage_threshold: 0.17
+      rotate_to_heading_angular_vel: 0.40
+      max_angular_accel: 1.5
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
       debug_trajectory_details: True
-      min_vel_x: -0.20 # 앞뒤 이동
+      min_vel_x: 0.0 # 앞뒤 이동
       min_vel_y: 0.0 # 좌우 이동
-      max_vel_x: 0.2 # 앞뒤 이동
+      max_vel_x: 0.20 # 앞뒤 이동
       max_vel_y: 0.0 # 좌우 이동
-      max_vel_theta: 1.0
-      min_speed_xy: 0.0
+      max_vel_theta: 0.5
+      min_speed_xy: 0.01
       max_speed_xy: 0.20
-      min_speed_theta: 0.0
+      min_speed_theta: 0.10
       acc_lim_x: 0.8
       acc_lim_y: 0.0 # DWB의 Y축 최대 가속도 (m/s²)
       acc_lim_theta: 1.5
@@ -51,7 +65,7 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.32
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -60,7 +74,7 @@ controller_server:
       ObstacleFootprint: 0.02
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 20.0
       GoalDist.scale: 24.0
@@ -72,4 +86,3 @@ controller_server:
 controller_server_rclcpp_node:
   ros__parameters:
     use_sim_time: False
-

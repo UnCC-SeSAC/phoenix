@@ -281,6 +281,7 @@ class YoloNode(Node):
 
         msg = (f"[YOLO] 입력 {in_hz:4.1f}Hz | 발행 {self._n_pub}건 "
                f"| 검출 {self._n_det}개")
+        anomaly = False
         if self._t_infer:
             mean = float(np.mean(self._t_infer))
             p95 = float(np.percentile(self._t_infer, 95))
@@ -289,14 +290,22 @@ class YoloNode(Node):
             if mean > budget:
                 msg += (f"  <-- ★ 입력 주기 {budget:.1f}ms 초과. 프레임이 밀립니다. "
                         "imgsz를 낮추거나 모델을 n으로 내리세요")
+                anomaly = True
         if self._n_dropped:
             msg += f" | 낡아서 버림 {self._n_dropped}"
         if self._n_failed:
             msg += f" | 실패 {self._n_failed}"
         if self._n_in and not self._n_pub:
             msg += "  <-- 입력은 오는데 하나도 발행하지 않았습니다"
+            anomaly = True
 
-        self.get_logger().info(msg)
+        # 정상 범위에서는 확인용 주기 로그라 debug로. 병목/미발행 등 실제
+        # 문제가 있을 때만 warn으로 남깁니다.
+        if anomaly:
+            self.get_logger().warn(msg)
+        else:
+            self.get_logger().debug(msg)
+            
         self._n_in = self._n_pub = self._n_det = 0
         self._n_dropped = self._n_failed = 0
         self._t_infer.clear()
