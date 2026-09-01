@@ -56,14 +56,9 @@ class FireKeepoutNode(Node):
         self.declare_parameter('mask_topic', '/fire_keepout_mask')
         self.declare_parameter('filter_info_topic', '/fire_keepout_mask_info')
 
-        # 실측 반경(fire 0.05m / person 0.15m) + 위치·depth 오차 여유.
-        # xy_goal_tolerance(nav2_controller_dwb.yaml, 0.32m) 와 로봇
-        # footprint(대각선 최대 약 0.195m) 기준으로, keepout + 0.195m 가
-        # 0.32m 를 넘으면 대각선 접근 시 "No valid trajectories" 로
-        # 실패할 수 있다 — fire 는 여유 있음(0.10+0.195=0.295<0.32),
-        # person 은 여전히 빠듯함(0.20+0.195=0.395>0.32).
-        self.declare_parameter('fire_keepout_radius', 0.10)
-        self.declare_parameter('person_keepout_radius', 0.20)
+        # keepout + footprint(0.195m) <= xy_goal_tolerance(0.32m) 맞춰 축소.
+        self.declare_parameter('fire_keepout_radius', 0.07)
+        self.declare_parameter('person_keepout_radius', 0.125)
 
         self.fire_keepout_radius = (
             self.get_parameter('fire_keepout_radius').value
