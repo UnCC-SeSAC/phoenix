@@ -205,6 +205,13 @@ class StateManager(Node):
 
     def detection_callback(self, msg):
 
+        if not self._mission_started:
+            # STANDBY 동안은 vision 파이프라인이 계속 돌더라도 감지 결과를
+            # found_targets/target_queue 에 쌓지 않는다 — start_mission
+            # 즉시 이전 감지로 EXPLORING 을 건너뛰고 바로 타겟으로 직행하는
+            # 걸 막기 위함.
+            return
+
         try:
             payload = json.loads(msg.data)
         except json.JSONDecodeError as e:
