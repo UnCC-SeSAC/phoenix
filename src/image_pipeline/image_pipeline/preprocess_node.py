@@ -220,7 +220,7 @@ class PreprocessNode(Node):
                 # (0 = 건드리지 않음이므로 되돌리려면 명시적으로 값을 줘야 합니다)
                 if int(v) > 0:
                     cv2.setNumThreads(int(v))
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"threads -> {v} (실제 cv2 스레드 {cv2.getNumThreads()})")
             elif n == "process_width":
                 self.process_width = int(v)
@@ -352,7 +352,7 @@ class PreprocessNode(Node):
                 "process_width를 낮추거나 dehaze_scale을 줄이세요."
             )
         else:
-            self.get_logger().info(msg)
+            self.get_logger().debug(msg)
 
         self._t_total.clear()
         self._t_dehaze.clear()
