@@ -131,8 +131,6 @@ class FireKeepoutNode(Node):
 
     def _map_callback(self, msg):
 
-    def _map_callback(self, msg):
-
         new_info = {
             'resolution': msg.info.resolution,
             'width': msg.info.width,

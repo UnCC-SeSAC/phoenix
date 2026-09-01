@@ -254,7 +254,7 @@ class FireStatusServiceNode(Node):
 
         fire_scores = [s for _, detected, s in recent if detected]
         mean_score = sum(fire_scores) / len(fire_scores) if fire_scores else 0.0
-        self._event_logger.debug(
+        self._event_logger.info(
             f'{len(recent)}건 관찰({observation:.1f}s), 불꽃 감지 비율 '
             f'{ratio:.2f} (평균 점수 {mean_score:.2f}) -> '
             f'{"꺼짐" if is_extinguished else "안꺼짐"} (확신도 {confidence:.2f})'
@@ -283,7 +283,7 @@ class FireStatusServiceNode(Node):
         else:
             dist = 'score 표본 없음'
 
-        self._event_logger.info(
+        self._event_logger.debug(
             f'프레임 {self._n_frames}건 (화재 {self._n_fire_frames}건) | '
             f'히스토리 {len(self._history)}건 | {dist}')
         self._n_frames = 0
