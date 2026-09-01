@@ -48,6 +48,7 @@ class FireKeepoutNode(Node):
         self.declare_parameter('mask_topic', '/fire_keepout_mask')
         self.declare_parameter('filter_info_topic', '/fire_keepout_mask_info')
         self.declare_parameter('circles_topic', '/fire_keepout_circles')
+        self.declare_parameter('suppress_topic', '/fire_keepout_suppress')
 
         # keepout + footprint(0.195m) <= xy_goal_tolerance(0.32m) 맞춰 축소.
         self.declare_parameter('fire_keepout_radius', 0.07)
@@ -66,6 +67,10 @@ class FireKeepoutNode(Node):
         self._map_info = None  # (resolution, width, height, origin_x, origin_y)
         # key -> radius. key = (kind, round(x, _COORD_PRECISION), round(y, ...))
         self._tracked = {}
+        # mission_executor 가 keepout 이탈(Spin/DriveOnHeading) 중에만
+        # 잠깐 mask 에서 빼달라고 요청한 대상들 — _tracked 에서 지우는 게
+        # 아니라 mask/circles 발행에서만 제외한다.
+        self._suppressed = set()
 
         # -----------------------------
         # QoS
@@ -93,6 +98,13 @@ class FireKeepoutNode(Node):
             String,
             self.get_parameter('targets_topic').value,
             self._targets_callback,
+            10,
+        )
+
+        self.create_subscription(
+            String,
+            self.get_parameter('suppress_topic').value,
+            self._suppress_callback,
             10,
         )
 
@@ -195,6 +207,40 @@ class FireKeepoutNode(Node):
         if changed and self._map_info is not None:
             self._publish_mask()
 
+    # =========================================================
+    # /fire_keepout_suppress — mission_executor 가 keepout 이탈
+    # (Spin/DriveOnHeading) 중에만 특정 원을 mask 에서 빼달라고 요청.
+    # Spin 자체가 로컬 costmap 기준으로 스윕 충돌검사를 하기 때문에,
+    # 로봇 발판이 이미 걸친 keepout 을 그대로 두면 회전조차 못 한다.
+    # =========================================================
+
+    def _suppress_callback(self, msg):
+
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f'Invalid fire_keepout_suppress JSON: {e}')
+            return
+
+        x = payload.get('x')
+        y = payload.get('y')
+
+        key = next(
+            (k for k in self._tracked if k[1] == x and k[2] == y),
+            None,
+        )
+
+        if key is None:
+            return
+
+        if payload.get('suppress', True):
+            self._suppressed.add(key)
+        else:
+            self._suppressed.discard(key)
+
+        if self._map_info is not None:
+            self._publish_mask()
+
     @staticmethod
     def _keepout_kind(category):
         """state_manager 가 붙이는 7분류(fire_unvisited 등)로 fire/person
@@ -224,6 +270,9 @@ class FireKeepoutNode(Node):
         grid = [0] * (width * height)
 
         for (kind, x, y), radius in self._tracked.items():
+
+            if (kind, x, y) in self._suppressed:
+                continue
 
             center_col = int((x - origin_x) / resolution)
             center_row = int((y - origin_y) / resolution)
@@ -272,6 +321,7 @@ class FireKeepoutNode(Node):
         circles_msg.data = json.dumps([
             {'x': x, 'y': y, 'radius': radius}
             for (kind, x, y), radius in self._tracked.items()
+            if (kind, x, y) not in self._suppressed
         ])
         self.circles_pub.publish(circles_msg)
 

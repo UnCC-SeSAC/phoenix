@@ -47,6 +47,9 @@ class MissionExecutor(Node):
         self.declare_parameter("keepout_escape_margin", 0.20)
         self.declare_parameter("keepout_escape_speed", 0.10)
         self.declare_parameter("keepout_escape_time_allowance", 10.0)
+        # mask 임시 해제 요청 후 이만큼 안에 확인(circles 갱신)이 안 오면
+        # 포기하고 재시도한다 — fire_keepout_node 가 안 떠 있는 경우 대비.
+        self.declare_parameter("keepout_suppress_confirm_timeout", 2.0)
 
         self.map_frame = self.get_parameter("map_frame").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -58,6 +61,9 @@ class MissionExecutor(Node):
         )
         self.keepout_escape_time_allowance = (
             self.get_parameter("keepout_escape_time_allowance").value
+        )
+        self.keepout_suppress_confirm_timeout = (
+            self.get_parameter("keepout_suppress_confirm_timeout").value
         )
 
         # -----------------------------
@@ -74,10 +80,19 @@ class MissionExecutor(Node):
 
         self._keepout_circles = []  # [(x, y, radius), ...]
         self._escaping = False
+        # mask 임시 해제 요청을 보내고 fire_keepout_node 의 확인
+        # (circles 갱신)을 기다리는 동안만 채워진다: (x, y, radius, distance)
+        self._escape_pending = None
+        self._escape_deadline = None
+        self._escape_x = 0.0
+        self._escape_y = 0.0
         self._escape_distance = 0.0
 
         self._spin_client = ActionClient(self, Spin, "spin")
         self._drive_client = ActionClient(self, DriveOnHeading, "drive_on_heading")
+        self._suppress_pub = self.create_publisher(
+            String, "/fire_keepout_suppress", 10
+        )
 
         # -----------------------------
         # Nav2 (fire/person target 로 이동)
@@ -206,6 +221,17 @@ class MissionExecutor(Node):
             (c["x"], c["y"], c["radius"]) for c in circles
         ]
 
+        if self._escape_pending is not None:
+            x, y, radius, distance = self._escape_pending
+
+            still_present = any(
+                cx == x and cy == y for cx, cy, _ in self._keepout_circles
+            )
+
+            if not still_present:
+                self._escape_pending = None
+                self._proceed_escape(x, y, radius, distance)
+
     # =========================================================
     # Timer / State machine
     # =========================================================
@@ -213,6 +239,16 @@ class MissionExecutor(Node):
     def timer_callback(self):
 
         if self._escaping:
+            if (
+                self._escape_pending is not None
+                and self.get_clock().now() >= self._escape_deadline
+            ):
+                x, y, _, _ = self._escape_pending
+                self.get_logger().warn(
+                    "keepout mask 임시 해제 확인 시간초과 — 이탈 포기하고 재시도"
+                )
+                self._escape_pending = None
+                self._finish_escape(x, y)
             return
 
         if self.state == StateManager.EXPLORING:
@@ -465,6 +501,15 @@ class MissionExecutor(Node):
     # 주는 이유는 nav2 기본 recovery(Spin/BackUp) 는 이게 우리가 만든
     # 원이라는 걸 몰라서 임의 방향으로 시도하기 때문 — 잘못된 방향으로
     # 후퇴하면 안 풀릴 수 있다.
+    #
+    # Spin 은 회전 스윕 전체를 로컬 costmap 기준으로 충돌검사한다
+    # (nav2_behaviors::Spin::isCollisionFree). 로봇 발판이 이미 keepout
+    # 에 걸친 상태에서는 어느 방향으로 돌아도 그 lethal 셀을 스치게 돼서
+    # 매번 "Collision Ahead"로 중간에 멈추고 무한 재시도에 빠진다 — 실제
+    # 하드웨어에서 확인된 문제. 그래서 회전/전진 전에 fire_keepout_node
+    # 에게 그 원 하나만 mask 에서 잠깐 빼달라고 요청하고, circles 토픽에
+    # 반영된 걸 확인한 뒤에야 Spin 을 시작한다(실제 라이다 장애물은
+    # obstacle_layer 그대로라 안전은 유지됨).
     # =========================================================
 
     def _robot_pose_yaw(self):
@@ -505,26 +550,59 @@ class MissionExecutor(Node):
 
         return None
 
+    def _publish_suppress(self, x, y, suppress):
+
+        msg = String()
+        msg.data = json.dumps({"x": x, "y": y, "suppress": suppress})
+        self._suppress_pub.publish(msg)
+
     def _start_keepout_escape(self, overlap):
 
         x, y, radius, distance = overlap
 
+        self._escaping = True
+        self._cancel_nav_goal()
+
+        self._escape_pending = (x, y, radius, distance)
+        self._escape_deadline = (
+            self.get_clock().now()
+            + Duration(seconds=self.keepout_suppress_confirm_timeout)
+        )
+
+        self._event_logger.info(
+            f"keepout 이탈 시작: ({x:.2f}, {y:.2f}) r={radius:.2f}m 안으로 "
+            f"{distance:.2f}m — mask 임시 해제 요청"
+        )
+
+        self._publish_suppress(x, y, True)
+
+    def _finish_escape(self, x, y):
+        """성공/실패/시간초과 상관없이 이탈 시퀀스를 끝낸다 — 잠깐 뺐던
+        keepout 을 되돌리고 다음 tick 부터 정상 주행을 재개한다."""
+
+        self._publish_suppress(x, y, False)
+        self._escaping = False
+
+    def _proceed_escape(self, x, y, radius, distance):
+        """fire_keepout_node 가 mask 에서 해당 원을 뺀 걸 확인한 뒤에만
+        호출된다 — 이제 Spin 이 그 자리를 충돌로 안 본다."""
+
         pose = self._robot_pose_yaw()
 
         if pose is None:
+            self._finish_escape(x, y)
             return
 
         if not self._spin_client.server_is_ready():
             self.get_logger().warn(
-                "spin 액션 서버가 아직 준비되지 않음 — keepout 이탈 보류",
-                throttle_duration_sec=2.0,
+                "spin 액션 서버가 아직 준비되지 않음 — keepout 이탈 중단"
             )
+            self._finish_escape(x, y)
             return
 
         px, py, yaw = pose
 
-        self._escaping = True
-        self._cancel_nav_goal()
+        self._escape_x, self._escape_y = x, y
 
         escape_angle = math.atan2(py - y, px - x)
         relative_yaw = math.atan2(
@@ -536,8 +614,8 @@ class MissionExecutor(Node):
         )
 
         self._event_logger.info(
-            f"keepout 이탈: ({x:.2f}, {y:.2f}) r={radius:.2f}m 안으로 "
-            f"{distance:.2f}m — {math.degrees(relative_yaw):.0f}도 회전 후 "
+            f"keepout 이탈: ({x:.2f}, {y:.2f}) mask 해제 확인 — "
+            f"{math.degrees(relative_yaw):.0f}도 회전 후 "
             f"{self._escape_distance:.2f}m 전진"
         )
 
@@ -556,7 +634,7 @@ class MissionExecutor(Node):
 
         if not goal_handle.accepted:
             self.get_logger().warn("keepout 이탈용 spin goal 이 거부됨")
-            self._escaping = False
+            self._finish_escape(self._escape_x, self._escape_y)
             return
 
         result_future = goal_handle.get_result_async()
@@ -570,12 +648,12 @@ class MissionExecutor(Node):
             self.get_logger().warn(
                 f"keepout 이탈용 spin 실패(status={status}) — 다음 tick 에 재시도"
             )
-            self._escaping = False
+            self._finish_escape(self._escape_x, self._escape_y)
             return
 
         if not self._drive_client.server_is_ready():
             self.get_logger().warn("drive_on_heading 액션 서버가 아직 준비되지 않음")
-            self._escaping = False
+            self._finish_escape(self._escape_x, self._escape_y)
             return
 
         goal = DriveOnHeading.Goal()
@@ -594,7 +672,7 @@ class MissionExecutor(Node):
 
         if not goal_handle.accepted:
             self.get_logger().warn("keepout 이탈용 drive_on_heading goal 이 거부됨")
-            self._escaping = False
+            self._finish_escape(self._escape_x, self._escape_y)
             return
 
         result_future = goal_handle.get_result_async()
@@ -611,7 +689,7 @@ class MissionExecutor(Node):
                 f"keepout 이탈용 전진 실패(status={status}) — 다음 tick 에 재시도"
             )
 
-        self._escaping = False
+        self._finish_escape(self._escape_x, self._escape_y)
 
     # =========================================================
     # 진압 동작 (fire_suppression_node 호출)
