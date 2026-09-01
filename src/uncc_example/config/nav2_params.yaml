@@ -196,7 +196,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0 # 장애물에서 멀어질수록 위험 비용이 얼마나 빠르게 감소할지 결정
-        inflation_radius: 0.20 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
+        inflation_radius: 0.15 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"
         enabled: True
