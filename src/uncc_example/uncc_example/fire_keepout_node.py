@@ -131,13 +131,25 @@ class FireKeepoutNode(Node):
 
     def _map_callback(self, msg):
 
-        self._map_info = {
+    def _map_callback(self, msg):
+
+        new_info = {
             'resolution': msg.info.resolution,
             'width': msg.info.width,
             'height': msg.info.height,
             'origin_x': msg.info.origin.position.x,
             'origin_y': msg.info.origin.position.y,
         }
+
+        # grid 크기/해상도/원점이 그대로면 마스크 내용도 그대로다. SLAM이
+        # /map 을 계속(장애물 변화 없이도) 갱신하므로, 여기서 매번 재발행하면
+        # KeepoutFilter 가 "새 마스크 도착"으로 오인해 매번 로그를 찍는다
+        # — _targets_callback 이 실제로 대상이 바뀔 때 이미 재발행한다.
+        if self._tracked and new_info == self._map_info:
+            self._map_info = new_info
+            return
+
+        self._map_info = new_info
 
         if self._tracked:
             self._publish_mask()
