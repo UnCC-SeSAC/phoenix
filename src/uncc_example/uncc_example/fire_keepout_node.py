@@ -47,6 +47,7 @@ class FireKeepoutNode(Node):
         self.declare_parameter('targets_topic', '/mission/found_targets')
         self.declare_parameter('mask_topic', '/fire_keepout_mask')
         self.declare_parameter('filter_info_topic', '/fire_keepout_mask_info')
+        self.declare_parameter('circles_topic', '/fire_keepout_circles')
 
         # keepout + footprint(0.195m) <= xy_goal_tolerance(0.32m) 맞춰 축소.
         self.declare_parameter('fire_keepout_radius', 0.07)
@@ -107,6 +108,14 @@ class FireKeepoutNode(Node):
         self.filter_info_pub = self.create_publisher(
             CostmapFilterInfo,
             self.get_parameter('filter_info_topic').value,
+            transient_local_qos,
+        )
+
+        # mission_executor 가 "지금 로봇이 어떤 keepout 원과 겹쳤는지"
+        # 판단할 때 쓰는 원본 좌표/반경 목록 (mask 는 격자라 역산이 번거로움).
+        self.circles_pub = self.create_publisher(
+            String,
+            self.get_parameter('circles_topic').value,
             transient_local_qos,
         )
 
@@ -258,6 +267,13 @@ class FireKeepoutNode(Node):
         filter_info_msg.multiplier = 1.0
 
         self.filter_info_pub.publish(filter_info_msg)
+
+        circles_msg = String()
+        circles_msg.data = json.dumps([
+            {'x': x, 'y': y, 'radius': radius}
+            for (kind, x, y), radius in self._tracked.items()
+        ])
+        self.circles_pub.publish(circles_msg)
 
 
 def main(args=None):

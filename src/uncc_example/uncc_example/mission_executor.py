@@ -1,14 +1,22 @@
 import functools
+import json
+import math
 
 import rclpy
 
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.duration import Duration
+from rclpy.time import Time
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 
+from tf2_ros import Buffer, TransformListener, TransformException
+
+from builtin_interfaces.msg import Duration as ActionDuration
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import NavigateToPose
+from geometry_msgs.msg import PoseStamped, Point
+from nav2_msgs.action import NavigateToPose, Spin, DriveOnHeading
 
 from interfaces.action import SuppressFire
 from interfaces.srv import SetString
@@ -30,12 +38,46 @@ class MissionExecutor(Node):
         # Parameters
         # -----------------------------
         self.declare_parameter("action_check_period", 0.2)
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("base_frame", "base_footprint")
+
+        # keepout 원 겹침 판정 여유 — footprint 대각선(약 0.195m)만큼
+        # 남았을 때 걸치는 걸로 본다 (fire_keepout_node 의
+        # registration 여유와 같은 값).
+        self.declare_parameter("keepout_escape_margin", 0.20)
+        self.declare_parameter("keepout_escape_speed", 0.10)
+        self.declare_parameter("keepout_escape_time_allowance", 10.0)
+
+        self.map_frame = self.get_parameter("map_frame").value
+        self.base_frame = self.get_parameter("base_frame").value
+        self.keepout_escape_margin = (
+            self.get_parameter("keepout_escape_margin").value
+        )
+        self.keepout_escape_speed = (
+            self.get_parameter("keepout_escape_speed").value
+        )
+        self.keepout_escape_time_allowance = (
+            self.get_parameter("keepout_escape_time_allowance").value
+        )
 
         # -----------------------------
         # State (state_manager 로부터 받은 값)
         # -----------------------------
         self.state = None
         self.current_target = None
+
+        # -----------------------------
+        # Keepout 이탈 (주행 중 새로 걸친 mask 를 감지해서 빠져나감)
+        # -----------------------------
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self._keepout_circles = []  # [(x, y, radius), ...]
+        self._escaping = False
+        self._escape_distance = 0.0
+
+        self._spin_client = ActionClient(self, Spin, "spin")
+        self._drive_client = ActionClient(self, DriveOnHeading, "drive_on_heading")
 
         # -----------------------------
         # Nav2 (fire/person target 로 이동)
@@ -84,6 +126,22 @@ class MissionExecutor(Node):
             "/mission/current_target",
             self.target_callback,
             10,
+        )
+
+        # fire_keepout_node 와 동일한 QoS(transient_local) 여야 늦게
+        # 떠도 마지막 값을 받는다.
+        keepout_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        self.create_subscription(
+            String,
+            "/fire_keepout_circles",
+            self._keepout_circles_callback,
+            keepout_qos,
         )
 
         # -----------------------------
@@ -136,11 +194,26 @@ class MissionExecutor(Node):
     def target_callback(self, msg):
         self.current_target = msg
 
+    def _keepout_circles_callback(self, msg):
+
+        try:
+            circles = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f"Invalid fire_keepout_circles JSON: {e}")
+            return
+
+        self._keepout_circles = [
+            (c["x"], c["y"], c["radius"]) for c in circles
+        ]
+
     # =========================================================
     # Timer / State machine
     # =========================================================
 
     def timer_callback(self):
+
+        if self._escaping:
+            return
 
         if self.state == StateManager.EXPLORING:
             self.process_exploring()
@@ -157,6 +230,17 @@ class MissionExecutor(Node):
                 f"[{self.state}] target={self._target_str()}",
                 throttle_duration_sec=1.0,
             )
+
+            # 주행 중 새로 검출된 물체가 경로 위에서 keepout 으로 잡혀
+            # 로봇 발판과 겹치는 경우 — nav2 recovery 는 이게 우리가
+            # 만든 원이라는 걸 몰라서 방향을 못 잡는다. 우리가 direct
+            # 로 방향을 계산해서 빠져나간다.
+            if self._nav_goal_handle is not None:
+                overlap = self._find_keepout_overlap()
+
+                if overlap is not None:
+                    self._start_keepout_escape(overlap)
+                    return
 
             # frontier 관련 추가 부분
             if self._frontier_request_pending:
@@ -373,6 +457,161 @@ class MissionExecutor(Node):
                 f"넘어감 (status={status})"
             )
             self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+
+    # =========================================================
+    # Keepout 이탈 — 주행 중 로봇 발판이 keepout 원과 겹치면, 그 원의
+    # 중심에서 로봇 쪽으로 향하는 방향으로 회전(Spin) 후 전진
+    # (DriveOnHeading) 해서 빠져나간다. 방향을 우리가 직접 계산해서
+    # 주는 이유는 nav2 기본 recovery(Spin/BackUp) 는 이게 우리가 만든
+    # 원이라는 걸 몰라서 임의 방향으로 시도하기 때문 — 잘못된 방향으로
+    # 후퇴하면 안 풀릴 수 있다.
+    # =========================================================
+
+    def _robot_pose_yaw(self):
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                self.base_frame,
+                Time(),
+                timeout=Duration(seconds=0.1),
+            )
+        except TransformException:
+            return None
+
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+
+        return (t.x, t.y, yaw)
+
+    def _find_keepout_overlap(self):
+
+        pose = self._robot_pose_yaw()
+
+        if pose is None:
+            return None
+
+        px, py, _ = pose
+
+        for x, y, radius in self._keepout_circles:
+            distance = math.hypot(px - x, py - y)
+
+            if distance < radius + self.keepout_escape_margin:
+                return (x, y, radius, distance)
+
+        return None
+
+    def _start_keepout_escape(self, overlap):
+
+        x, y, radius, distance = overlap
+
+        pose = self._robot_pose_yaw()
+
+        if pose is None:
+            return
+
+        if not self._spin_client.server_is_ready():
+            self.get_logger().warn(
+                "spin 액션 서버가 아직 준비되지 않음 — keepout 이탈 보류",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        px, py, yaw = pose
+
+        self._escaping = True
+        self._cancel_nav_goal()
+
+        escape_angle = math.atan2(py - y, px - x)
+        relative_yaw = math.atan2(
+            math.sin(escape_angle - yaw), math.cos(escape_angle - yaw)
+        )
+        # 여유(margin) + 약간의 버퍼(0.05m)만큼 더 벌어질 때까지 전진.
+        self._escape_distance = (
+            radius + self.keepout_escape_margin + 0.05 - distance
+        )
+
+        self._event_logger.info(
+            f"keepout 이탈: ({x:.2f}, {y:.2f}) r={radius:.2f}m 안으로 "
+            f"{distance:.2f}m — {math.degrees(relative_yaw):.0f}도 회전 후 "
+            f"{self._escape_distance:.2f}m 전진"
+        )
+
+        goal = Spin.Goal()
+        goal.target_yaw = relative_yaw
+        goal.time_allowance = ActionDuration(
+            sec=int(self.keepout_escape_time_allowance)
+        )
+
+        send_future = self._spin_client.send_goal_async(goal)
+        send_future.add_done_callback(self._spin_goal_response)
+
+    def _spin_goal_response(self, future):
+
+        goal_handle = future.result()
+
+        if not goal_handle.accepted:
+            self.get_logger().warn("keepout 이탈용 spin goal 이 거부됨")
+            self._escaping = False
+            return
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._spin_goal_result)
+
+    def _spin_goal_result(self, future):
+
+        status = future.result().status
+
+        if status != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().warn(
+                f"keepout 이탈용 spin 실패(status={status}) — 다음 tick 에 재시도"
+            )
+            self._escaping = False
+            return
+
+        if not self._drive_client.server_is_ready():
+            self.get_logger().warn("drive_on_heading 액션 서버가 아직 준비되지 않음")
+            self._escaping = False
+            return
+
+        goal = DriveOnHeading.Goal()
+        goal.target = Point(x=self._escape_distance, y=0.0, z=0.0)
+        goal.speed = self.keepout_escape_speed
+        goal.time_allowance = ActionDuration(
+            sec=int(self.keepout_escape_time_allowance)
+        )
+
+        send_future = self._drive_client.send_goal_async(goal)
+        send_future.add_done_callback(self._drive_goal_response)
+
+    def _drive_goal_response(self, future):
+
+        goal_handle = future.result()
+
+        if not goal_handle.accepted:
+            self.get_logger().warn("keepout 이탈용 drive_on_heading goal 이 거부됨")
+            self._escaping = False
+            return
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._drive_goal_result)
+
+    def _drive_goal_result(self, future):
+
+        status = future.result().status
+
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            self._event_logger.info("keepout 이탈 완료")
+        else:
+            self.get_logger().warn(
+                f"keepout 이탈용 전진 실패(status={status}) — 다음 tick 에 재시도"
+            )
+
+        self._escaping = False
 
     # =========================================================
     # 진압 동작 (fire_suppression_node 호출)
