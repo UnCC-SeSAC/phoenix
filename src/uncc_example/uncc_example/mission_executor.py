@@ -69,7 +69,7 @@ class MissionExecutor(Node):
         # 사람/불 중심은 keepout lethal cell 이므로 그 바깥의 접근점을
         # Nav2 목표로 사용한다.
         self.declare_parameter("person_approach_distance", 0.50)
-        self.declare_parameter("fire_approach_distance", 0.45)
+        self.declare_parameter("fire_approach_distance", 0.25)
         self.declare_parameter("approach_clearance_radius", 0.20)
         self.declare_parameter("costmap_occupied_threshold", 90)
 
@@ -100,24 +100,18 @@ class MissionExecutor(Node):
 
         self.map_frame = self.get_parameter("map_frame").value
         self.base_frame = self.get_parameter("base_frame").value
-        self.keepout_escape_margin = (
-            self.get_parameter("keepout_escape_margin").value
-        )
-        self.keepout_escape_speed = (
-            self.get_parameter("keepout_escape_speed").value
-        )
-        self.keepout_escape_time_allowance = (
-            self.get_parameter("keepout_escape_time_allowance").value
-        )
-        self.keepout_suppress_confirm_timeout = (
-            self.get_parameter("keepout_suppress_confirm_timeout").value
-        )
+        self.keepout_escape_margin = self.get_parameter("keepout_escape_margin").value
+        self.keepout_escape_speed = self.get_parameter("keepout_escape_speed").value
+        self.keepout_escape_time_allowance = self.get_parameter(
+            "keepout_escape_time_allowance"
+        ).value
+        self.keepout_suppress_confirm_timeout = self.get_parameter(
+            "keepout_suppress_confirm_timeout"
+        ).value
         self.person_approach_distance = self.get_parameter(
             "person_approach_distance"
         ).value
-        self.fire_approach_distance = self.get_parameter(
-            "fire_approach_distance"
-        ).value
+        self.fire_approach_distance = self.get_parameter("fire_approach_distance").value
         self.approach_clearance_radius = self.get_parameter(
             "approach_clearance_radius"
         ).value
@@ -201,9 +195,7 @@ class MissionExecutor(Node):
 
         self._spin_client = ActionClient(self, Spin, "spin")
         self._drive_client = ActionClient(self, DriveOnHeading, "drive_on_heading")
-        self._suppress_pub = self.create_publisher(
-            String, "/fire_keepout_suppress", 10
-        )
+        self._suppress_pub = self.create_publisher(String, "/fire_keepout_suppress", 10)
 
         # -----------------------------
         # Nav2 (fire/person target 로 이동)
@@ -417,9 +409,7 @@ class MissionExecutor(Node):
             self.get_logger().warn(f"Invalid fire_keepout_circles JSON: {e}")
             return
 
-        self._keepout_circles = [
-            (c["x"], c["y"], c["radius"]) for c in circles
-        ]
+        self._keepout_circles = [(c["x"], c["y"], c["radius"]) for c in circles]
 
         if self._escape_pending is not None:
             x, y, radius, distance = self._escape_pending
@@ -496,7 +486,8 @@ class MissionExecutor(Node):
             )
 
             if (
-                self.state in (
+                self.state
+                in (
                     StateManager.PERSON_DETECTED,
                     StateManager.FIRE_DETECTED,
                 )
@@ -681,7 +672,7 @@ class MissionExecutor(Node):
         if target_circle is not None:
             distance = max(
                 distance,
-                target_circle[2] + self.approach_clearance_radius + 0.05,
+                target_circle[2] + self.approach_clearance_radius,
             )
 
         selected = None
@@ -858,7 +849,8 @@ class MissionExecutor(Node):
 
     def _mission_cmd_vel_callback(self, msg):
         if (
-            self.state not in (
+            self.state
+            not in (
                 StateManager.PERSON_DETECTED,
                 StateManager.FIRE_DETECTED,
             )
@@ -990,8 +982,7 @@ class MissionExecutor(Node):
 
         if status != GoalStatus.STATUS_CANCELED:
             self.get_logger().warn(
-                "회전 진동 취소 중 Nav2 goal이 다른 상태로 종료됨"
-                f"(status={status})"
+                "회전 진동 취소 중 Nav2 goal이 다른 상태로 종료됨" f"(status={status})"
             )
             self._finish_mission_recovery(False)
             return
@@ -1136,8 +1127,7 @@ class MissionExecutor(Node):
             return
 
         self.get_logger().warn(
-            "회전 진동 recovery가 전진하지 못함 — cooldown 후 "
-            "같은 대상을 재시도"
+            "회전 진동 recovery가 전진하지 못함 — cooldown 후 " "같은 대상을 재시도"
         )
         if self._mission_recovery_retry_count >= self.mission_recovery_max_retries:
             self._exhaust_mission_recovery("안전 전진 recovery 반복 실패")
@@ -1160,9 +1150,7 @@ class MissionExecutor(Node):
         self._mission_recovering = False
         self._mission_recovery_exhausted = True
         self._cancel_nav_goal()
-        self.get_logger().error(
-            f"{reason} — 현재 사람/불 목표를 도달 불가로 처리함"
-        )
+        self.get_logger().error(f"{reason} — 현재 사람/불 목표를 도달 불가로 처리함")
         self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
 
     # =========================================================
@@ -1238,9 +1226,8 @@ class MissionExecutor(Node):
         self._cancel_nav_goal()
 
         self._escape_pending = (x, y, radius, distance)
-        self._escape_deadline = (
-            self.get_clock().now()
-            + Duration(seconds=self.keepout_suppress_confirm_timeout)
+        self._escape_deadline = self.get_clock().now() + Duration(
+            seconds=self.keepout_suppress_confirm_timeout
         )
 
         self._event_logger.info(
@@ -1283,9 +1270,7 @@ class MissionExecutor(Node):
             math.sin(escape_angle - yaw), math.cos(escape_angle - yaw)
         )
         # 여유(margin) + 약간의 버퍼(0.05m)만큼 더 벌어질 때까지 전진.
-        self._escape_distance = (
-            radius + self.keepout_escape_margin + 0.05 - distance
-        )
+        self._escape_distance = radius + self.keepout_escape_margin + 0.05 - distance
 
         self._event_logger.info(
             f"keepout 이탈: ({x:.2f}, {y:.2f}) mask 해제 확인 — "
@@ -1396,9 +1381,8 @@ class MissionExecutor(Node):
         self._facing_fire = True
 
         self._face_pending = (x, y)
-        self._face_deadline = (
-            self.get_clock().now()
-            + Duration(seconds=self.keepout_suppress_confirm_timeout)
+        self._face_deadline = self.get_clock().now() + Duration(
+            seconds=self.keepout_suppress_confirm_timeout
         )
 
         self._event_logger.info(
