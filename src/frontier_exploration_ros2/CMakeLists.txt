@@ -90,39 +90,6 @@ ament_target_dependencies(frontier_explorer
   rclcpp
 )
 
-add_executable(frontier_exploration_ctl
-  src/frontier_exploration_ctl.cpp
-)
-target_compile_features(frontier_exploration_ctl PUBLIC cxx_std_17)
-target_link_libraries(frontier_exploration_ctl
-  ${cpp_typesupport_target}
-)
-ament_target_dependencies(frontier_exploration_ctl
-  rclcpp
-)
-
-# Passive RViz debug observer. It links against the core library to reuse the
-# same frontier extraction and scoring code, but it is installed as a separate
-# executable so visualization never becomes part of the navigation control path.
-add_executable(frontier_debug_observer
-  src/debug/debug_observer_node.cpp
-  src/debug/debug_analyzer.cpp
-  src/debug/debug_markers.cpp
-)
-target_compile_features(frontier_debug_observer PUBLIC cxx_std_17)
-target_link_libraries(frontier_debug_observer
-  ${PROJECT_NAME}_core
-)
-ament_target_dependencies(frontier_debug_observer
-  geometry_msgs
-  nav_msgs
-  rclcpp
-  std_msgs
-  tf2
-  tf2_ros
-  visualization_msgs
-)
-
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
   include(CheckIPOSupported)
   check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
@@ -130,8 +97,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
     set_property(TARGET ${PROJECT_NAME}_core PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     set_property(TARGET ${PROJECT_NAME}_node PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     set_property(TARGET frontier_explorer PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-    set_property(TARGET frontier_exploration_ctl PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-    set_property(TARGET frontier_debug_observer PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
   endif()
 endif()
 
@@ -148,8 +113,6 @@ install(
 install(
   TARGETS
     frontier_explorer
-    frontier_exploration_ctl
-    frontier_debug_observer
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -160,7 +123,6 @@ install(
 
 install(
   DIRECTORY
-    launch
     config
     srv
   DESTINATION share/${PROJECT_NAME}
