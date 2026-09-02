@@ -10,6 +10,7 @@ from action_msgs.msg import GoalStatus
 from interfaces.action import SuppressFire
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 
@@ -27,6 +28,13 @@ class VLASprayBridge(Node):
         self._active_action_id: str | None = None
         self._active_fire_id: str | None = None
         self._goal_handle = None
+        self._control_mode = 'NONE'
+        control_qos = QoSProfile(depth=1)
+        control_qos.reliability = ReliabilityPolicy.RELIABLE
+        control_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.create_subscription(
+            String, '/vla/control_mode', self._control_mode_callback, control_qos
+        )
         self.get_logger().info(
             'VLA spray bridge ready: /vla/spray_command -> /suppress_fire'
         )
@@ -40,6 +48,12 @@ class VLASprayBridge(Node):
                 raise ValueError('command must be SPRAY')
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f'invalid VLA spray command: {exc}')
+            return
+
+        if self._control_mode != 'VLA':
+            self._publish_result(
+                action_id, fire_id, 'FAILED', 'CONTROL_MODE_MISMATCH'
+            )
             return
 
         if self._active_action_id is not None:
@@ -57,6 +71,9 @@ class VLASprayBridge(Node):
         self._active_fire_id = fire_id
         future = self._client.send_goal_async(goal)
         future.add_done_callback(self._on_goal_response)
+
+    def _control_mode_callback(self, msg: String) -> None:
+        self._control_mode = msg.data.strip().upper()
 
     def _on_goal_response(self, future) -> None:
         try:

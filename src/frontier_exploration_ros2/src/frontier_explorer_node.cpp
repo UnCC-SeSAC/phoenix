@@ -23,6 +23,7 @@ limitations under the License.
 #include <rcutils/logging.h>
 #include <rclcpp/duration.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2/exceptions.h>
 
 #include <algorithm>
@@ -78,6 +79,10 @@ private:
 FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
 : Node("frontier_explorer", options)
 {
+  auto control_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+  control_mode_sub_ = this->create_subscription<std_msgs::msg::String>(
+    "/vla/control_mode", control_qos,
+    [this](const std_msgs::msg::String::SharedPtr msg) {control_mode_ = msg->data;});
   // Declare full user-facing integration surface (topics, behavior, QoS, integration hooks).
   // Topic/action defaults are namespace-aware (no leading slash) for multi-robot composability.
   this->declare_parameter<std::string>("map_topic", "map");
@@ -1274,6 +1279,10 @@ bool FrontierExplorerNode::debugOutputsEnabled() const
 
 void FrontierExplorerNode::dispatchGoalRequest(const GoalDispatchRequest & request)
 {
+  if (control_mode_ != "RULE_BASED") {
+    RCLCPP_WARN(this->get_logger(), "CONTROL_MODE_MISMATCH");
+    return;
+  }
   NavigateToPose::Goal goal_request;
   // Core provides fully prepared pose/action metadata in request.
   goal_request.pose = request.goal_pose;

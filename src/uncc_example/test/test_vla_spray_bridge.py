@@ -29,6 +29,7 @@ def bridge_stub():
         _active_action_id=None,
         _active_fire_id=None,
         _goal_handle=None,
+        _control_mode='VLA',
         _client=SimpleNamespace(wait_for_server=lambda timeout_sec: False),
         _result_pub=FakePublisher(),
         get_logger=lambda: FakeLogger(),
@@ -97,3 +98,21 @@ def test_invalid_command_never_reaches_action_server():
     assert calls == []
     assert bridge._result_pub.messages == []
     assert logger.warnings
+
+
+def test_none_mode_blocks_new_suppression_goal():
+    calls = []
+    bridge = bridge_stub()
+    bridge._control_mode = 'NONE'
+    bridge._client = SimpleNamespace(
+        wait_for_server=lambda timeout_sec: calls.append(timeout_sec)
+    )
+    msg = String()
+    msg.data = json.dumps({
+        'action_id': 'action_0002', 'fire_id': 'fire_0001', 'command': 'SPRAY'
+    })
+
+    VLASprayBridge._on_command(bridge, msg)
+
+    assert calls == []
+    assert bridge._result_pub.messages[-1]['message'] == 'CONTROL_MODE_MISMATCH'

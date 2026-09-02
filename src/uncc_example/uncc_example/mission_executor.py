@@ -2,6 +2,7 @@ import rclpy
 
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import Bool, String
@@ -32,7 +33,8 @@ class MissionExecutor(Node):
         self.state = None
         self.target_type = None
         self.current_target = None
-        self.mission_enabled = True
+        self.mission_enabled = False
+        self.control_mode = "NONE"
 
         # -----------------------------
         # Nav2 (fire/person target 로 이동)
@@ -98,6 +100,12 @@ class MissionExecutor(Node):
             self.mission_enabled_callback,
             10,
         )
+        control_qos = QoSProfile(depth=1)
+        control_qos.reliability = ReliabilityPolicy.RELIABLE
+        control_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.create_subscription(
+            String, "/vla/control_mode", self.control_mode_callback, control_qos
+        )
 
         # -----------------------------
         # state_manager 에게 현재 목적지 처리가 끝났음을 알리는 클라이언트
@@ -151,13 +159,16 @@ class MissionExecutor(Node):
     def mission_enabled_callback(self, msg):
         self.mission_enabled = bool(msg.data)
 
+    def control_mode_callback(self, msg):
+        self.control_mode = msg.data.strip().upper()
+
     # =========================================================
     # Timer / State machine
     # =========================================================
 
     def timer_callback(self):
 
-        if not self.mission_enabled:
+        if self.control_mode != "RULE_BASED" or not self.mission_enabled:
             self._cancel_nav_goal()
             self._cancel_fire_suppression()
             if (
@@ -290,6 +301,9 @@ class MissionExecutor(Node):
 
     def _send_nav_goal(self, pose_stamped):
 
+        if self.control_mode != "RULE_BASED":
+            return
+
         if pose_stamped is None:
             return
 
@@ -390,6 +404,9 @@ class MissionExecutor(Node):
         완료 여부는 여기서 기다리지 않고 _suppress_goal_result 에서
         처리한다.
         """
+
+        if self.control_mode != "RULE_BASED":
+            return
 
         if self._fire_cycle_active:
             return

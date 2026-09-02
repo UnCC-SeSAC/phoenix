@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from std_msgs.msg import String
 except ImportError:
     rclpy = None
@@ -24,7 +25,9 @@ _MAX_REQUEST_BYTES = 64 * 1024
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 _VLA_MODE = "VLA"
 _RULE_BASED_MODE = "RULE_BASED"
+_NONE_MODE = "NONE"
 _ALLOWED_MODES = {_VLA_MODE, _RULE_BASED_MODE}
+_ALLOWED_CONTROL_MODES = {*_ALLOWED_MODES, _NONE_MODE}
 _RULE_BASED_COMMANDS = {"START", "STOP"}
 
 
@@ -34,6 +37,15 @@ def normalize_mode(value: str | None) -> str:
     mode = (value or _VLA_MODE).strip().upper()
     if mode not in _ALLOWED_MODES:
         raise ValueError("mode는 VLA 또는 RULE_BASED여야 합니다.")
+    return mode
+
+
+def normalize_control_mode(value: str | None) -> str:
+    if not isinstance(value, str):
+        raise ValueError("mode는 문자열이어야 합니다.")
+    mode = value.strip().upper()
+    if mode not in _ALLOWED_CONTROL_MODES:
+        raise ValueError("mode는 NONE, VLA 또는 RULE_BASED여야 합니다.")
     return mode
 
 
@@ -66,6 +78,57 @@ class StatusStore:
         mode = normalize_mode(mode)
         with self._lock:
             return copy.deepcopy(self._statuses[mode])
+
+
+class ControlModeOwner:
+    """Server-owned command mode; action lifecycle remains in existing runtimes."""
+
+    def __init__(self, publish: Callable[[str], None]) -> None:
+        self._lock = threading.Lock()
+        self._mode = _NONE_MODE
+        self._active = False
+        self._publish = publish
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            return {"active_control_mode": self._mode, "active_action": self._active}
+
+    def select(self, mode: str) -> dict[str, Any]:
+        mode = normalize_control_mode(mode)
+        with self._lock:
+            if self._active and mode != self._mode:
+                raise ValueError("MODE_CHANGE_BLOCKED_ACTIVE_ACTION")
+            self._mode = mode
+            self._publish(mode)
+            return {"active_control_mode": self._mode, "active_action": self._active}
+
+    def begin(self, mode: str, *, stop: bool = False) -> None:
+        mode = normalize_mode(mode)
+        with self._lock:
+            if mode != self._mode:
+                raise ValueError("CONTROL_MODE_MISMATCH")
+            self._active = not stop
+
+    def observe_terminal(self, mode: str, status: dict[str, Any]) -> None:
+        with self._lock:
+            if mode != self._mode:
+                return
+            if mode == _VLA_MODE:
+                world = status.get("world_model") or {}
+                mission = world.get("mission") or {}
+                terminal = mission.get("status") in {
+                    "COMPLETED", "FAILED", "ABORTED", "CANCELED"
+                }
+                if terminal and world.get("current_action") is None:
+                    self._active = False
+            else:
+                mission = status.get("mission") or {}
+                if mission.get("last_command", {}).get("command") == "STOP":
+                    self._active = False
+                elif mission.get("state") in {
+                    "COMPLETED", "FAILED", "ABORTED", "CANCELED", "IDLE"
+                }:
+                    self._active = False
 
 
 def validate_server_config(host: str, port: int) -> tuple[str, int]:
@@ -108,11 +171,13 @@ class FirefighterHTTPServer:
         status_store: StatusStore,
         submit_mission: Callable[[str], dict[str, str]],
         *,
+        control_owner: ControlModeOwner | None = None,
         index_html: bytes | None = None,
     ) -> None:
         host, port = validate_server_config(host, port)
         self._status_store = status_store
         self._submit_mission = submit_mission
+        self._control_owner = control_owner or ControlModeOwner(lambda _mode: None)
         self._index_html = index_html or (
             files("fire_vla_core.web").joinpath("index.html").read_bytes()
         )
@@ -178,9 +243,26 @@ class FirefighterHTTPServer:
                         HTTPStatus.OK, owner._status_store.get(mode)
                     )
                     return
+                if parsed.path == "/api/control-mode":
+                    self._send_json(HTTPStatus.OK, owner._control_owner.get())
+                    return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
             def do_POST(self) -> None:
+                if self.path == "/api/control-mode":
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                        if length <= 0 or length > _MAX_REQUEST_BYTES:
+                            raise ValueError("invalid content length")
+                        data = json.loads(self.rfile.read(length).decode("utf-8"))
+                        if not isinstance(data, dict):
+                            raise ValueError("JSON object가 필요합니다.")
+                        selected = owner._control_owner.select(data.get("mode"))
+                    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                        self._send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                        return
+                    self._send_json(HTTPStatus.OK, selected)
+                    return
                 if self.path != "/api/mission":
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                     return
@@ -197,6 +279,9 @@ class FirefighterHTTPServer:
                     mode = normalize_mode(data.get("mode"))
                     if mode == _RULE_BASED_MODE:
                         text = normalize_rule_based_command(text)
+                    owner._control_owner.begin(
+                        mode, stop=(mode == _RULE_BASED_MODE and text == "STOP")
+                    )
                     mission = (
                         owner._submit_mission(text)
                         if mode == _VLA_MODE
@@ -256,6 +341,14 @@ class FirefighterUINode(Node):
             str(self.get_parameter("rule_based_mission_topic").value),
             10,
         )
+        control_qos = QoSProfile(depth=1)
+        control_qos.reliability = ReliabilityPolicy.RELIABLE
+        control_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self._control_mode_pub = self.create_publisher(
+            String, "/vla/control_mode", control_qos
+        )
+        self._control_owner = ControlModeOwner(self._publish_control_mode)
+        self._publish_control_mode(_NONE_MODE)
         self.create_subscription(
             String,
             str(self.get_parameter("status_topic").value),
@@ -273,6 +366,7 @@ class FirefighterUINode(Node):
             int(self.get_parameter("ui_port").value),
             self._store,
             self._publish_mission,
+            control_owner=self._control_owner,
         )
         self._http.start()
         host, port = self._http.address
@@ -290,6 +384,7 @@ class FirefighterUINode(Node):
             if not isinstance(data, dict):
                 raise ValueError("status payload는 JSON object여야 합니다.")
             self._store.update(data, mode)
+            self._control_owner.observe_terminal(mode, data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self.get_logger().warning(
                 f"{mode} status parsing failed: {exc}"
@@ -309,6 +404,11 @@ class FirefighterUINode(Node):
         )
         publisher.publish(msg)
         return payload if mode == _VLA_MODE else {**payload, "mode": mode}
+
+    def _publish_control_mode(self, mode: str) -> None:
+        msg = String()
+        msg.data = mode
+        self._control_mode_pub.publish(msg)
 
     def destroy_node(self):
         self._http.close()

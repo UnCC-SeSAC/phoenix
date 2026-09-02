@@ -78,6 +78,7 @@
     <span id="replayBadge" class="replay-badge" hidden>MOCK / REPLAY</span>
     <label class="mode-picker">MODE
       <select id="modeSelector" aria-label="Operation mode">
+        <option value="NONE">Select mode</option>
         <option value="VLA">VLA Brain</option>
         <option value="RULE_BASED">Rule-based</option>
       </select>
@@ -146,7 +147,7 @@
 <script>
 const $=id=>document.getElementById(id);
 const svgNS='http://www.w3.org/2000/svg';
-let activeMode='VLA';
+let activeMode='NONE';
 const timelineEvents=[];
 const eventKeys=new Set();
 const dash=v=>(v===null||v===undefined||v==='')?'-':String(v);
@@ -170,13 +171,15 @@ function ruleWorld(status){const mission=status.mission||{},targets=status.detec
 function renderRuleBased(status){const mission=status.mission||{},robot=status.robot||{},exploration=status.exploration||{},suppression=status.suppression||{},last=mission.last_command||{},world=ruleWorld(status);$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`last command: ${dash(last.command)}`;$('robotState').textContent=dash(mission.state);$('robotPose').textContent=`battery: ${dash(robot.battery_raw)}`;$('actionName').textContent=dash(mission.target_type);$('actionTarget').textContent=`target: ${pose(mission.current_target)}`;$('decisionTitle').textContent=`EXPLORATION ${dash(exploration.status)}`;$('decisionReason').textContent=`Nav2: ${dash(robot.navigation_status)} · Suppression: ${dash(suppression.status)}`;$('validation').textContent=`NAV2 ${dash(robot.navigation_status)}`;$('submission').textContent=`SUPPRESSION ${dash(suppression.status)}`;$('resultAction').textContent=dash(last.command);$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`blocked: ${dash(status.blocked_reason)}`;renderVision(world);renderMap(world);renderObjects(world);addEvent(`rule:${mission.state}:${mission.target_type}:${status.timestamp}`,status.timestamp,`FSM ${dash(mission.state)} · target ${dash(mission.target_type)}`);}
 function render(status){if(activeMode==='RULE_BASED')renderRuleBased(status);else renderVLA(status);}
 function configureMode(){const rule=activeMode==='RULE_BASED';$('missionForm').hidden=rule;$('ruleControls').hidden=!rule;$('missionResult').textContent=rule?'Rule-based START/STOP boundary':'VLA mission boundary';$('actionLabel').textContent=rule?'FSM Target':'Current Action';$('decisionLabel').textContent=rule?'Exploration / Nav2 / Suppression':'VLA Decision / Reason';render(rule?{}:{world_model:{}});timelineEvents.splice(0);eventKeys.clear();renderTimeline();setConnection(false);}
-async function refresh(){const requestedMode=activeMode;try{const response=await fetch(`/api/status?mode=${encodeURIComponent(requestedMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();if(requestedMode!==activeMode)return;render(status);setConnection(Boolean(status.timestamp));}catch(_error){if(requestedMode===activeMode)setConnection(false);}}
+async function refresh(){if(activeMode==='NONE'){setConnection(false);return;}const requestedMode=activeMode;try{const response=await fetch(`/api/status?mode=${encodeURIComponent(requestedMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();if(requestedMode!==activeMode)return;render(status);setConnection(Boolean(status.timestamp));}catch(_error){if(requestedMode===activeMode)setConnection(false);}}
+async function refreshControlMode(){try{const response=await fetch('/api/control-mode',{cache:'no-store'});if(!response.ok)return;const data=await response.json();if(data.active_control_mode!==activeMode){activeMode=data.active_control_mode;$('modeSelector').value=activeMode;configureMode();}}catch(_error){}}
+async function selectControlMode(mode){const previous=activeMode;try{const response=await fetch('/api/control-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});const data=await response.json();if(!response.ok)throw new Error(data.error||'CONTROL_MODE_MISMATCH');activeMode=data.active_control_mode;configureMode();refresh();}catch(error){activeMode=previous;$('modeSelector').value=previous;$('missionResult').textContent=`Error: ${error.message}`;}}
 async function submitMission(text){const requestedMode=activeMode;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:requestedMode})});const data=await response.json();if(requestedMode!==activeMode)return;$('missionResult').textContent=response.ok?`Sent: ${data.mission_id}`:`Error: ${data.error}`;if(response.ok&&requestedMode==='VLA')$('missionInput').value='';}catch(_error){if(requestedMode===activeMode)$('missionResult').textContent='Error: mission boundary is unavailable.';}}
-$('modeSelector').addEventListener('change',event=>{activeMode=event.target.value;configureMode();refresh();});
+$('modeSelector').addEventListener('change',event=>selectControlMode(event.target.value));
 $('missionForm').addEventListener('submit',event=>{event.preventDefault();const text=$('missionInput').value.trim();if(text&&activeMode==='VLA')submitMission(text);});
 for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
 configureMode();
-refresh();setInterval(refresh,1000);
+refreshControlMode();refresh();setInterval(()=>{refreshControlMode();refresh();},1000);
 </script>
 </body>
 </html>

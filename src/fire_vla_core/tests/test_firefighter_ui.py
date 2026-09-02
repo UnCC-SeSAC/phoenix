@@ -36,6 +36,7 @@ from fire_vla_core.ros.topic_bridge_person_report_adapter import (
     TopicBridgePersonReportAdapter,
 )
 from fire_vla_core.ros.firefighter_ui_node import (
+    ControlModeOwner,
     FirefighterHTTPServer,
     StatusStore,
     create_mission_payload,
@@ -229,7 +230,11 @@ def http_server():
         missions.append(payload)
         return payload
 
-    server = FirefighterHTTPServer("127.0.0.1", 0, store, submit)
+    owner = ControlModeOwner(lambda _mode: None)
+    owner.select("VLA")
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, store, submit, control_owner=owner
+    )
     server.start()
     yield server, missions
     server.close()
@@ -244,6 +249,12 @@ def request(server, path, *, body=None):
     )
     with urlopen(req, timeout=2) as response:
         return response.status, response.headers["Content-Type"], response.read()
+
+
+def select_mode(server, mode):
+    return request(
+        server, "/api/control-mode", body=json.dumps({"mode": mode})
+    )
 
 
 def test_http_root_serves_required_v2_panels(http_server):
@@ -383,6 +394,7 @@ def test_mission_api_publishes_one_canonical_payload(http_server):
 
 def test_mission_api_routes_rule_based_mode(http_server):
     server, missions = http_server
+    select_mode(server, "RULE_BASED")
     status, _, body = request(
         server,
         "/api/mission",
@@ -401,23 +413,22 @@ def test_mission_api_cross_routing_counts_are_isolated(http_server):
         server, "/api/mission",
         body=json.dumps({"text": "인명을 찾아", "mode": "VLA"}),
     )
-    request(
-        server, "/api/mission",
-        body=json.dumps({"text": "START", "mode": "RULE_BASED"}),
-    )
-    request(
-        server, "/api/mission",
-        body=json.dumps({"text": "STOP", "mode": "RULE_BASED"}),
-    )
+    with pytest.raises(HTTPError) as error:
+        request(
+            server, "/api/mission",
+            body=json.dumps({"text": "START", "mode": "RULE_BASED"}),
+        )
+    assert error.value.code == 400
 
     vla = [mission for mission in missions if mission.get("mode") is None]
     rule = [mission for mission in missions if mission.get("mode") == "RULE_BASED"]
     assert len(vla) == 1
-    assert [mission["text"] for mission in rule] == ["START", "STOP"]
+    assert rule == []
 
 
 def test_mission_api_rejects_rule_based_free_text(http_server):
     server, missions = http_server
+    select_mode(server, "RULE_BASED")
     with pytest.raises(HTTPError) as error:
         request(
             server,
@@ -426,6 +437,38 @@ def test_mission_api_rejects_rule_based_free_text(http_server):
         )
     assert error.value.code == 400
     assert missions == []
+
+
+def test_control_mode_is_shared_by_multiple_clients(http_server):
+    server, _ = http_server
+    select_mode(server, "RULE_BASED")
+    _, _, first = request(server, "/api/control-mode")
+    _, _, second = request(server, "/api/control-mode")
+    assert json.loads(first) == json.loads(second)
+    assert json.loads(first)["active_control_mode"] == "RULE_BASED"
+
+
+def test_active_mission_blocks_mode_change(http_server):
+    server, _ = http_server
+    request(server, "/api/mission", body=json.dumps({"text": "화재를 진압해"}))
+    with pytest.raises(HTTPError) as error:
+        select_mode(server, "RULE_BASED")
+    assert error.value.code == 409
+    assert "MODE_CHANGE_BLOCKED_ACTIVE_ACTION" in error.value.read().decode()
+
+
+def test_terminal_and_stop_allow_mode_change(http_server):
+    server, _ = http_server
+    request(server, "/api/mission", body=json.dumps({"text": "화재를 진압해"}))
+    server._control_owner.observe_terminal(
+        "VLA", {"world_model": {"mission": {"status": "COMPLETED"}, "current_action": None}}
+    )
+    select_mode(server, "RULE_BASED")
+    request(
+        server, "/api/mission",
+        body=json.dumps({"text": "STOP", "mode": "RULE_BASED"}),
+    )
+    select_mode(server, "VLA")
 
 
 @pytest.mark.parametrize("body", ["not-json", "[]", '{"text":"  "}', '{"text":null}'])
@@ -492,7 +535,11 @@ def test_ui_software_e2e_completes_scoped_person_fire_mission():
         world.set_mission(payload["mission_id"], payload["text"])
         return payload
 
-    server = FirefighterHTTPServer("127.0.0.1", 0, store, submit)
+    owner = ControlModeOwner(lambda _mode: None)
+    owner.select("VLA")
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, store, submit, control_owner=owner
+    )
     server.start()
     try:
         status, _, _ = request(

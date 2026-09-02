@@ -29,6 +29,7 @@ limitations under the License.
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -146,6 +147,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr control_mode_sub_;
   rclcpp::TimerBase::SharedPtr map_autodetect_timer_;
   rclcpp::TimerBase::SharedPtr map_processing_timer_;
   rclcpp::TimerBase::SharedPtr suppression_watchdog_timer_;
@@ -174,6 +176,7 @@ private:
 
   // Completion can be observed multiple times while the frontier set stays empty.
   bool completion_event_published_{false};
+  std::string control_mode_{"NONE"};
 
   // TF warning throttling state to avoid log spam.
   std::optional<int64_t> last_tf_warning_time_ns_;

@@ -10,6 +10,7 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -78,6 +79,13 @@ class VLANavigationBridgeNode(Node):
         )
 
         self.pending: PendingGoal | None = None
+        self._control_mode = "NONE"
+        control_qos = QoSProfile(depth=1)
+        control_qos.reliability = ReliabilityPolicy.RELIABLE
+        control_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.create_subscription(
+            String, "/vla/control_mode", self._control_mode_callback, control_qos
+        )
         self.completed_results: dict[str, dict] = {}
         self.get_logger().info(
             "VLA navigation bridge started: JSON topic -> NavigateToPose"
@@ -96,6 +104,12 @@ class VLANavigationBridgeNode(Node):
             yaw = float(pose_data.get("yaw", 0.0))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Invalid VLA navigation goal: {exc}")
+            return
+
+        if self._control_mode != "VLA":
+            self._publish_terminal(
+                action_id, target_id, "FAILED", "CONTROL_MODE_MISMATCH"
+            )
             return
 
         if action_id in self.completed_results:
@@ -133,6 +147,9 @@ class VLANavigationBridgeNode(Node):
             f"NavigateToPose submitted: action_id={action_id}, target={target_id}, "
             f"pose=({x:.2f}, {y:.2f}, {yaw:.2f})"
         )
+
+    def _control_mode_callback(self, msg: String) -> None:
+        self._control_mode = msg.data.strip().upper()
 
     def _cancel_callback(self, msg: String) -> None:
         try:
