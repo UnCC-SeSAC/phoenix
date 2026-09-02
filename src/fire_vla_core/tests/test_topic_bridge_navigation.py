@@ -111,7 +111,12 @@ def goal_payload(node):
     ("target_id", "expected_x", "expected_y", "expected_yaw"),
     [
         ("person_01", 2.0, 1.0, pytest.approx(0.463647609)),
-        ("fire_01", 3.0, -1.0, pytest.approx(-0.321750554)),
+        (
+            "fire_01",
+            pytest.approx(2.810263340),
+            pytest.approx(-0.936754447),
+            pytest.approx(-0.321750554),
+        ),
     ],
 )
 def test_navigate_target_is_resolved_and_published(

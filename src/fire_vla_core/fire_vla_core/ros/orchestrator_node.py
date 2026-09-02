@@ -116,6 +116,8 @@ class VLAOrchestratorNode(Node):
         )
         self.declare_parameter("remote_qwen_timeout_sec", 3.0)
         self.declare_parameter("person_fire_risk_distance_m", 0.10)
+        self.declare_parameter("spray_range_m", 0.25)
+        self.declare_parameter("navigation_standoff_m", 0.20)
         self.declare_parameter("report_mode", "MOCK")
         self.declare_parameter("spray_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")
@@ -146,6 +148,10 @@ class VLAOrchestratorNode(Node):
         self.world = WorldModel(WorldModelConfig(
             person_fire_risk_distance_m=float(
                 self.get_parameter("person_fire_risk_distance_m").value
+            ),
+            spray_range_m=float(self.get_parameter("spray_range_m").value),
+            navigation_standoff_m=float(
+                self.get_parameter("navigation_standoff_m").value
             ),
         ))
         # Remote inference is synchronous. Keep robot pose processing separate

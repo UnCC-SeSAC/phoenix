@@ -33,7 +33,7 @@ def test_observation_creates_entities():
     now = utc_now().isoformat()
     world.update_observation_batch(ObservationBatch(now, (
         SemanticObservation("person_01", "person", .9, Pose2D(1, 2), now),
-        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.25, 0), now),
     )))
     assert world.people["person_01"].state == PersonState.DETECTED
     assert world.fires["fire_01"].state == FireState.ACTIVE

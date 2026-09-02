@@ -130,7 +130,7 @@ def test_out_of_range_active_fire_extinguish_is_corrected_to_navigation():
 
 def test_in_range_active_fire_keeps_extinguish_decision():
     world, _, orchestrator = make_orchestrator()
-    world.update_robot_pose(Pose2D(1.3, 0))
+    world.update_robot_pose(Pose2D(1.75, 0))
     orchestrator.llm = StubLLM(
         ActionDecision(ActionType.EXTINGUISH, "분사 범위 안 화점 진압", "fire_01")
     )
@@ -277,7 +277,7 @@ def test_spray_range_change_is_decision_relevant():
     orchestrator.llm = wait_llm()
     orchestrator.decide_once()
     assert not world.fires["fire_01"].robot_within_spray_range
-    world.update_robot_pose(Pose2D(1.3, 0))
+    world.update_robot_pose(Pose2D(1.75, 0))
     assert world.fires["fire_01"].robot_within_spray_range
     orchestrator.decide_once()
     assert orchestrator.llm.calls == 2
@@ -383,7 +383,7 @@ def make_navigation_continuation_orchestrator():
 def prepare_successful_navigation(world, queue, orchestrator):
     first = orchestrator.decide_once()
     action_id = first.validation.action.action_id
-    world.update_robot_pose(Pose2D(1.2, 0))
+    world.update_robot_pose(Pose2D(1.75, 0))
     now = utc_now_iso()
     world.update_observation_batch(ObservationBatch(now, (
         SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
@@ -410,7 +410,7 @@ def test_navigation_success_continues_to_one_extinguish_without_qwen():
 def test_invalid_fire_does_not_continue_to_extinguish(invalid_state):
     world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
     orchestrator.decide_once()
-    world.update_robot_pose(Pose2D(1.3, 0))
+    world.update_robot_pose(Pose2D(1.75, 0))
     if invalid_state == "resolved":
         world.fires["fire_01"].state = world.fires["fire_01"].state.EXTINGUISHED
     elif invalid_state == "stale":
@@ -431,7 +431,7 @@ def test_invalid_fire_does_not_continue_to_extinguish(invalid_state):
 def test_invalid_robot_pose_does_not_continue_to_extinguish(invalid_pose):
     world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
     orchestrator.decide_once()
-    world.update_robot_pose(Pose2D(1.3, 0))
+    world.update_robot_pose(Pose2D(1.75, 0))
     now = utc_now_iso()
     world.update_observation_batch(ObservationBatch(now, (
         SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
@@ -467,7 +467,7 @@ def test_out_of_range_after_navigation_does_not_continue_to_extinguish():
 def test_meaningful_scene_change_uses_qwen_instead_of_continuation():
     world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
     orchestrator.decide_once()
-    world.update_robot_pose(Pose2D(1.3, 0))
+    world.update_robot_pose(Pose2D(1.75, 0))
     now = utc_now_iso()
     world.update_observation_batch(ObservationBatch(now, (
         SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),

@@ -609,7 +609,7 @@ def test_ui_software_e2e_completes_scoped_person_fire_mission():
         )
         nav_cycle = orchestrator.decide_once()
         assert nav_cycle.decision.action == ActionType.NAVIGATE_TO
-        world.update_robot_pose(Pose2D(1.2, 0.0))
+        world.update_robot_pose(Pose2D(1.75, 0.0))
         refreshed = utc_now_iso()
         world.update_observation_batch(ObservationBatch(refreshed, (
             SemanticObservation(

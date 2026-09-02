@@ -85,7 +85,7 @@ def make_system(
     world.set_mission("mission_01", "화점을 진압해")
     world.fires["fire_0001"] = FireEntity(
         "fire_0001",
-        Pose2D(0.5 if in_range else 2.0, 0.0),
+        Pose2D(0.25 if in_range else 2.0, 0.0),
         confidence=0.94,
         state=state,
         spray_count=spray_count,
@@ -303,7 +303,7 @@ def test_idless_vla03a_fire_flows_through_spray_success():
         "detections": [{
             "class_name": "fire",
             "confidence": 0.9,
-            "map_position": {"x": 0.5, "y": 0.0},
+            "map_position": {"x": 0.25, "y": 0.0},
         }],
     }))
     assert list(world.fires) == ["fire_0001"]

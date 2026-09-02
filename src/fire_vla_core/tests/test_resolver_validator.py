@@ -27,6 +27,18 @@ def test_resolver_uses_authoritative_world_position():
     assert action.target_pose.y == 0
 
 
+def test_fire_navigation_goal_keeps_twenty_centimeter_standoff():
+    world = make_world()
+    action = TargetResolver().resolve(
+        ActionDecision(ActionType.NAVIGATE_TO, "이동", "fire_01"), world
+    )
+    assert action.target_pose.x == pytest.approx(0.30)
+    assert action.target_pose.y == pytest.approx(0.0)
+    assert action.target_pose.distance_to(
+        world.fires["fire_01"].position
+    ) == pytest.approx(0.20)
+
+
 def test_validator_rejects_new_physical_action_while_one_is_running():
     world = make_world()
     resolver = TargetResolver()
@@ -40,7 +52,26 @@ def test_validator_rejects_new_physical_action_while_one_is_running():
 
 def test_extinguish_requires_active_fire_in_range():
     world = make_world()
+    world.update_robot_pose(Pose2D(.25, 0))
     action = TargetResolver().resolve(ActionDecision(ActionType.EXTINGUISH, "분사", "fire_01"), world)
+    assert ActionValidator().validate(action, world).approved is True
+
+
+def test_extinguish_rejects_fire_beyond_twenty_five_centimeters():
+    world = make_world()
+    world.update_robot_pose(Pose2D(.24, 0))
+    action = TargetResolver().resolve(
+        ActionDecision(ActionType.EXTINGUISH, "분사", "fire_01"), world
+    )
+    assert ActionValidator().validate(action, world).approved is False
+
+
+def test_extinguish_allows_twenty_five_centimeter_boundary():
+    world = make_world()
+    world.update_robot_pose(Pose2D(.25, 0))
+    action = TargetResolver().resolve(
+        ActionDecision(ActionType.EXTINGUISH, "분사", "fire_01"), world
+    )
     assert ActionValidator().validate(action, world).approved is True
 
 
