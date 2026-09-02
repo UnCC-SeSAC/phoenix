@@ -520,6 +520,13 @@ class MissionExecutor(Node):
                 # RETURNING_TO_CHARGE/EXPLORING 은 active_target 이 없어서
                 # 호출해도 무시되고(no-op), person 은 이걸로 완료 처리된다.
                 self.notify_target_complete()
+        elif status == GoalStatus.STATUS_CANCELED:
+            # 우리가 새 goal 로 갈아탈 때는 토큰이 먼저 올라가서 여기까지
+            # 안 온다 — 여기 도달했다는 건 nav2 쪽 프리엠션 충돌 등으로
+            # 시도조차 제대로 못 해보고 취소된 것. unreachable 로 포기하지
+            # 않고 다음 tick 에 같은 목적지로 재시도한다.
+            self._nav_goal_xy = None
+            self.get_logger().warn("Nav2 goal 이 취소됨 — 다음 tick 에 재시도")
         else:
             self._nav_goal_xy = None
             self.get_logger().warn(
