@@ -254,6 +254,17 @@ class FireSuppressionNode(Node):
                 feedback_msg.status = f'{attempt}차 상태 확인 중'
                 goal_handle.publish_feedback(feedback_msg)
 
+                # check_fire_status 의 관찰 구간은 **과거**
+                # (now - STATUS_CHECK_SECONDS ~ now)다. 분사 직후 바로 부르면
+                # 그 창이 분사 중 프레임으로 채워지는데, 분사 중에는 물안개와
+                # 노즐이 불꽃을 가려서 아직 타고 있어도 검출이 0건으로 나온다.
+                # 창 길이만큼 기다려 관찰 구간 전체가 **분사 이후** 프레임이
+                # 되게 한다.
+                cancelled = await self.interruptible_sleep(
+                    goal_handle, STATUS_SETTLE_SECONDS)
+                if cancelled:
+                    return await self._handle_cancel(goal_handle, attempt)
+
                 status = await self.check_fire_status_async(STATUS_CHECK_SECONDS)
 
                 if status is None:
