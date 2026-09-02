@@ -27,7 +27,7 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export PYTHONPATH=/usr/local/lib/python3.10/dist-packages:${PYTHONPATH:-}:/home/ubuntu/.local/lib/python3.10/site-packages
 cd /'
 
-PRODUCTION_PATTERN='depth_camera.launch.py|uncc_frontier.launch.py|preprocess_node|yolo.launch.py|yolo_node|detection_3d.launch.py|detection_3d_node|topic_bridge_vla.launch.py|vla_navigation_bridge.launch.py|fire_extinguisher.launch.py|fire_suppression_node|vla_spray_bridge'
+PRODUCTION_PATTERN='depth_camera.launch.py|uncc_frontier.launch.py|preprocess_node|yolo.launch.py|yolo_node|detection_3d.launch.py|detection_3d_node|topic_bridge_vla.launch.py|firefighter_ui|vla_navigation_bridge.launch.py|fire_extinguisher.launch.py|fire_suppression_node|vla_spray_bridge'
 EXPECTED_LAUNCH_PATTERNS=(
     'depth_camera.launch.py'
     'uncc_frontier.launch.py'
@@ -35,6 +35,7 @@ EXPECTED_LAUNCH_PATTERNS=(
     'yolo.launch.py'
     'detection_3d.launch.py'
     'topic_bridge_vla.launch.py'
+    'ros2 run fire_vla_core firefighter_ui'
     'vla_navigation_bridge.launch.py'
     'fire_extinguisher.launch.py'
 )
@@ -172,6 +173,7 @@ start_runtime() {
     launch_component yolo "ros2 launch image_pipeline yolo.launch.py model_path:=$HEF_PATH postprocess_path:=$ONNX_PATH backend:=hailo layout:=end2end class_names:='[fire,person]'"
     launch_component detection3d "ros2 launch image_pipeline detection_3d.launch.py"
     launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0"
+    launch_component ui "ros2 run fire_vla_core firefighter_ui"
     launch_component navigation "ros2 launch uncc_example vla_navigation_bridge.launch.py"
     launch_component suppression "ros2 launch uncc_example fire_extinguisher.launch.py"
     echo "production runtime 시작 요청 완료. 로그: $RUN_LOG_DIR/e2e_*.log"
