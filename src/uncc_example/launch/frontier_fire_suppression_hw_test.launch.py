@@ -338,8 +338,11 @@ def generate_launch_description():
                         'fire_status_service_node 의 주기 통계 로그에 찍히는 '
                         'score 분포를 보고 정할 것'),
         DeclareLaunchArgument(
-            'fire_extinguished_ratio', default_value='0.3',
-            description='관찰 구간 내 화재 프레임 비율이 이 값 미만이면 꺼짐 판정'),
+            'fire_extinguished_ratio', default_value='0.1',
+            description='관찰 구간 내 화재 프레임 비율이 이 값 미만이면 꺼짐 판정. '
+                        '15Hz*3초=45프레임 기준 0.1 = 5프레임 이상 잡히면 안꺼짐. '
+                        '두 오판의 비용이 비대칭이라(거짓 꺼짐=불을 두고 떠남, '
+                        '거짓 안꺼짐=재시도 1회) 낮은 쪽에 붙여둔 값'),
         hardware,
         camera,
         slam,
