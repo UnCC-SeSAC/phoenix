@@ -69,7 +69,7 @@ class StateManager(Node):
 
         # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
         # 불부터 끄고, 멀면 사람부터 확인한다
-        self.declare_parameter('fire_person_proximity_threshold', 0.2)
+        self.declare_parameter('fire_person_proximity_threshold', 0.3)
 
         self.declare_parameter('state_check_period', 0.2)
 
