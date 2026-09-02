@@ -46,16 +46,12 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "avoidance_manager = uncc_example.avoidance_manager:main",
             "state_manager = uncc_example.state_manager:main",
             "mission_executor = uncc_example.mission_executor:main",
             "vision_detector = uncc_example.vision_detector:main",
             "fire_keepout_node = uncc_example.fire_keepout_node:main",
             "fire_suppression_node = uncc_example.fire_suppression_node:main",
-            "mission_manager = uncc_example.mission_manager:main",
-            "fire_suppression_node_dummy_stub = uncc_example.fire_suppression_node_dummy_stub:main",
             "fire_status_service_node = uncc_example.fire_status_service_node:main",
-            "navigate_to_pose_dummy_stub = uncc_example.navigate_to_pose_dummy_stub:main",
             (
                 "frontier_state_controller = "
                 "uncc_example.frontier_state_controller:main"
