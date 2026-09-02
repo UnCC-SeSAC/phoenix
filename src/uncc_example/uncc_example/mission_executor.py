@@ -88,6 +88,15 @@ class MissionExecutor(Node):
         self._escape_y = 0.0
         self._escape_distance = 0.0
 
+        # -----------------------------
+        # 불 방향 정렬 (fire goal 도착 후, 진압 호출 전)
+        # -----------------------------
+        self._facing_fire = False
+        self._face_pending = None  # 확인 대기 중일 때만 채워짐: (x, y)
+        self._face_deadline = None
+        self._face_x = 0.0
+        self._face_y = 0.0
+
         self._spin_client = ActionClient(self, Spin, "spin")
         self._drive_client = ActionClient(self, DriveOnHeading, "drive_on_heading")
         self._suppress_pub = self.create_publisher(
@@ -232,6 +241,17 @@ class MissionExecutor(Node):
                 self._escape_pending = None
                 self._proceed_escape(x, y, radius, distance)
 
+        if self._face_pending is not None:
+            x, y = self._face_pending
+
+            still_present = any(
+                cx == x and cy == y for cx, cy, _ in self._keepout_circles
+            )
+
+            if not still_present:
+                self._face_pending = None
+                self._proceed_face_fire(x, y)
+
     # =========================================================
     # Timer / State machine
     # =========================================================
@@ -249,6 +269,20 @@ class MissionExecutor(Node):
                 )
                 self._escape_pending = None
                 self._finish_escape(x, y)
+            return
+
+        if self._facing_fire:
+            if (
+                self._face_pending is not None
+                and self.get_clock().now() >= self._face_deadline
+            ):
+                x, y = self._face_pending
+                self.get_logger().warn(
+                    "불 방향 정렬용 keepout mask 임시 해제 확인 시간초과 — "
+                    "정렬 포기하고 진압 진행"
+                )
+                self._face_pending = None
+                self._finish_face_fire(x, y)
             return
 
         if self.state == StateManager.EXPLORING:
@@ -479,9 +513,9 @@ class MissionExecutor(Node):
             # 도착 시점의 state 로 분기한다 — target 이 진행 중인 동안엔
             # state_manager 가 state 를 안 바꾸므로 이 값을 그대로 믿어도 된다.
             if self.state == StateManager.FIRE_DETECTED:
-                # 도착만으론 완료가 아니다 — 진압 노드를 불러서 그
-                # 응답이 와야 완료 처리한다.
-                self._call_fire_suppression()
+                # 도착만으론 완료가 아니다 — 불 방향으로 헤딩을 맞춘 뒤
+                # 진압 노드를 불러서 그 응답이 와야 완료 처리한다.
+                self._start_face_fire(*self._nav_goal_xy)
             else:
                 # RETURNING_TO_CHARGE/EXPLORING 은 active_target 이 없어서
                 # 호출해도 무시되고(no-op), person 은 이걸로 완료 처리된다.
@@ -690,6 +724,99 @@ class MissionExecutor(Node):
             )
 
         self._finish_escape(self._escape_x, self._escape_y)
+
+    # =========================================================
+    # 불 방향 정렬 — fire goal 도착 후 진압 전에, escape 와 같은 mask
+    # 임시 해제 시퀀스로 안전하게 불 쪽으로 회전한다.
+    # =========================================================
+
+    def _start_face_fire(self, x, y):
+
+        self._facing_fire = True
+
+        self._face_pending = (x, y)
+        self._face_deadline = (
+            self.get_clock().now()
+            + Duration(seconds=self.keepout_suppress_confirm_timeout)
+        )
+
+        self._event_logger.info(
+            f"불 방향 정렬 시작: ({x:.2f}, {y:.2f}) — mask 임시 해제 요청"
+        )
+
+        self._publish_suppress(x, y, True)
+
+    def _finish_face_fire(self, x, y):
+        """정렬 성공/실패/시간초과 상관없이 mask 를 되돌리고 진압을
+        진행한다 — 헤딩이 안 맞았다고 진압 자체를 포기하진 않는다."""
+
+        self._publish_suppress(x, y, False)
+        self._facing_fire = False
+
+        self._call_fire_suppression()
+
+    def _proceed_face_fire(self, x, y):
+        """fire_keepout_node 가 mask 에서 해당 원을 뺀 걸 확인한 뒤에만
+        호출된다 — 이제 Spin 이 그 자리를 충돌로 안 본다."""
+
+        pose = self._robot_pose_yaw()
+
+        if pose is None:
+            self._finish_face_fire(x, y)
+            return
+
+        if not self._spin_client.server_is_ready():
+            self.get_logger().warn(
+                "spin 액션 서버가 아직 준비되지 않음 — 불 방향 정렬 중단"
+            )
+            self._finish_face_fire(x, y)
+            return
+
+        px, py, yaw = pose
+
+        self._face_x, self._face_y = x, y
+
+        face_angle = math.atan2(y - py, x - px)
+        relative_yaw = math.atan2(
+            math.sin(face_angle - yaw), math.cos(face_angle - yaw)
+        )
+
+        self._event_logger.info(
+            f"불 방향 정렬: ({x:.2f}, {y:.2f}) mask 해제 확인 — "
+            f"{math.degrees(relative_yaw):.0f}도 회전"
+        )
+
+        goal = Spin.Goal()
+        goal.target_yaw = relative_yaw
+        goal.time_allowance = ActionDuration(
+            sec=int(self.keepout_escape_time_allowance)
+        )
+
+        send_future = self._spin_client.send_goal_async(goal)
+        send_future.add_done_callback(self._face_spin_goal_response)
+
+    def _face_spin_goal_response(self, future):
+
+        goal_handle = future.result()
+
+        if not goal_handle.accepted:
+            self.get_logger().warn("불 방향 정렬용 spin goal 이 거부됨")
+            self._finish_face_fire(self._face_x, self._face_y)
+            return
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._face_spin_goal_result)
+
+    def _face_spin_goal_result(self, future):
+
+        status = future.result().status
+
+        if status != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().warn(
+                f"불 방향 정렬용 spin 실패(status={status}) — 그래도 진압 진행"
+            )
+
+        self._finish_face_fire(self._face_x, self._face_y)
 
     # =========================================================
     # 진압 동작 (fire_suppression_node 호출)
