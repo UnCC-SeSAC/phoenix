@@ -730,7 +730,28 @@ class MissionExecutor(Node):
     # 임시 해제 시퀀스로 안전하게 불 쪽으로 회전한다.
     # =========================================================
 
+    def _find_keepout_circle(self, x, y, tolerance=0.05):
+        """fire_keepout_node 는 좌표를 소수점 2자리로 반올림해서 추적/
+        발행하므로, nav goal 의 원본 좌표로 직접 비교하면 절대 안
+        맞는다 — 가장 가까운 원을 찾아 그 반올림된 좌표를 대신 쓴다."""
+
+        for cx, cy, radius in self._keepout_circles:
+            if math.hypot(cx - x, cy - y) <= tolerance:
+                return (cx, cy, radius)
+
+        return None
+
     def _start_face_fire(self, x, y):
+
+        circle = self._find_keepout_circle(x, y)
+
+        if circle is None:
+            # mask 에 이미 없으면(예: 어떤 이유로 등록이 안 됐거나 이미
+            # suppress 됨) 정렬을 건너뛰고 바로 진압으로 넘어간다.
+            self._call_fire_suppression()
+            return
+
+        x, y, _ = circle
 
         self._facing_fire = True
 
