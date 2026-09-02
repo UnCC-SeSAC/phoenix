@@ -459,6 +459,32 @@ if (!active_goal_cost_status.has_value()) {
   const double active_goal_distance = std::hypot(
     active_goal_point->first - current_pose->position.x,
     active_goal_point->second - current_pose->position.y);
+  // halt trace 로그
+  {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3)
+        << "[PREEMPT_CHECK]"
+        << " dispatch_id=" << current_dispatch_id
+        << " trigger=" << trigger_source
+        << " robot=("
+        << current_pose->position.x << ", "
+        << current_pose->position.y << ")"
+        << " goal=("
+        << active_goal_point->first << ", "
+        << active_goal_point->second << ")"
+        << " distance=" << active_goal_distance
+        << " complete_threshold="
+        << params.goal_preemption_complete_if_within_m
+        << " preemption_enabled="
+        << (params.goal_preemption_enabled ? "true" : "false")
+        << " skip_blocked="
+        << (params.goal_skip_on_blocked_goal ? "true" : "false")
+        << " blocked_reason="
+        << active_goal_cost_status.value_or("none");
+
+    callbacks.log_info(oss.str());
+  }
+  ///
   std::optional<double> visible_reveal_length;
   // Near-goal completion is independent from visible-gain preemption; it is a close-enough guard.
   const bool revealed_completion_distance_reached =
@@ -711,7 +737,14 @@ void FrontierExplorerCore::issue_active_goal_cancel()
   pending_cancel_reason.reset();
   cancel_request_in_progress = true;
   set_goal_state(GoalLifecycleState::CANCELING);
-  callbacks.log_debug(reason);
+  //callbacks.log_debug(reason);
+
+  // halt trace 로그
+  callbacks.log_info(
+    "[CANCEL_REQUEST] dispatch_id=" +
+    std::to_string(current_dispatch_id) +
+    " reason=" + reason);
+  ///
 
   const int dispatch_id = current_dispatch_id;
   // Bind cancel response to current dispatch to ignore late/stale acknowledgements.
@@ -736,6 +769,15 @@ void FrontierExplorerCore::cancel_response_callback(
     // Late cancel responses must not resurrect an active goal after cleanup.
     return;
   }
+
+  // halt trace 로그
+  callbacks.log_info(
+    "[CANCEL_RESPONSE] dispatch_id=" +
+    std::to_string(dispatch_id) +
+    " accepted=" +
+    std::string(cancel_accepted ? "true" : "false") +
+    " error='" + error_message + "'");
+  ///
 
   if (!error_message.empty()) {
     cancel_request_in_progress = false;
@@ -957,6 +999,22 @@ void FrontierExplorerCore::dispatch_goal_request(
   active_goal_sent_time_ns = callbacks.now_ns();
   last_low_gain_reselection_time_ns.reset();
   awaiting_map_refresh = false;
+
+  // halt trace 로그
+  {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3)
+        << "[GOAL_SEND]"
+        << " dispatch_id=" << dispatch_id
+        << " kind=" << goal_kind
+        << " goal=("
+        << goal_pose.pose.position.x << ", "
+        << goal_pose.pose.position.y << ")";
+
+    callbacks.log_info(oss.str());
+  }
+  ///
+
   callbacks.log_info(description);
 
   dispatch_contexts[dispatch_id] = DispatchContext{
@@ -1046,6 +1104,17 @@ void FrontierExplorerCore::goal_response_callback(
   goal_handle = received_goal_handle;
   mark_dispatch_state(dispatch_id, GoalLifecycleState::ACTIVE);
   set_goal_state(GoalLifecycleState::ACTIVE);
+
+  // halt trace 로그
+  callbacks.log_info(
+    "[GOAL_ACCEPTED] dispatch_id=" +
+    std::to_string(dispatch_id) +
+    " kind=" +
+    (context.has_value() ?
+      context->goal_kind :
+      std::string("unknown")));
+  ///
+
   if (context.has_value() && context->goal_kind == "return_to_start") {
     callbacks.log_info("Return-to-start goal accepted");
   } else if (context.has_value() && context->goal_kind == "suppressed_return_to_start") {
@@ -1073,6 +1142,17 @@ void FrontierExplorerCore::get_result_callback(
   const std::string goal_kind = context.has_value() ? context->goal_kind : "";
   const FrontierSequence frontier_sequence = context.has_value() ? context->frontier_sequence : FrontierSequence{};
 
+  // halt trace
+  callbacks.log_info(
+    "[GOAL_RESULT] dispatch_id=" +
+    std::to_string(dispatch_id) +
+    " kind=" + goal_kind +
+    " status=" + detail::status_to_string(status) +
+    " error_code=" + std::to_string(error_code) +
+    " error_msg='" + error_message + "'" +
+    " exception='" + exception_text + "'");
+  ///
+    
   if (exception_text.empty()) {
     if (dispatch_id != current_dispatch_id) {
       // Result belongs to an older superseded dispatch.

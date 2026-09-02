@@ -11,9 +11,10 @@ from rclpy.qos import qos_profile_action_status_default
 from rclpy.task import Future
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
-from std_msgs.msg import String
 
 from frontier_exploration_ros2.srv import ControlExploration
+
+from .log_utils import silence_default_logger
 
 
 class FrontierStateController(Node):
@@ -22,6 +23,8 @@ class FrontierStateController(Node):
     def __init__(self):
         """Create the mission-facing service and Frontier service client."""
         super().__init__('frontier_state_controller')
+
+        silence_default_logger(self)
 
         self.declare_parameter(
             'frontier_control_service',
@@ -45,11 +48,6 @@ class FrontierStateController(Node):
         )
 
         self._frontier_state = None
-        self._state_pub = self.create_publisher(
-            String,
-            '/rule_based/exploration_state',
-            10,
-        )
         self._control_request_pending = False
         self._waiting_for_nav_cancel = False
         self._stop_request_time = 0.0
@@ -79,7 +77,6 @@ class FrontierStateController(Node):
             f'{self._control_service.srv_name} -> '
             f'{frontier_control_service}'
         )
-        self._publish_state(ControlExploration.Request.STATE_IDLE)
 
     async def _control_callback(self, request, response):
         if request.action not in (
@@ -140,7 +137,6 @@ class FrontierStateController(Node):
 
         self._copy_response(frontier_response, response)
         self._frontier_state = frontier_response.state
-        self._publish_state(frontier_response.state)
 
         self._log_control_result('START', response)
         return response
@@ -169,7 +165,6 @@ class FrontierStateController(Node):
 
         self._copy_response(frontier_response, response)
         self._frontier_state = frontier_response.state
-        self._publish_state(frontier_response.state)
 
         if not frontier_response.accepted:
             self._log_control_result('STOP', response)
@@ -192,7 +187,6 @@ class FrontierStateController(Node):
             return response
 
         self._frontier_state = ControlExploration.Request.STATE_IDLE
-        self._publish_state(ControlExploration.Request.STATE_IDLE)
         response.accepted = True
         response.scheduled = False
         response.state = ControlExploration.Request.STATE_IDLE
@@ -274,17 +268,6 @@ class FrontierStateController(Node):
             return self._frontier_state
 
         return ControlExploration.Request.STATE_IDLE
-
-    def _publish_state(self, state):
-        labels = {
-            ControlExploration.Request.STATE_IDLE: 'IDLE',
-            ControlExploration.Request.STATE_RUNNING: 'RUNNING',
-            ControlExploration.Request.STATE_START_SCHEDULED: 'START_SCHEDULED',
-            ControlExploration.Request.STATE_STOP_SCHEDULED: 'STOP_SCHEDULED',
-            ControlExploration.Request.STATE_STOPPING: 'STOPPING',
-            ControlExploration.Request.STATE_SHUTDOWN_PENDING: 'SHUTDOWN_PENDING',
-        }
-        self._state_pub.publish(String(data=labels.get(state, 'UNKNOWN')))
 
     def _reject_response(self, response, message, state=None):
         response.accepted = False

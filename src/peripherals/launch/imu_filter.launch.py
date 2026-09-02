@@ -1,6 +1,5 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import TimerAction
 import os
 from ament_index_python.packages import get_package_share_directory
 
@@ -48,10 +47,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        TimerAction(
-            period=5.0,
-            actions=[imu_calib_node, imu_filter_node]
-        )
+        imu_calib_node,
+        imu_filter_node,
     ])
 
 if __name__ == '__main__':
@@ -61,4 +58,3 @@ if __name__ == '__main__':
     ls = LaunchService()
     ls.include_launch_description(ld)
     ls.run()
-

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from collections import OrderedDict
 
 import cv2
@@ -14,7 +16,9 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2DArray
 
-from image_pipeline.detection_msgs import bbox_center, hypothesis
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from image_pipeline.detection_msgs import bbox_center, hypothesis  # noqa: E402
 
 
 def stamp_key(header) -> int:

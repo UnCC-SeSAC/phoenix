@@ -1,5 +1,4 @@
 import json
-import math
 
 import numpy as np
 
@@ -16,7 +15,9 @@ from std_msgs.msg import String
 class YoloDetector(Node):
     """
     RGB 프레임마다 객체 탐지를 수행하고, depth 이미지에서 해당
-    픽셀의 깊이값까지 읽어서 하나의 JSON 으로 묶어 publish 한다.
+    픽셀의 깊이값까지 읽어서, 그 프레임에서 나온 감지 전부를 JSON
+    메시지 하나에 리스트로 묶어 publish 한다 (감지별로 따로 안 보냄
+    — 뒤쪽에서 순서가 아니라 내용으로 비교/짝짓기할 수 있도록).
 
     self.detect() 는 지금은 파이프라인 테스트용 더미 구현이고,
     실제 YOLO 추론 코드(다른 사람이 작성)로 통째로 교체될 예정이다.
@@ -37,7 +38,7 @@ class YoloDetector(Node):
         self.declare_parameter(
             'depth_image_topic', '/depth_cam/depth0/image_raw'
         )
-        self.declare_parameter('detections_topic', '/yolo/detections')
+        self.declare_parameter('detections_topic', '/fire/detections')
 
         # 이 점수 미만인 감지는 아예 publish 하지 않는다
         self.declare_parameter('min_score', 0.5)
@@ -46,6 +47,12 @@ class YoloDetector(Node):
         # depth 이미지가 mm(uint16)로 오는 경우의 스케일. float32(m)면 무시
         self.declare_parameter('depth_scale', 0.001)
         self.depth_scale = self.get_parameter('depth_scale').value
+
+        # 픽셀 1개만 읽으면 노이즈(flying pixel)에 그대로 흔들려서
+        # 같은 물체가 map 상에서 튀어 두 개로 잡히는 원인이 됨 —
+        # (u,v) 주변 이 크기(정사각형, px)의 패치에서 median을 쓴다
+        self.declare_parameter('depth_patch_size', 5)
+        self.depth_patch_size = self.get_parameter('depth_patch_size').value
 
         self.bridge = CvBridge()
         self.latest_depth = None
@@ -99,6 +106,12 @@ class YoloDetector(Node):
         scale_y = depth_h / msg.height
         depth_header = self.latest_depth.header
 
+        # 한 프레임의 감지 결과를 전부 모아서 메시지 하나로 묶어
+        # 보낸다 — 감지끼리 순서(도착 순)가 아니라 실제 내용(거리
+        # 등)으로 비교/짝짓기할 수 있도록, 프레임 단위로 한꺼번에
+        # 전달하기 위함.
+        results = []
+
         for detection in detections:
 
             result = self._read_depth(
@@ -110,8 +123,7 @@ class YoloDetector(Node):
 
             u, v, depth_m = result
 
-            out = String()
-            out.data = json.dumps({
+            results.append({
                 'class_name': detection['class_name'],
                 'score': detection['score'],
                 # x, y 는 depth 이미지 해상도 기준 픽셀 좌표로
@@ -121,14 +133,21 @@ class YoloDetector(Node):
                 'y': v,
                 'frame_size': [depth_w, depth_h],
                 'depth': depth_m,
-                'depth_status': 'ok',
-                # depth 를 읽은 시각 — vision_detector 가 TF 변환할
-                # 때 그대로 사용한다. frame_id 는 카메라가 고정
-                # 장착이라 vision_detector 쪽 파라미터로 고정.
-                'stamp_sec': depth_header.stamp.sec,
-                'stamp_nanosec': depth_header.stamp.nanosec,
             })
-            self.detection_pub.publish(out)
+
+        if not results:
+            return
+
+        out = String()
+        out.data = json.dumps({
+            # 이 프레임의 depth 를 읽은 시각 — vision_detector 가
+            # TF 변환할 때 그대로 사용한다. frame_id 는 카메라가
+            # 고정 장착이라 vision_detector 쪽 파라미터로 고정.
+            'stamp_sec': depth_header.stamp.sec,
+            'stamp_nanosec': depth_header.stamp.nanosec,
+            'detections': results,
+        })
+        self.detection_pub.publish(out)
 
     def _read_depth(
         self, detection, depth_image, depth_w, depth_h, scale_x, scale_y
@@ -140,11 +159,22 @@ class YoloDetector(Node):
         if not (0 <= v < depth_h and 0 <= u < depth_w):
             return None
 
-        raw_depth = depth_image[v, u]
+        half = self.depth_patch_size // 2
+        patch = depth_image[
+            max(0, v - half):min(depth_h, v + half + 1),
+            max(0, u - half):min(depth_w, u + half + 1),
+        ].astype(np.float32)
 
-        if raw_depth == 0 or math.isnan(float(raw_depth)):
-            # 측정 실패 픽셀
+        valid = patch[(patch != 0) & ~np.isnan(patch)]
+
+        if valid.size == 0:
+            # 패치 전체가 측정 실패 픽셀
             return None
+
+        # 단일 픽셀 대신 median 사용 — 경계 등에서 튀는 픽셀
+        # 하나 때문에 depth 가 흔들려 같은 물체가 map 상에서
+        # 두 개로 갈라져 잡히는 걸 막는다
+        raw_depth = np.median(valid)
 
         if depth_image.dtype == np.uint16:
             depth_m = float(raw_depth) * self.depth_scale

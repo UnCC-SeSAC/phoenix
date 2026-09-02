@@ -1,5 +1,16 @@
 # uncc_example — Frontier Exploration
 
+> **주의: 이 문서는 초기 프로토타입(자체 구현 `ExplorerNode`/`HazardMapNode`)
+> 기준으로 작성되었습니다.** 이후 탐사 로직은 `frontier_exploration_ros2`
+> 패키지로, 미션/화재 로직은 `state_manager`/`mission_executor`/
+> `vision_detector`/`fire_keepout_node`로 대체되었습니다(commit
+> `eb9eaab`, "사용하지 않는 초기 explorer/hazard 프로토타입 파일 정리").
+> `ExplorerNode`, `HazardMapNode`, `exploration.launch.py`,
+> `full_exploration.launch.py`, `hazard_test`, `/hazard_map`,
+> `/hazard_points` 는 모두 삭제되어 더 이상 존재하지 않습니다 — 아래
+> 내용 중 이들을 언급하는 부분은 실행되지 않습니다. `slam_mapping.launch.py`,
+> `nav2_online.launch.py` 등 나머지 항목은 여전히 유효합니다.
+
 Target:
 
 - Raspberry Pi 5

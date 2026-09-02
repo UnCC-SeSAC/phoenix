@@ -90,14 +90,14 @@ frontier_explorer:
 
     # Replan while navigating if target-pose visible reveal gain for active goal is exhausted.
     # Disable if you are having performance issues.
-    goal_preemption_enabled: true
+    goal_preemption_enabled: false
 
      # Minimum seconds between consecutive goal preemption attempts.
     # Also effects performance.
     goal_preemption_min_interval_s: 2.0
 
     # Skip the active frontier goal if it becomes blocked.
-    goal_skip_on_blocked_goal: true
+    goal_skip_on_blocked_goal: false
 
     # Enable the post-goal settle delay after a successful frontier goal.
     # Useful if you want stability over speed. Use if you have slow SLAM & LiDAR configuration. 
@@ -208,7 +208,7 @@ frontier_explorer:
 
     # Treat the current frontier as complete once the robot is this close to it; 0.0 disables this shortcut.
     # This close-enough guard also works when visible-gain preemption is disabled, but obstacle-avoidance-heavy robots should use it carefully because large values can end a frontier too early and trigger wrong exploration choices.
-    goal_preemption_complete_if_within_m: 0.50
+    goal_preemption_complete_if_within_m: 0.0
 
     # LiDAR range in meters used by the map-based visible reveal gate above.
     goal_preemption_lidar_range_m: 12.0

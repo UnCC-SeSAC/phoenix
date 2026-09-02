@@ -46,10 +46,13 @@ DEFAULT_Z_MAX = 4.0
 #           아래로 갈수록 가까워지므로 위쪽 꼬리가 곧 접지점입니다.
 #           다른 영역에 쓰면 배경 비침을 그대로 채택합니다.
 METHODS = ("median", "min", "p25", "p75", "max")
-# 어느 픽셀에서 뽑을지. "center" 외에는 전부 화염 대응 폴백입니다 (지시서 5-1).
-#   center  기본. 박스 중앙.
-#   bottom  박스 **안**의 아래쪽. 화염이 박스를 다 채우지 않을 때.
+# 어느 픽셀에서 뽑을지. `below`/`ring`은 대상이 아니라 **주변**을 재는 폴백입니다.
+#   center  박스 중앙. ★ 화재에는 못 씁니다 — 성냥불 위 뎁스가 안 나오는 것을
+#           실기에서 확인했습니다(2026-08-24). 화염 아닌 대상에만 유효합니다.
+#   bottom  박스 **안**의 아래쪽. ★ 현재 노드 기본값. 박스 안이라 폴백이 아니라
+#           대상 자체를 읽습니다. 화염이 박스를 다 채우지 않을 때 유효.
 #   below   박스 **바로 아래 바깥** 띠 = 불이 놓인 바닥. 5-1 1번의 정확한 구현.
+#           화염이 박스를 가득 채워 bottom까지 막힐 때 유일하게 살아남습니다.
 #   ring    박스 주변 테두리. 최후 수단이고 **뒤로 편향**됩니다.
 REGIONS = ("center", "bottom", "below", "ring")
 
@@ -307,6 +310,7 @@ def sample_distance_detail(
     max_spread_m: Optional[float] = None,
     ring_margin: float = 0.25,
     band_ratio: float = 0.15,
+    band_offset: float = 0.0,
     encoding: str | None = None,
     depth_scale: float | None = None,
 ) -> DistanceSample:
@@ -330,7 +334,7 @@ def sample_distance_detail(
         return DistanceSample(None, 0, 0, 0.0, 0.0, region, "box_outside_image")
 
     vals = _region_values(depth_m, clipped, region, central, ring_margin,
-                          band_ratio, width, height)
+                          band_ratio, band_offset, width, height)
     if vals is None or vals.size == 0:
         return DistanceSample(None, 0, 0, 0.0, 0.0, region, "box_outside_image")
 
@@ -445,7 +449,8 @@ def cascade_to_str(stages) -> str:
 
 
 def _region_values(depth_m, clipped_box, region: str, central: float,
-                   ring_margin: float, band_ratio: float, width: int, height: int):
+                   ring_margin: float, band_ratio: float, band_offset: float,
+                   width: int, height: int):
     """샘플링할 픽셀 값들. 영역 선택이 화염 대응의 조절 손잡이입니다 (§5-1)."""
     if region == "ring":
         # 박스 바깥 테두리. 화염이 박스를 가득 채워 안쪽 뎁스가 통째로 비는
@@ -461,17 +466,32 @@ def _region_values(depth_m, clipped_box, region: str, central: float,
         return depth_m[oy1:oy2, ox1:ox2][mask]
 
     if region == "below":
-        # ★ 박스 **바로 아래**의 얇은 띠 = 불이 놓인 바닥과의 접지점.
-        # 화염이 박스를 가득 채워 안쪽이 통째로 비어도 여기는 살아 있습니다.
+        # 박스 아래의 띠. `band_offset`이 **두 가지 다른 용도**를 가릅니다:
         #
-        # 띠를 두껍게 하면 안 됩니다. 바닥은 아래로 갈수록 **가까워지므로**
-        # (`ground_plane_depth` 참조) 두꺼운 띠의 중앙값은 거리를 가깝게 잡습니다.
-        # band_ratio는 "픽셀 수(=노이즈 강건성) vs 근거리 편향"의 교환입니다.
+        #  band_offset == 0  박스 **바로 아래** = 불이 놓인 바닥과의 접지점.
+        #                    띠를 얇게(band_ratio 0.15) 두고 method는 `max`.
+        #                    바닥은 아래로 갈수록 **가까워지므로**(`ground_plane_depth`)
+        #                    두꺼운 띠의 중앙값은 거리를 가깝게 잡습니다.
+        #
+        #  band_offset > 0   박스에서 **떨어진** 띠 = 불 아래에 있는 물체(촛대·종이컵).
+        #                    2026-08-26 실기: 화염 박스 19px, 실제 화염 1.5~2cm,
+        #                    종이컵은 화염 아래 약 9cm. 9cm / 1.75cm ≈ 5.1배라
+        #                    band_offset 3.5 + band_ratio 3.0 이면 화염 아래
+        #                    6.1~11.4cm 를 덮습니다.
+        #                    ★ 배수로 잡는 이유: 9cm의 픽셀 크기도, 박스 높이도
+        #                      똑같이 1/Z 이라 **비율이 거리와 무관**합니다.
+        #                      거리를 몰라도 되고 f_y도 필요 없습니다.
+        #                    ★ 이 경우 method는 `max`가 아니라 `median`입니다 —
+        #                      띠가 컵 몸통이라 가장 먼 값은 **컵 뒤 배경(벽)**입니다.
+        #
+        # 화염이 박스를 가득 채워 박스 안이 통째로 비어도 여기는 살아 있습니다.
         x1, y1, x2, y2 = clipped_box
-        band = max(2.0, (y2 - y1) * float(band_ratio))
+        h = y2 - y1
+        band = max(2.0, h * float(band_ratio))
+        start = y2 + h * float(band_offset)
         cx = (x1 + x2) / 2.0
         hw = (x2 - x1) * central / 2.0
-        sub = (cx - hw, float(y2), cx + hw, y2 + band)
+        sub = (cx - hw, start, cx + hw, start + band)
     elif region == "bottom":
         # 박스 **안**의 아래쪽. 화염이 박스를 다 채우지 않아 아래쪽에 바닥이
         # 보일 때 씁니다. 박스를 꽉 채우는 화염에는 못 씁니다 -> "below".

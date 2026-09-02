@@ -13,6 +13,10 @@ class MissionTestPublisher(Node):
     """
     로봇/카메라 없이 state_manager 를 테스트하기 위한 CLI 발행기.
 
+    state_manager 는 start_mission 서비스가 호출되기 전까지 STANDBY 로
+    대기하므로, 상태 전이까지 보려면 먼저 아래를 호출해야 한다:
+    ros2 service call /state_manager/start_mission std_srvs/srv/Trigger "{}"
+
     ros2 run uncc_example mission_test --fire 1.0 2.0
     ros2 run uncc_example mission_test --person 3.0 0.5
     ros2 run uncc_example mission_test --battery 6000
@@ -52,11 +56,23 @@ class MissionTestPublisher(Node):
         if self.done:
             return
 
+        # vision_detector 가 실제로 보내는 형식(프레임 하나에 감지
+        # 여러 개를 묶은 배치)을 흉내내려고, fire/person 을 따로따로
+        # 안 보내고 이번 호출에서 지정된 것들을 한 메시지로 묶는다
+        # — state_manager 의 짝짓기(거리 기반)를 제대로 테스트하려면
+        # 같은 배치 안에 있어야 하기 때문.
+        detections = []
+
         if self.args.fire is not None:
-            self._publish_detection('fire', *self.args.fire)
+            detections.append(self._make_detection('fire', *self.args.fire))
 
         if self.args.person is not None:
-            self._publish_detection('person', *self.args.person)
+            detections.append(
+                self._make_detection('person', *self.args.person)
+            )
+
+        if detections:
+            self._publish_detections(detections)
 
         if self.args.battery is not None:
             self._publish_battery(self.args.battery)
@@ -66,20 +82,23 @@ class MissionTestPublisher(Node):
 
         self.done = True
 
-    def _publish_detection(self, class_name, x, y):
+    def _make_detection(self, class_name, x, y):
+        return {'class': class_name, 'x': x, 'y': y}
+
+    def _publish_detections(self, detections):
 
         msg = String()
         msg.data = json.dumps({
-            'class': class_name,
-            'x': x,
-            'y': y,
             'frame_id': 'map',
+            'detections': detections,
         })
         self.detection_pub.publish(msg)
 
-        self.get_logger().info(
-            f'Published {class_name} detection at ({x:.2f}, {y:.2f})'
-        )
+        for detection in detections:
+            self.get_logger().info(
+                f"Published {detection['class']} detection at "
+                f"({detection['x']:.2f}, {detection['y']:.2f})"
+            )
 
     def _publish_battery(self, value):
 

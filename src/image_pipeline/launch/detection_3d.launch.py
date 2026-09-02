@@ -6,6 +6,17 @@
 bag 재생과 함께 쓸 때는 반드시 use_sim_time:=true
 (`ros2 bag play --clock`과 짝. 안 맞추면 TF extrapolation 에러가 쏟아집니다.)
 
+★ 거리를 재는 위치가 **클래스마다 다릅니다** (2026-08-26 실기 실측):
+
+    fire   -> below   박스 대부분이 불꽃이라 박스 안에 대상 표면이 없습니다.
+                      bottom으로 재니 불꽃 사이의 **배경(벽)**이 잡혀 멀게 나갔습니다.
+    person -> bottom  below로 재니 사람 앞쪽 바닥을 재서 **가깝게** 나왔습니다.
+
+  `region_by_class:="fire:below,person:bottom"` 이 기본값이고, 매핑에 없는
+  클래스는 `region`(기본 `bottom`)을 씁니다. method는 자동으로 따라갑니다
+  (below→max). **클래스 이름은 학습 라벨과 정확히 같아야** 하며, 틀리면
+  예외 없이 기본값으로 떨어집니다 — 시작 로그에서 매핑을 확인하세요.
+
 ★ `fallback_regions`는 기본으로 비어 있습니다. `below`/`ring`은 대상이 아니라
   **주변**을 재고 서로 반대 방향으로 편향됩니다(below 가깝게 / ring 멀게).
   실측 전에 켜면 "확신에 찬 틀린 좌표"가 나갑니다 — `HANDOVER.md` 8장 참조.
@@ -37,8 +48,20 @@ def generate_launch_description():
         DeclareLaunchArgument('output_topic', default_value='/fire/detections'),
         DeclareLaunchArgument('status_topic', default_value='/fire/detections/status'),
         DeclareLaunchArgument(
+            'region', default_value='bottom',
+            description='매핑에 없는 클래스의 기본 영역. 화염 때문에 center 아님'),
+        DeclareLaunchArgument(
+            'region_by_class', default_value='fire:below,person:bottom',
+            description='클래스별 영역. fire는 박스가 불로 차서 below, person은 bottom'),
+        DeclareLaunchArgument(
+            'band_offset', default_value='3.5',
+            description='below 띠 시작 위치(박스높이 배수). 0=접지점, 3.5=촛대 받침'),
+        DeclareLaunchArgument(
+            'band_ratio', default_value='3.0',
+            description='below 띠 두께(박스높이 배수)'),
+        DeclareLaunchArgument(
             'fallback_regions', default_value='',
-            description='예: "bottom,below,ring". 기본 꺼짐 — 켜기 전 HANDOVER 8장'),
+            description='예: "below,ring". 기본 꺼짐 — 켜기 전 HANDOVER 8장'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
     ]
 
@@ -55,6 +78,10 @@ def generate_launch_description():
             'rgb0_info_topic': LaunchConfiguration('rgb0_info_topic'),
             'output_topic': LaunchConfiguration('output_topic'),
             'status_topic': LaunchConfiguration('status_topic'),
+            'region': LaunchConfiguration('region'),
+            'region_by_class': LaunchConfiguration('region_by_class'),
+            'band_offset': LaunchConfiguration('band_offset'),
+            'band_ratio': LaunchConfiguration('band_ratio'),
             'fallback_regions': LaunchConfiguration('fallback_regions'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],

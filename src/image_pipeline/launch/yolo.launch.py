@@ -1,6 +1,6 @@
 """YOLO26 검출 노드 런치 — 태스크① 출력 -> 태스크② 입력.
 
-  ros2 launch image_pipeline yolo.launch.py model_path:=/path/to/filtered/best.pt
+  ros2 launch image_pipeline yolo.launch.py model_path:=models/fire_yolo26s.onnx
 
 전체 사슬(①→YOLO→②)을 한 번에 띄우려면 셋을 각각 launch 하세요:
 
@@ -27,17 +27,15 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument(
             'model_path', default_value='',
-            description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo)'),
-        DeclareLaunchArgument(
-            'backend', default_value='auto',
-            description='auto | onnx | onnxruntime | ultralytics | hailo | stub'),
+            description='.onnx (로봇/개발) | .pt (개발 PC) | .hef (Hailo — 후처리 '
+                        'onnx/config json은 같은 폴더에서 자동으로 찾습니다)'),
         DeclareLaunchArgument(
             'input_topic', default_value='/image_enhanced',
             description='태스크①의 출력. 원본 rgb0 가 아닙니다'),
         DeclareLaunchArgument('detections_topic', default_value='/yolo_result'),
         DeclareLaunchArgument(
-            'class_names', default_value="['fire', 'person']",
-            description='★ Phoenix data.yaml 순서: fire=0, person=1'),
+            'class_names', default_value="['fire']",
+            description='★ 학습 때 순서 그대로'),
         DeclareLaunchArgument(
             'imgsz', default_value='640',
             description='★ 학습 때 값과 같아야 합니다'),
@@ -48,7 +46,9 @@ def generate_launch_description():
             description='auto | v8 | end2end — 실측 후 못박을 것'),
         DeclareLaunchArgument(
             'threads', default_value='0',
-            description='Pi 5에서는 3 권장 (ROS·Hailo 드라이버와 코어 분배)'),
+            description='cv2 스레드 수. 0=건드리지 않음. '
+                        'Hailo 백엔드는 cv2가 letterbox/BGR->RGB 에만 쓰여 '
+                        '1이 가장 쌉니다 (RPi5 15fps 실측 코어 9% -> 5%)'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
     ]
 
@@ -60,7 +60,6 @@ def generate_launch_description():
         parameters=[{
             'model_path': LaunchConfiguration('model_path'),
             'input_topic': LaunchConfiguration('input_topic'),
-            'backend': LaunchConfiguration('backend'),
             'detections_topic': LaunchConfiguration('detections_topic'),
             'class_names': LaunchConfiguration('class_names'),
             'imgsz': LaunchConfiguration('imgsz'),

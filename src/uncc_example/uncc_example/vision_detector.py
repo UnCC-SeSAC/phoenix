@@ -15,6 +15,8 @@ from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import String
 from geometry_msgs.msg import PointStamped
 
+from .log_utils import make_event_logger
+
 
 class VisionDetector(Node):
     """
@@ -37,6 +39,8 @@ class VisionDetector(Node):
     def __init__(self):
         super().__init__('vision_detector')
 
+        self._event_logger = make_event_logger(self)
+
         # -----------------------------
         # Parameters
         # -----------------------------
@@ -50,7 +54,7 @@ class VisionDetector(Node):
         # full_chain_dummy_test.launch.py 와 동일한 값 — 카메라 관련
         # 설정은 그 launch 파일 기준을 따른다.
         self.declare_parameter(
-            'camera_info_topic', '/ascamera/camera_publisher/rgb0/camera_info'
+            'camera_info_topic', '/image_enhanced/camera_info'
         )
 
         # 카메라가 로봇에 고정 장착이라 프레임 이름이 항상 같음 —
@@ -62,8 +66,11 @@ class VisionDetector(Node):
         # 이 클래스들만 fire/person 감지로 취급
         self.declare_parameter('target_classes', ['fire', 'person'])
 
+        self.declare_parameter('tf_timeout_sec', 1.0)
+
         self.map_frame = self.get_parameter('map_frame').value
         self.depth_frame_id = self.get_parameter('depth_frame_id').value
+        self.tf_timeout_sec = self.get_parameter('tf_timeout_sec').value
         self.target_classes = set(
             self.get_parameter('target_classes').value
         )
@@ -135,8 +142,10 @@ class VisionDetector(Node):
 
         try:
             payload = json.loads(msg.data)
-        except (json.JSONDecodeError, TypeError) as exc:
-            self.get_logger().warn(f'Invalid detection JSON: {exc}')
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(
+                f'Invalid detection JSON: {e}'
+            )
             return
         if not isinstance(payload, dict):
             return
@@ -174,51 +183,44 @@ class VisionDetector(Node):
         if not isinstance(detection, dict):
             return None
 
-        class_name = detection.get('class_name')
-        if class_name not in self.target_classes:
-            return None
+        # 프레임 전체가 같은 시각을 공유하므로 한 번만 변환해둔다.
+        stamp = Time(
+            seconds=payload['stamp_sec'],
+            nanoseconds=payload['stamp_nanosec'],
+        ).to_msg()
 
-        try:
-            confidence = detection['score']
-            u = detection['x']
-            v = detection['y']
-            depth_m = detection['depth']
-        except (KeyError, TypeError):
-            return None
+        results = []
 
-        numeric_values = (confidence, u, v, depth_m)
-        if any(
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            for value in numeric_values
-        ):
-            return None
-        if not 0.0 <= confidence <= 1.0 or depth_m <= 0.0:
-            return None
-        if detection.get('depth_status') not in {
-            'ok',
-            'fallback_bottom',
-            'fallback_below',
-            'fallback_ring',
-        }:
-            return None
+        for detection in payload.get('detections', []):
 
-        map_point = self._compute_map_position(detection, stamp)
-        if map_point is None:
-            return None
+            class_name = detection.get('class_name')
 
-        return {
-            'class': class_name,
-            'confidence': confidence,
-            'x': map_point.point.x,
-            'y': map_point.point.y,
-        }
+            if class_name not in self.target_classes:
+                continue
+
+            map_point = self._compute_map_position(detection, stamp)
+
+            if map_point is None:
+                continue
+
+            results.append({
+                'class': class_name,
+                'x': map_point.point.x,
+                'y': map_point.point.y,
+            })
+
+        if results:
+            self._publish_detections(results)
+
+    def _compute_map_position(self, detection, stamp):
 
     def _compute_map_position(self, detection, stamp):
         u = detection['x']
         v = detection['y']
         depth_m = detection['depth']
+
+        if depth_m is None:
+            return None
 
         point = PointStamped()
         point.header.frame_id = self.depth_frame_id
@@ -231,17 +233,16 @@ class VisionDetector(Node):
             return self.tf_buffer.transform(
                 point,
                 self.map_frame,
-                timeout=Duration(seconds=0.2),
+                timeout=Duration(seconds=self.tf_timeout_sec),
             )
         except TransformException as exc:
             self.get_logger().warn(f'TF transform failed: {exc}')
             return None
 
-    def _publish_detections(self, results, stamp_sec, stamp_nanosec):
+    def _publish_detections(self, results):
+
         payload = {
             'frame_id': self.map_frame,
-            'stamp_sec': stamp_sec,
-            'stamp_nanosec': stamp_nanosec,
             'detections': results,
         }
         msg = String()

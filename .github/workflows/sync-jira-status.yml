@@ -1,0 +1,212 @@
+name: Sync Jira status
+
+on:
+  issues:
+    types: [closed, reopened, labeled, unlabeled, assigned, unassigned, field_added, field_removed]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract Jira key from title
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = context.payload.issue.number;
+            const regex = /\[([A-Z]+-\d+)\]/;
+
+            let title = context.payload.issue.title;
+            let match = title.match(regex);
+
+            // create-jira-issue.yml이 아직 제목을 안 바꾼 시점에
+            // 이 워크플로가 같이 트리거됐을 수 있어서, 최신 제목을
+            // 몇 번 재조회하며 재시도 (최대 5회, 3초 간격 = 15초)
+            for (let i = 0; i < 5 && !match; i++) {
+              await new Promise(r => setTimeout(r, 3000));
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+              title = issue.title;
+              match = title.match(regex);
+            }
+
+            if (!match) {
+              core.setFailed('제목에서 Jira 키를 못 찾음(재시도 후에도 실패): ' + title);
+              return;
+            }
+            core.setOutput('jira_key', match[1]);
+
+      # ─────────────────────────────────────────────
+      # 상태 동기화 (issue close / reopen)
+      # closed  -> 완료
+      # reopened -> 진행 중 (열려있는 이슈는 "작업 중"으로 취급)
+      # 새로 생성된 티켓의 기본 상태(할 일)는 Jira가 자동으로 잡아주므로 여기서 따로 안 건드림
+      # ─────────────────────────────────────────────
+      - name: Transition Jira status
+        if: github.event.action == 'closed' || github.event.action == 'reopened'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_KEY: ${{ steps.extract.outputs.jira_key }}
+          GH_ACTION: ${{ github.event.action }}
+        run: |
+          # ⚠️ 실제 Jira 워크플로의 전환(transition) 이름과 정확히 일치해야 함
+          TARGET_NAME="완료"
+          if [ "$GH_ACTION" = "reopened" ]; then TARGET_NAME="진행 중"; fi
+
+          TRANSITIONS=$(curl -s -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY/transitions")
+
+          TRANSITION_ID=$(echo "$TRANSITIONS" | jq -r --arg name "$TARGET_NAME" \
+            '.transitions[] | select(.name==$name) | .id')
+
+          if [ -n "$TRANSITION_ID" ] && [ "$TRANSITION_ID" != "null" ]; then
+            curl -s -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"transition\":{\"id\":\"$TRANSITION_ID\"}}" \
+              "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY/transitions"
+            echo "✅ '$TARGET_NAME'(으)로 전환 완료"
+          else
+            echo "❌ 전환 이름 '$TARGET_NAME'을 찾을 수 없습니다. 사용 가능한 전환 목록:"
+            echo "$TRANSITIONS" | jq -r '.transitions[].name'
+          fi
+
+      # ─────────────────────────────────────────────
+      # 라벨 동기화 (bug / enhance / doc 만)
+      # ─────────────────────────────────────────────
+      - name: Sync labels to Jira
+        if: github.event.action == 'labeled' || github.event.action == 'unlabeled'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_KEY: ${{ steps.extract.outputs.jira_key }}
+        run: |
+          declare -A LABEL_MAP=(
+            ["bug"]="bug"
+            ["enhancement"]="enhance"
+            ["documentation"]="doc"
+          )
+
+          RAW_LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
+          JIRA_LABELS="[]"
+          while IFS= read -r label; do
+            [ -z "$label" ] && continue
+            mapped="${LABEL_MAP[$label]:-}"
+            if [ -n "$mapped" ]; then
+              JIRA_LABELS=$(echo "$JIRA_LABELS" | jq --arg l "$mapped" '. + [$l]')
+            fi
+          done <<< "$RAW_LABELS"
+
+          curl -s -X PUT -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"fields\": {\"labels\": $JIRA_LABELS}}" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY"
+
+          echo "✅ 라벨 동기화: $JIRA_LABELS"
+
+      # ─────────────────────────────────────────────
+      # 담당자 동기화
+      # ─────────────────────────────────────────────
+      - name: Sync assignee to Jira
+        if: github.event.action == 'assigned' || github.event.action == 'unassigned'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_KEY: ${{ steps.extract.outputs.jira_key }}
+        run: |
+          declare -A MAP=(
+            ["go-wt-flow"]="본인이메일@example.com"
+            ["albitro"]="rjh2280@gmail.com"
+            ["Chopper-Tony"]="hi.hello.bonjour.ciao@gmail.com"
+            ["caron2002"]="qkrtkddnr122@gmail.com"
+            ["git-songsh"]="songsoo0037@gmail.com"
+            ["Yoobin-Seo"]="seoyb1128@naver.com"
+          )
+
+          GH_LOGIN="${{ github.event.issue.assignee.login }}"
+
+          if [ -z "$GH_LOGIN" ] || [ "$GH_LOGIN" = "null" ]; then
+            curl -s -X PUT -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"fields": {"assignee": null}}' \
+              "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY"
+            echo "✅ 담당자 해제 동기화 완료"
+            exit 0
+          fi
+
+          EMAIL="${MAP[$GH_LOGIN]:-}"
+          if [ -z "$EMAIL" ]; then
+            echo "❌ 매핑 안 된 GitHub 아이디: $GH_LOGIN. MAP에 추가하세요."
+            exit 0
+          fi
+
+          ACCOUNT_ID=$(curl -s -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            "$JIRA_BASE_URL/rest/api/3/user/search?query=$EMAIL" | jq -r '.[0].accountId // empty')
+
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "❌ Jira에서 계정을 못 찾음: $EMAIL"
+            exit 0
+          fi
+
+          curl -s -X PUT -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"fields\": {\"assignee\": {\"accountId\": \"$ACCOUNT_ID\"}}}" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY"
+
+          echo "✅ 담당자 동기화: $GH_LOGIN -> $EMAIL"
+
+      # ─────────────────────────────────────────────
+      # 우선순위 동기화 (GitHub Issue fields의 Priority)
+      # ─────────────────────────────────────────────
+      - name: Sync priority to Jira
+        if: github.event.action == 'field_added' || github.event.action == 'field_removed'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_KEY: ${{ steps.extract.outputs.jira_key }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO_FULL: ${{ github.repository }}
+        run: |
+          FIELD_VALUES=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO_FULL/issues/$ISSUE_NUMBER/issue-field-values")
+
+          GH_PRIORITY=$(echo "$FIELD_VALUES" | jq -r '.[]? | select(.name=="Priority") | .value // empty')
+
+          # ⚠️ 실제 조직의 Priority 옵션명에 맞춰 좌측(GitHub 값)을 확인/수정하세요.
+          declare -A PRIORITY_MAP=(
+            ["Urgent"]="Highest"
+            ["High"]="High"
+            ["Medium"]="Medium"
+            ["Low"]="Low"
+          )
+
+          if [ -z "$GH_PRIORITY" ]; then
+            echo "ℹ️ GitHub에 Priority 값 없음 -> Jira Priority 비움"
+            curl -s -X PUT -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"fields": {"priority": null}}' \
+              "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY"
+            exit 0
+          fi
+
+          JIRA_PRIORITY="${PRIORITY_MAP[$GH_PRIORITY]:-}"
+          if [ -z "$JIRA_PRIORITY" ]; then
+            echo "❌ 매핑 안 된 Priority 값: $GH_PRIORITY. PRIORITY_MAP에 추가하세요."
+            exit 0
+          fi
+
+          curl -s -X PUT -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"fields\": {\"priority\": {\"name\": \"$JIRA_PRIORITY\"}}}" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY"
+
+          echo "✅ 우선순위 동기화: $GH_PRIORITY -> $JIRA_PRIORITY"
