@@ -187,12 +187,14 @@ status_runtime() {
     load_current_run_directory
     read -r -d '' observer <<'PY' || true
 import json
+from datetime import datetime, timezone
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from lifecycle_msgs.srv import GetState
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 from vision_msgs.msg import Detection2DArray
@@ -223,7 +225,18 @@ class Status(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.nav = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self.suppression = ActionClient(self, SuppressFire, "/suppress_fire")
+        self.bt_state = "UNKNOWN"
+        self.bt_state_client = self.create_client(GetState, "/bt_navigator/get_state")
+        if self.bt_state_client.wait_for_service(timeout_sec=0.2):
+            future = self.bt_state_client.call_async(GetState.Request())
+            future.add_done_callback(self.capture_bt_state)
         self.create_timer(15.0, self.finish)
+
+    def capture_bt_state(self, future):
+        try:
+            self.bt_state = future.result().current_state.label
+        except Exception:
+            self.bt_state = "UNKNOWN"
 
     def finish(self):
         for name, value in self.seen.items():
@@ -232,7 +245,18 @@ class Status(Node):
             "map", "base_footprint", Time(), timeout=Duration(seconds=0.2)
         )
         print(f"MAP_TO_BASE_FOOTPRINT: {'PASS' if tf_ok else 'FAIL'}")
-        print(f"NAV2_ACTION_SERVER: {'PASS' if self.nav.server_is_ready() else 'FAIL'}")
+        nav_server_count = len(self.get_publishers_info_by_topic(
+            "/navigate_to_pose/_action/status"
+        ))
+        nav_ready = nav_server_count == 1 and self.bt_state.lower() == "active"
+        print(f"NAV2_ACTION_SERVER: {'PASS' if nav_ready else 'FAIL'}")
+        print(
+            "NAV2_READINESS: "
+            f"timestamp={datetime.now(timezone.utc).isoformat()} "
+            f"server_count={nav_server_count} "
+            f"bt_navigator_state={self.bt_state} "
+            f"result={'PASS' if nav_ready else 'FAIL'}"
+        )
         print(
             f"SUPPRESSION_ACTION_SERVER: "
             f"{'PASS' if self.suppression.server_is_ready() else 'FAIL'}"
@@ -259,6 +283,9 @@ timeout $((STATUS_WAIT_SEC + 3))s python3 -c \"\$STATUS_OBSERVER\"" 2>/dev/null)
         echo "integrated_status: UNKNOWN (조회 실패)"
     else
         printf '%s\n' "$output"
+        printf '%s\n' "$output" | grep '^NAV2_READINESS:' | \
+            docker exec -i -u root "$CONTAINER" \
+            sh -c "cat >'$RUN_LOG_DIR/nav2_readiness.log'"
     fi
 
     if [[ -z "$endpoint" ]]; then
