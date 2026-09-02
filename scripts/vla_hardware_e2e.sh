@@ -3,7 +3,9 @@ set -euo pipefail
 
 CONTAINER="${VLA_CONTAINER:-IntelPi}"
 WORKSPACE="/ros2_ws/phoenix_vla"
-LOG_DIR="${VLA_E2E_LOG_DIR:-/tmp}"
+LOG_ROOT="${VLA_E2E_LOG_ROOT:-/tmp/phoenix_vla_e2e}"
+CURRENT_RUN_FILE="$LOG_ROOT/current_run"
+RUN_LOG_DIR=""
 DRY_RUN="${VLA_E2E_DRY_RUN:-0}"
 CAMERA_WAIT_SEC=8
 STATUS_WAIT_SEC=15
@@ -87,9 +89,30 @@ launch_component() {
     local name="$1"
     local command="$2"
     local full="$ENVIRONMENT
-nohup setsid $command >'$LOG_DIR/e2e_${name}.log' 2>&1 </dev/null &"
+nohup setsid $command >'$RUN_LOG_DIR/e2e_${name}.log' 2>&1 </dev/null &
+echo \$! >'$RUN_LOG_DIR/${name}.pid'"
     run docker exec -d -u root -w / "$CONTAINER" bash -lc "$full"
     echo "$name: 시작 요청 (root, cwd=/)"
+}
+
+prepare_run_log_directory() {
+    local boot_id timestamp
+    boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown_boot)"
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    RUN_LOG_DIR="$LOG_ROOT/${boot_id}_${timestamp}_$$"
+    run docker exec -u root -w / "$CONTAINER" bash -lc \
+        "mkdir -p '$RUN_LOG_DIR' '$LOG_ROOT'; printf '%s\n' '$RUN_LOG_DIR' >'$CURRENT_RUN_FILE'"
+}
+
+load_current_run_directory() {
+    if [[ "$DRY_RUN" == "1" ]]; then
+        run docker exec "$CONTAINER" cat "$CURRENT_RUN_FILE"
+        return 0
+    fi
+    RUN_LOG_DIR="$(docker exec "$CONTAINER" cat "$CURRENT_RUN_FILE" 2>/dev/null || true)"
+    if [[ -n "$RUN_LOG_DIR" ]]; then
+        echo "current_run: $RUN_LOG_DIR"
+    fi
 }
 
 start_preflight() {
@@ -141,6 +164,7 @@ start_runtime() {
         fi
     fi
 
+    prepare_run_log_directory
     launch_component camera "ros2 launch peripherals depth_camera.launch.py"
     run sleep "$CAMERA_WAIT_SEC"
     launch_component base "ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false"
@@ -150,12 +174,13 @@ start_runtime() {
     launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0"
     launch_component navigation "ros2 launch uncc_example vla_navigation_bridge.launch.py"
     launch_component suppression "ros2 launch uncc_example fire_extinguisher.launch.py"
-    echo "production runtime 시작 요청 완료. 로그: $LOG_DIR/e2e_*.log"
+    echo "production runtime 시작 요청 완료. 로그: $RUN_LOG_DIR/e2e_*.log"
 }
 
 status_runtime() {
     local endpoint="${VLA_QWEN_ENDPOINT:-}"
     local observer output
+    load_current_run_directory
     read -r -d '' observer <<'PY' || true
 import json
 import rclpy
@@ -264,6 +289,7 @@ ros2 topic pub --once -w 1 /vla/mission std_msgs/msg/String \"{data: '\$VLA_MISS
 
 stop_runtime() {
     local cancel_request="{goal_info: {goal_id: {uuid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, stamp: {sec: 0, nanosec: 0}}}"
+    load_current_run_directory
     if [[ "$DRY_RUN" == "1" ]]; then
         run docker exec -u root -w / "$CONTAINER" bash -lc "$ENVIRONMENT
 timeout 3 ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true
