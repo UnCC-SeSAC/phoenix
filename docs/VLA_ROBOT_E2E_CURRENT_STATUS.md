@@ -1110,3 +1110,30 @@ team이 아직 확정하지 않았다. Suppression node startup만으로 Pump가
 있어 `fire_suppression_node`, `fire_extinguisher`, `vla_spray_bridge`, 전체
 Hardware wrapper start와 GPIO 접근을 금지한다. 실패한 `active_high=True` 실험
 변경은 production commit에 포함하지 않았다.
+
+## 2026-09-02 Hardware E2E checkpoint
+
+위 `DISABLED` 기록은 Hardware team의 pin 확정 전 historical 상태다. 현재 production
+계약은 Pump `BCM14`, Servo `BCM13`, Pump `active_high=False`,
+`initial_value=0.0`이며 불 OFF suppression startup 5초 동안 실제 Pump/Servo 무동작을
+확인했다.
+
+최신 기준은 `integration/vla-robot-e2e@414abc6c57f61f6bdf44b5212f512d3937afc811`다.
+관련 반영은 실행별 고유 log directory `03a8edb`, wrapper control owner `4a2bb4c`,
+Nav2 goal당 최소 결과 로그 `4f2e2f1`, Nav2 readiness의 `bt_navigator` ACTIVE 조건
+`0fe496a`, `spray_range_m=0.25 m`와 fire stand-off `0.20 m`의 `9801afa`, 실제
+Nav2 XY goal tolerance `0.05 m`의 `414abc6`이다. Goal tolerance가 과거 `0.25 m`일
+때 최악 fire 거리는 `0.45 m`였지만 현재 최악값은 `0.25 m`다.
+
+Floor ROI는 넓은 무광 비가연성 받침을 사용한 40~45 cm 배치에서 valid Depth 약
+`0.471 m`를 냈다. Valid pixel 0의 `depth_status=unknown`에는 Mission을 발행하지
+않는다. 실제 E2E에서 stand-off goal geometry 자체는 정상이고 Nav2 goal도 최종
+`SUCCEEDED`했으나, 시작 약 1.2초 사이 map pose가 약 `0.434 m`, yaw가 약 `19.4°`
+급변했다. Controller의 반복 `Failed to make progress`와 recovery spin의
+`Collision Ahead`가 뒤따랐다. 이는 바닥 배치 뒤 runtime/localization을 다시 만들지
+않고 책상-start 상태를 이어 사용한 절차 오류와 일치한다.
+
+수정된 바닥-start 절차로 실제 화염 제거와 Mission `COMPLETED`는 아직 확인하지
+못했다. VLA Mission 단독 STOP API는 없고 통합 status observer timeout 원인도
+미확정이다. 현재 authoritative 실행 순서는
+`docs/VLA_HARDWARE_E2E_HAPPY_PATH.md`만 따른다.

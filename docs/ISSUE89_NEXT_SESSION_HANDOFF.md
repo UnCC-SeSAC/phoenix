@@ -516,7 +516,7 @@ scripts/vla_hardware_e2e.sh mission
 scripts/vla_hardware_e2e.sh stop
 ```
 
-`start`는 boot ID, zombie를 제외한 active runtime, Camera·LD19, VLA workspace의 HEF·ONNX·JSON을 먼저 확인한다. 완전한 동일-boot runtime은 재사용하고 부분·중복 runtime만 1회 clean stop한다. 새 runtime은 모든 component를 root + `/`에서 Camera 선기동, 8초 대기, 나머지 canonical stack 순서로 시작하며 로그를 `/tmp/e2e_<component>.log`에 저장한다. `status`는 호환 QoS의 단일 통합 확인으로 RGB, Depth, CameraInfo, `/image_enhanced`, `/yolo_result`, Detection3D, map→base_footprint, Nav2·Suppression server와 Qwen health를 `PASS`/`FAIL`/`UNKNOWN`으로 출력한다. `/fire/detections` 0건을 raw YOLO 실패로 사용하지 않는다. `mission`은 새 ID로 정확히 한 번 발행한다.
+`start`는 boot ID, zombie를 제외한 active runtime, Camera·LD19, VLA workspace의 HEF·ONNX·JSON을 먼저 확인한다. 완전한 동일-boot runtime은 재사용하고 부분·중복 runtime만 1회 clean stop한다. 새 runtime은 모든 component를 root + `/`에서 Camera 선기동, 8초 대기, 나머지 canonical stack 순서로 시작한다. Start마다 `/tmp/phoenix_vla_e2e/<boot_id>_<UTC timestamp>_<pid>/`를 새로 만들고 component 로그와 `ROS_LOG_DIR`을 그 아래 보존한다. `status`는 호환 QoS의 단일 통합 확인으로 RGB, Depth, CameraInfo, `/image_enhanced`, `/yolo_result`, Detection3D, map→base_footprint, Nav2·Suppression server와 Qwen health를 `PASS`/`FAIL`/`UNKNOWN`으로 출력한다. Nav2 PASS에는 composable load, `bt_navigator` ACTIVE, 현재 `/navigate_to_pose` server가 모두 필요하다. Status timeout은 `DIAGNOSTIC_UNKNOWN`이다. `/fire/detections` 0건을 raw YOLO 실패로 사용하지 않는다. `mission`은 새 ID로 정확히 한 번 발행한다.
 SSH 실패 뒤 `start`를 재전송하지 말고 `status`로 실제 process 상태를 먼저 확인한다.
 명령·경로 확인에는 `VLA_E2E_DRY_RUN=1`을 사용한다.
 
@@ -570,3 +570,22 @@ exploration 상태를 요구하지 않는다. Suppression 후에는 기존 `PEND
 다음 Hardware 시작점은 (1) Hardware team의 Pump/Servo pin·극성 확정, (2) 불 OFF에서
 suppression startup 무동작 단독 시험, (3) person+fire pre-spray E2E 재개 순서다.
 이전 Mission/entity/action은 재사용하지 않는다.
+
+## 2026-09-02 next session start point
+
+위 suppression-disabled 단락은 historical이다. Hardware team 확정값 Pump BCM14,
+Servo BCM13을 적용했고 불 OFF startup 5초 무동작을 확인했다. 최신 HEAD는
+`414abc6c57f61f6bdf44b5212f512d3937afc811`이며 spray range `0.25 m`, fire
+stand-off `0.20 m`, Nav2 XY goal tolerance `0.05 m`다.
+
+다음에는 로봇을 먼저 안전한 바닥에 놓고 충전선을 분리한다. 실제 PC GPU host의
+canonical Qwen HTTP 200을 확인한 뒤 wrapper clean start를 정확히 한 번 수행한다.
+정지 map→base pose가 5초간 큰 위치/yaw jump 없이 안정적일 때 observer를 준비하고,
+넓은 무광 비가연성 받침의 fresh fire Depth/map이 유효할 때만 새 FIRE_ONLY Mission을
+한 번 발행한다. 목표는 실제 Qwen→Nav2→Robot stop→Suppression→미검출 3회→화염
+제거→Mission `COMPLETED`다. 자세한 유일 실행 절차는
+`docs/VLA_HARDWARE_E2E_HAPPY_PATH.md`를 따른다.
+
+현재 미완료 항목은 수정된 바닥-start 절차의 최종 실제 소화, VLA Mission 단독 STOP
+API, 통합 status observer timeout 원인이다. 책상에서 runtime을 시작한 뒤 바닥으로
+옮기거나 이전 localization/fire/Mission/goal을 재사용하지 않는다.

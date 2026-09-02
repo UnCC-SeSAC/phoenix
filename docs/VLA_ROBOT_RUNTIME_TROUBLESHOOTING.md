@@ -834,6 +834,45 @@ Branch 전체 merge나 commit message만으로 복구를 시도하지 않는다.
 Mission scope, 정상 Qwen 1회, Validator와 suppression verification 계약을 기준으로
 실제 증거가 있는 최소 commit만 선별한다.
 
+## Nav2 readiness false PASS와 status timeout
+
+증상: Nav2 process 또는 stale DDS endpoint만 보고 preflight가 PASS했지만 Mission
+시점에 실제 NavigateToPose 경로가 준비되지 않을 수 있다. 통합 status observer가
+응답 없이 제한시간을 넘길 수도 있다.
+
+판정: Nav2 PASS는 composable components load, `bt_navigator` lifecycle ACTIVE,
+현재 `/navigate_to_pose` server endpoint를 함께 확인한다. Stale endpoint만으로 PASS로
+판정하지 않는다. Status observer timeout은 `DIAGNOSTIC_UNKNOWN`이며 production
+FAIL이나 runtime 재시작 근거가 아니다. 각 결과는 현재 run directory의 `ros/` 로그와
+대조한다.
+
+## 책상-start runtime을 바닥으로 옮긴 뒤 localization 급변
+
+증상: 정상 stand-off geometry의 goal을 제출했지만 시작 약 1.2초 사이 map pose가 약
+`0.434 m`, yaw가 약 `19.4°` 급변했다. Controller `Failed to make progress`가
+반복됐고 recovery spin은 `Collision Ahead`로 중단됐다.
+
+직접 증거: Robot `(0,0)`과 fire `(-0.500,-0.187)` 사이의 stand-off goal
+`(-0.313,-0.117)`은 fire에서 정확히 약 `0.20 m`이고 goal yaw도 fire bearing과
+일치했다. 따라서 이 incident의 첫 이상은 goal geometry가 아니라 localization
+불연속이다.
+
+다음 운영 절차: 책상 사전점검 뒤 runtime을 종료하고 로봇을 바닥에 먼저 배치한다.
+바닥에서 canonical clean start 후 정지 map→base pose를 5초 확인하고, 큰 위치/yaw
+jump가 없을 때만 점화한다. Active runtime의 로봇을 책상에서 바닥으로 옮긴 뒤 기존
+localization, fire, Mission 또는 goal을 재사용하지 않는다.
+
+## Fire Depth floor ROI와 실제 분사거리
+
+- Floor ROI valid pixel이 0이면 `depth_status=unknown`이며 Mission을 발행하지 않는다.
+  넓은 무광 비가연성 받침과 40~45 cm 배치에서 실제 성공 Depth는 약 `0.471 m`였다.
+- 과거 `spray_range_m=0.8 m`에서는 약 45 cm 거리에서 제자리 분사했지만 물의 실제
+  도달거리는 약 25 cm였다. 현재 계약은 spray range `0.25 m`, fire stand-off
+  `0.20 m`, Nav2 XY tolerance `0.05 m`다. 과거 tolerance `0.25 m`의 최악 fire
+  거리는 `0.45 m`였고 현재 최악값은 `0.25 m`다.
+- 위 값은 기존 freshness, Robot stop, suppression verification과 Pump OFF 계약을
+  변경하지 않는다.
+
 ## Reported person이 같은 Mission에서 반복 생성·보고됨
 
 증상: ID 없는 동일 person 관측이 `2~4 s` 간격으로 들어올 때 fallback entity ID가
