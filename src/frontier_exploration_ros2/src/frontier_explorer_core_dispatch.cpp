@@ -36,6 +36,12 @@ void FrontierExplorerCore::try_send_next_goal()
     return;
   }
 
+  if (oscillation_recovery_in_progress) {
+    // Map/costmap callbacks keep arriving while DriveOnHeading owns motion.
+    // Do not dispatch a new frontier NavigateToPose until that escape action ends.
+    return;
+  }
+
   if (return_to_start_completed) {
     // Exploration is fully finished.
     return;
@@ -190,6 +196,7 @@ void FrontierExplorerCore::reset_exploration_runtime_state(bool clear_maps)
   suppressed_return_to_start_started = false;
   cancel_request_in_progress = false;
   pending_cancel_reason.reset();
+  oscillation_recovery_in_progress = false;
   pending_frontier_sequence.clear();
   pending_frontier_selection_mode.clear();
   pending_frontier_dispatch_context.clear();
@@ -727,6 +734,50 @@ void FrontierExplorerCore::request_active_goal_cancel(const std::string & reason
   issue_active_goal_cancel();
 }
 
+bool FrontierExplorerCore::request_oscillation_recovery()
+{
+  if (
+    !exploration_enabled || oscillation_recovery_in_progress || !goal_handle ||
+    !active_frontier_goal_in_progress() || goal_state != GoalLifecycleState::ACTIVE)
+  {
+    return false;
+  }
+
+  oscillation_recovery_in_progress = true;
+  // A live preemption candidate must not bypass the post-recovery fresh selection.
+  pending_frontier_sequence.clear();
+  pending_frontier_selection_mode.clear();
+  pending_frontier_dispatch_context.clear();
+  reset_replacement_candidate_tracking();
+  callbacks.log_warn(
+    "Angular oscillation detected; canceling frontier goal before safe forward recovery");
+  request_active_goal_cancel("Angular velocity sign reversed repeatedly");
+  return true;
+}
+
+void FrontierExplorerCore::complete_oscillation_recovery(bool advanced)
+{
+  if (!oscillation_recovery_in_progress) {
+    return;
+  }
+
+  oscillation_recovery_in_progress = false;
+  frontier_snapshot.reset();
+  raw_frontier_debug_cache.reset();
+  mrtsp_order_cache.reset();
+  reset_replacement_candidate_tracking();
+
+  callbacks.log_info(
+    advanced ?
+    "Oscillation recovery advanced safely; reselecting frontier" :
+    "Oscillation recovery could not advance safely; reselecting frontier");
+
+  if (exploration_enabled) {
+    clear_post_goal_wait_state();
+    try_send_next_goal();
+  }
+}
+
 void FrontierExplorerCore::issue_active_goal_cancel()
 {
   if (!goal_handle || cancel_request_in_progress) {
@@ -782,6 +833,7 @@ void FrontierExplorerCore::cancel_response_callback(
   if (!error_message.empty()) {
     cancel_request_in_progress = false;
     set_goal_state(GoalLifecycleState::ACTIVE);
+    oscillation_recovery_in_progress = false;
     callbacks.log_warn("Failed to cancel active goal: " + error_message);
     return;
   }
@@ -789,6 +841,7 @@ void FrontierExplorerCore::cancel_response_callback(
   if (!cancel_accepted) {
     cancel_request_in_progress = false;
     set_goal_state(GoalLifecycleState::ACTIVE);
+    oscillation_recovery_in_progress = false;
     callbacks.log_warn("Active goal cancel request was not accepted");
   }
 }
@@ -1141,6 +1194,9 @@ void FrontierExplorerCore::get_result_callback(
   // Cache derived values early so later cleanup cannot invalidate log/context decisions.
   const std::string goal_kind = context.has_value() ? context->goal_kind : "";
   const FrontierSequence frontier_sequence = context.has_value() ? context->frontier_sequence : FrontierSequence{};
+  const bool oscillation_cancel_completed =
+    oscillation_recovery_in_progress && exception_text.empty() &&
+    goal_kind == "frontier" && status == action_msgs::msg::GoalStatus::STATUS_CANCELED;
 
   // halt trace
   callbacks.log_info(
@@ -1219,8 +1275,24 @@ void FrontierExplorerCore::get_result_callback(
   pending_cancel_reason.reset();
   clear_active_goal_state();
 
+  if (!oscillation_cancel_completed) {
+    // A success/abort may race the cancel request. In that case, retain the normal
+    // terminal-result behavior and do not run an escape drive.
+    oscillation_recovery_in_progress = false;
+  }
+
   if (!exploration_enabled) {
+    oscillation_recovery_in_progress = false;
     clear_post_goal_wait_state();
+    return;
+  }
+
+  if (oscillation_cancel_completed) {
+    if (callbacks.on_oscillation_recovery_ready) {
+      callbacks.on_oscillation_recovery_ready();
+    } else {
+      complete_oscillation_recovery(false);
+    }
     return;
   }
 
