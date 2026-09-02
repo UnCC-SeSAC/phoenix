@@ -90,6 +90,8 @@ launch_component() {
     local name="$1"
     local command="$2"
     local full="$ENVIRONMENT
+export ROS_LOG_DIR='$RUN_LOG_DIR/ros'
+mkdir -p \"\$ROS_LOG_DIR\"
 nohup setsid $command >'$RUN_LOG_DIR/e2e_${name}.log' 2>&1 </dev/null &
 echo \$! >'$RUN_LOG_DIR/${name}.pid'"
     run docker exec -d -u root -w / "$CONTAINER" bash -lc "$full"

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from action_msgs.msg import GoalStatus
@@ -6,6 +7,14 @@ from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from nav_msgs.msg import Path
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
+
+
+@dataclass(frozen=True)
+class NavigationOutcome:
+    status: int
+    goal_uuid: str | None = None
+    error_code: int = 0
+    error_msg: str = ''
 
 
 class Nav2Navigator:
@@ -93,16 +102,34 @@ class Nav2Navigator:
     def navigate(
         self,
         goal: PoseStamped,
-        on_result: Callable[[int], None],
+        on_result: Callable[[NavigationOutcome], None],
+        on_goal_response: Callable[[bool, str | None], None] | None = None,
+        on_feedback: Callable[[object, float], None] | None = None,
     ):
         if not self.navigator_ready():
-            on_result(GoalStatus.STATUS_ABORTED)
+            if on_goal_response is not None:
+                on_goal_response(False, None)
+            on_result(NavigationOutcome(
+                GoalStatus.STATUS_ABORTED,
+                error_msg='NavigateToPose server is not ready',
+            ))
             return
 
         msg = NavigateToPose.Goal()
         msg.pose = goal
 
-        future = self.navigate_client.send_goal_async(msg)
+        def feedback_done(feedback_msg):
+            if on_feedback is None:
+                return
+            feedback = feedback_msg.feedback
+            on_feedback(
+                feedback.current_pose,
+                float(feedback.distance_remaining),
+            )
+
+        future = self.navigate_client.send_goal_async(
+            msg, feedback_callback=feedback_done
+        )
 
         def goal_response_done(goal_future):
             try:
@@ -111,26 +138,49 @@ class Nav2Navigator:
                 self.node.get_logger().warn(
                     f'NavigateToPose goal error: {exc}'
                 )
-                on_result(GoalStatus.STATUS_ABORTED)
+                if on_goal_response is not None:
+                    on_goal_response(False, None)
+                on_result(NavigationOutcome(
+                    GoalStatus.STATUS_ABORTED,
+                    error_msg=str(exc),
+                ))
                 return
 
             if not goal_handle.accepted:
-                on_result(GoalStatus.STATUS_ABORTED)
+                if on_goal_response is not None:
+                    on_goal_response(False, None)
+                on_result(NavigationOutcome(
+                    GoalStatus.STATUS_ABORTED,
+                    error_msg='NavigateToPose goal rejected',
+                ))
                 return
 
             self._nav_goal_handle = goal_handle
+            goal_uuid = bytes(goal_handle.goal_id.uuid).hex()
+            if on_goal_response is not None:
+                on_goal_response(True, goal_uuid)
 
             result_future = goal_handle.get_result_async()
 
             def result_done(nav_future):
                 try:
                     wrapped = nav_future.result()
-                    on_result(wrapped.status)
+                    result = wrapped.result
+                    on_result(NavigationOutcome(
+                        status=wrapped.status,
+                        goal_uuid=goal_uuid,
+                        error_code=int(getattr(result, 'error_code', 0)),
+                        error_msg=str(getattr(result, 'error_msg', '')),
+                    ))
                 except Exception as exc:
                     self.node.get_logger().warn(
                         f'NavigateToPose result error: {exc}'
                     )
-                    on_result(GoalStatus.STATUS_ABORTED)
+                    on_result(NavigationOutcome(
+                        GoalStatus.STATUS_ABORTED,
+                        goal_uuid=goal_uuid,
+                        error_msg=str(exc),
+                    ))
                 finally:
                     self._nav_goal_handle = None
 

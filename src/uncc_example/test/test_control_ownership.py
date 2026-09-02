@@ -1,7 +1,10 @@
 import json
 import sys
+import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+import pytest
 
 nav2_msgs = ModuleType("nav2_msgs")
 nav2_msgs_action = ModuleType("nav2_msgs.action")
@@ -40,7 +43,10 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
 from uncc_example.mission_executor import MissionExecutor
-from uncc_example.vla_navigation_bridge_node import VLANavigationBridgeNode
+from action_msgs.msg import GoalStatus
+from builtin_interfaces.msg import Time as TimeMsg
+from uncc_example.nav2_navigator import NavigationOutcome
+from uncc_example.vla_navigation_bridge_node import PendingGoal, VLANavigationBridgeNode
 
 
 class FakeFuture:
@@ -98,9 +104,9 @@ def navigation_bridge(mode):
         map_frame="map",
         pending=None,
         completed_results={},
-        navigator=SimpleNamespace(navigate=lambda goal, callback: goals.append(goal)),
+        navigator=SimpleNamespace(navigate=lambda goal, *callbacks: goals.append(goal)),
         get_clock=lambda: SimpleNamespace(
-            now=lambda: SimpleNamespace(to_msg=lambda: SimpleNamespace())
+            now=lambda: SimpleNamespace(to_msg=TimeMsg)
         ),
         get_logger=lambda: SimpleNamespace(
             warning=lambda *args, **kwargs: None,
@@ -109,6 +115,8 @@ def navigation_bridge(mode):
     )
     bridge._publish_terminal = lambda *args: None
     bridge._navigation_done = lambda status: None
+    bridge._navigation_goal_response = lambda accepted, goal_uuid: None
+    bridge._navigation_feedback = lambda current_pose, distance_remaining: None
     return bridge, goals
 
 
@@ -181,3 +189,44 @@ def test_rule_based_mode_is_required_for_fsm_suppression():
     executor.control_mode = "RULE_BASED"
     MissionExecutor._call_fire_suppression(executor)
     assert len(client.goals) == 1
+
+
+@pytest.mark.parametrize(
+    ("nav_status", "terminal"),
+    [
+        (GoalStatus.STATUS_SUCCEEDED, "SUCCEEDED"),
+        (GoalStatus.STATUS_ABORTED, "ABORTED"),
+        (GoalStatus.STATUS_CANCELED, "CANCELED"),
+    ],
+)
+def test_navigation_terminal_log_preserves_result_details(nav_status, terminal):
+    logs = []
+    published = []
+    bridge = SimpleNamespace(
+        pending=PendingGoal("action_7", "fire_2", 1.25, -0.5, 0.75, time.monotonic() - 1.0),
+        _last_feedback_pose=(0.5, -0.25),
+        _last_distance_remaining=0.8,
+        get_logger=lambda: SimpleNamespace(info=logs.append),
+        _publish_terminal=lambda *args: published.append(args),
+    )
+
+    VLANavigationBridgeNode._navigation_done(
+        bridge,
+        NavigationOutcome(
+            status=nav_status,
+            goal_uuid="001122",
+            error_code=42,
+            error_msg="nav detail",
+        ),
+    )
+
+    assert published[0][2] == terminal
+    assert f"status={terminal}" in logs[0]
+    assert "action_id=action_7" in logs[0]
+    assert "goal_uuid=001122" in logs[0]
+    assert "target_pose=(1.250, -0.500, 0.750)" in logs[0]
+    assert "error_code=42" in logs[0]
+    assert "error_msg=nav detail" in logs[0]
+    assert "last_pose=(0.500, -0.250)" in logs[0]
+    assert "distance_remaining=0.800" in logs[0]
+    assert "elapsed_sec=" in logs[0]

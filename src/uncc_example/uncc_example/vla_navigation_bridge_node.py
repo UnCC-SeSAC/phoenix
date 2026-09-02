@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 import rclpy
 from action_msgs.msg import GoalStatus
@@ -15,13 +16,17 @@ from rclpy.time import Time
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from .nav2_navigator import Nav2Navigator
+from .nav2_navigator import NavigationOutcome, Nav2Navigator
 
 
 @dataclass(frozen=True)
 class PendingGoal:
     action_id: str
     target_id: str | None
+    x: float = 0.0
+    y: float = 0.0
+    yaw: float = 0.0
+    started_at: float = field(default_factory=time.monotonic)
 
 
 class VLANavigationBridgeNode(Node):
@@ -87,6 +92,8 @@ class VLANavigationBridgeNode(Node):
             String, "/vla/control_mode", self._control_mode_callback, control_qos
         )
         self.completed_results: dict[str, dict] = {}
+        self._last_feedback_pose: tuple[float, float] | None = None
+        self._last_distance_remaining: float | None = None
         self.get_logger().info(
             "VLA navigation bridge started: JSON topic -> NavigateToPose"
         )
@@ -141,8 +148,15 @@ class VLANavigationBridgeNode(Node):
         goal.pose.orientation.z = math.sin(yaw * 0.5)
         goal.pose.orientation.w = math.cos(yaw * 0.5)
 
-        self.pending = PendingGoal(action_id, target_id)
-        self.navigator.navigate(goal, self._navigation_done)
+        self.pending = PendingGoal(action_id, target_id, x, y, yaw, time.monotonic())
+        self._last_feedback_pose = None
+        self._last_distance_remaining = None
+        self.navigator.navigate(
+            goal,
+            self._navigation_done,
+            self._navigation_goal_response,
+            self._navigation_feedback,
+        )
         self.get_logger().info(
             f"NavigateToPose submitted: action_id={action_id}, target={target_id}, "
             f"pose=({x:.2f}, {y:.2f}, {yaw:.2f})"
@@ -161,17 +175,60 @@ class VLANavigationBridgeNode(Node):
         if not self.navigator.cancel_navigation():
             self.get_logger().warning("Nav2 cancel request could not be submitted")
 
-    def _navigation_done(self, nav_status: int) -> None:
+    def _navigation_goal_response(
+        self, accepted: bool, goal_uuid: str | None
+    ) -> None:
+        pending = self.pending
+        if pending is None:
+            return
+        self.get_logger().info(
+            "NavigateToPose goal response: "
+            f"action_id={pending.action_id}, goal_uuid={goal_uuid or 'NONE'}, "
+            f"target_pose=({pending.x:.3f}, {pending.y:.3f}, {pending.yaw:.3f}), "
+            f"accepted={accepted}"
+        )
+
+    def _navigation_feedback(self, current_pose, distance_remaining: float) -> None:
+        self._last_feedback_pose = (
+            float(current_pose.pose.position.x),
+            float(current_pose.pose.position.y),
+        )
+        self._last_distance_remaining = distance_remaining
+
+    def _navigation_done(self, outcome: NavigationOutcome | int) -> None:
         pending = self.pending
         self.pending = None
         if pending is None:
             return
 
+        if isinstance(outcome, int):
+            outcome = NavigationOutcome(outcome)
+        nav_status = outcome.status
         status = {
             GoalStatus.STATUS_SUCCEEDED: "SUCCEEDED",
             GoalStatus.STATUS_ABORTED: "ABORTED",
             GoalStatus.STATUS_CANCELED: "CANCELED",
         }.get(nav_status, "FAILED")
+        pose = getattr(self, "_last_feedback_pose", None)
+        pose_text = (
+            f"({pose[0]:.3f}, {pose[1]:.3f})" if pose is not None else "NONE"
+        )
+        distance_text = (
+            f"{self._last_distance_remaining:.3f}"
+            if getattr(self, "_last_distance_remaining", None) is not None
+            else "NONE"
+        )
+        elapsed_sec = time.monotonic() - pending.started_at
+        if hasattr(self, "get_logger"):
+            self.get_logger().info(
+                "NavigateToPose terminal: "
+                f"action_id={pending.action_id}, goal_uuid={outcome.goal_uuid or 'NONE'}, "
+                f"target_pose=({pending.x:.3f}, {pending.y:.3f}, {pending.yaw:.3f}), "
+                f"status={status}, error_code={outcome.error_code}, "
+                f"error_msg={outcome.error_msg or 'NONE'}, "
+                f"last_pose={pose_text}, distance_remaining={distance_text}, "
+                f"elapsed_sec={elapsed_sec:.3f}"
+            )
         self._publish_terminal(
             pending.action_id,
             pending.target_id,
