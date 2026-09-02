@@ -42,8 +42,8 @@ from gpiozero.pins.lgpio import LGPIOFactory
 Device.pin_factory = LGPIOFactory()
 
 # 하드웨어 설정
-PUMP_PIN = 13
-SERVO_PIN = 14
+PUMP_PIN = 14
+SERVO_PIN = 13
 PWM_FREQUENCY = 1000
 
 SPRAY_SECONDS = 3.0
