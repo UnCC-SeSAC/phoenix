@@ -95,7 +95,9 @@ mkdir -p \"\$ROS_LOG_DIR\"
 nohup setsid $command >'$RUN_LOG_DIR/e2e_${name}.log' 2>&1 </dev/null &
 pid=\$!
 echo \$pid >'$RUN_LOG_DIR/${name}.pid'
-echo \$pid >'$RUN_LOG_DIR/${name}.pgid'"
+echo \$pid >'$RUN_LOG_DIR/${name}.pgid'
+awk '{print \$22}' /proc/\$pid/stat >'$RUN_LOG_DIR/${name}.starttime'
+sha256sum /proc/\$pid/cmdline | awk '{print \$1}' >'$RUN_LOG_DIR/${name}.command_sha256'"
     run docker exec -d -u root -w / "$CONTAINER" bash -lc "$full"
     echo "$name: 시작 요청 (root, cwd=/)"
 }
@@ -343,27 +345,65 @@ timeout -k 1s 3s ros2 service call /suppress_fire/_action/cancel_goal action_msg
     echo "Robot stop: active goal cancel + explicit four-motor zero 전송"
     if [[ -n "$RUN_LOG_DIR" ]]; then
         docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
+: >"$RUN_LOG_DIR/owned_processes.snapshot"
 for file in "$RUN_LOG_DIR"/*.pgid; do
     [[ -f "$file" ]] || continue
     pgid="$(cat "$file")"
     [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || continue
-    members="$(ps -eo pgid=,stat= | awk -v wanted="$pgid" '\''$1 == wanted && $2 !~ /^Z/'\'')"
-    [[ -n "$members" ]] || continue
+    group_owned=0
+    while read -r pid member_pgid stat; do
+        [[ -n "$pid" && "$stat" != Z* ]] || continue
+        starttime="$(awk '\''{print $22}'\'' "/proc/$pid/stat" 2>/dev/null || true)"
+        command_sha256="$(sha256sum "/proc/$pid/cmdline" 2>/dev/null | awk '\''{print $1}'\'')"
+        [[ -n "$starttime" && -n "$command_sha256" ]] || continue
+        printf "%s %s %s %s\n" "$pid" "$member_pgid" "$starttime" "$command_sha256" \
+            >>"$RUN_LOG_DIR/owned_processes.snapshot"
+        group_owned=1
+    done < <(ps -eo pid=,pgid=,stat= | awk -v wanted="$pgid" '\''$2 == wanted'\'')
+    [[ "$group_owned" -eq 1 ]] || continue
     kill -INT -- "-$pgid" 2>/dev/null || true
 done'
         sleep 5
         docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
-for file in "$RUN_LOG_DIR"/*.pgid; do
-    [[ -f "$file" ]] || continue
-    pgid="$(cat "$file")"
+cut -d" " -f2 "$RUN_LOG_DIR/owned_processes.snapshot" | sort -un | while read -r pgid; do
     [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || continue
-    members="$(ps -eo pgid=,stat= | awk -v wanted="$pgid" '\''$1 == wanted && $2 !~ /^Z/'\'')"
-    [[ -n "$members" ]] || continue
+    matching=0
+    while read -r pid saved_pgid saved_starttime saved_hash; do
+        [[ "$saved_pgid" == "$pgid" && -r "/proc/$pid/stat" ]] || continue
+        stat="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
+        starttime="$(awk '\''{print $22}'\'' "/proc/$pid/stat" 2>/dev/null || true)"
+        command_sha256="$(sha256sum "/proc/$pid/cmdline" 2>/dev/null | awk '\''{print $1}'\'')"
+        [[ "$stat" != Z* && "$starttime" == "$saved_starttime" && "$command_sha256" == "$saved_hash" ]] \
+            && matching=1
+    done <"$RUN_LOG_DIR/owned_processes.snapshot"
+    [[ "$matching" -eq 1 ]] || continue
     kill -TERM -- "-$pgid" 2>/dev/null || true
 done'
         sleep 2
         docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
+rm -f "$RUN_LOG_DIR/final_kill.pids"
+while read -r pid pgid saved_starttime saved_hash; do
+    [[ -r "/proc/$pid/stat" ]] || continue
+    stat="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
+    current_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d " ")"
+    starttime="$(awk '\''{print $22}'\'' "/proc/$pid/stat" 2>/dev/null || true)"
+    command_sha256="$(sha256sum "/proc/$pid/cmdline" 2>/dev/null | awk '\''{print $1}'\'')"
+    [[ "$stat" != Z* && "$current_pgid" == "$pgid" \
+        && "$starttime" == "$saved_starttime" && "$command_sha256" == "$saved_hash" ]] || continue
+    printf "%s\n" "$pid" >>"$RUN_LOG_DIR/final_kill.pids"
+    kill -KILL "$pid" 2>/dev/null || true
+done <"$RUN_LOG_DIR/owned_processes.snapshot"'
+        sleep 1
+        docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
 remaining=0
+while read -r pid pgid saved_starttime saved_hash; do
+    [[ -r "/proc/$pid/stat" ]] || continue
+    stat="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
+    starttime="$(awk '\''{print $22}'\'' "/proc/$pid/stat" 2>/dev/null || true)"
+    command_sha256="$(sha256sum "/proc/$pid/cmdline" 2>/dev/null | awk '\''{print $1}'\'')"
+    [[ "$stat" == Z* || "$starttime" != "$saved_starttime" || "$command_sha256" != "$saved_hash" ]] \
+        || remaining=1
+done <"$RUN_LOG_DIR/owned_processes.snapshot"
 for file in "$RUN_LOG_DIR"/*.pgid; do
     [[ -f "$file" ]] || continue
     pgid="$(cat "$file")"
