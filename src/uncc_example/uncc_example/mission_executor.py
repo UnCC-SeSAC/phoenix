@@ -52,6 +52,11 @@ class MissionExecutor(Node):
         # goal 을 보낼 때마다 증가 — 취소된 이전 goal 의 뒤늦은 결과
         # 콜백이 지금 goal 의 상태를 덮어쓰지 못하게 막는 용도.
         self._nav_goal_token = 0
+        # goal 을 보냈지만 아직 accept/reject 응답이 안 왔는지 여부.
+        self._nav_goal_pending = False
+        # 응답 오기 전에 취소 요청이 오면 여기 남겨뒀다가 accept 되는
+        # 즉시 취소한다 (fire_suppression 쪽과 동일한 패턴).
+        self._nav_cancel_pending = False
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
@@ -331,6 +336,7 @@ class MissionExecutor(Node):
             f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})"
         )
 
+        self._nav_goal_pending = True
         send_future = self._nav_client.send_goal_async(goal)
         send_future.add_done_callback(
             functools.partial(self._nav_goal_response, token=token)
