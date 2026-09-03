@@ -93,7 +93,9 @@ launch_component() {
 export ROS_LOG_DIR='$RUN_LOG_DIR/ros'
 mkdir -p \"\$ROS_LOG_DIR\"
 nohup setsid $command >'$RUN_LOG_DIR/e2e_${name}.log' 2>&1 </dev/null &
-echo \$! >'$RUN_LOG_DIR/${name}.pid'"
+pid=\$!
+echo \$pid >'$RUN_LOG_DIR/${name}.pid'
+echo \$pid >'$RUN_LOG_DIR/${name}.pgid'"
     run docker exec -d -u root -w / "$CONTAINER" bash -lc "$full"
     echo "$name: 시작 요청 (root, cwd=/)"
 }
@@ -323,22 +325,58 @@ stop_runtime() {
     load_current_run_directory
     if [[ "$DRY_RUN" == "1" ]]; then
         run docker exec -u root -w / "$CONTAINER" bash -lc "$ENVIRONMENT
-timeout 3 ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true
-timeout 3 ros2 service call /suppress_fire/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true"
+timeout -k 1s 3s ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true
+timeout -k 1s 3s ros2 service call /suppress_fire/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true"
         run docker exec -u root -w / "$CONTAINER" bash -lc "$ENVIRONMENT
-ros2 topic pub --once /ros_robot_controller/set_motor ros_robot_controller_msgs/msg/MotorsState \"{data: [{id: 1, rps: 0.0}, {id: 2, rps: 0.0}, {id: 3, rps: 0.0}, {id: 4, rps: 0.0}]}\""
-        run docker exec "$CONTAINER" bash -lc "pkill -TERM -f '$PRODUCTION_PATTERN'"
+timeout -k 1s 3s ros2 topic pub --once -w 1 /ros_robot_controller/set_motor ros_robot_controller_msgs/msg/MotorsState \"{data: [{id: 1, rps: 0.0}, {id: 2, rps: 0.0}, {id: 3, rps: 0.0}, {id: 4, rps: 0.0}]}\" || true"
         return 0
     fi
-    container_shell "timeout 3 ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' >/dev/null 2>&1 || true
-timeout 3 ros2 service call /suppress_fire/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' >/dev/null 2>&1 || true"
+    exec 9>"$LOCK_FILE"
+    flock -w 2 9 || true
+    curl -fsS --max-time 2 -X POST -H 'Content-Type: application/json' \
+        -d '{"mode":"NONE"}' http://127.0.0.1:8080/api/control-mode \
+        >/dev/null 2>&1 || true
+    container_shell "timeout -k 1s 3s ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' >/dev/null 2>&1 || true
+timeout -k 1s 3s ros2 service call /suppress_fire/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' >/dev/null 2>&1 || true"
     sleep 1
-    container_shell "ros2 topic pub --once /ros_robot_controller/set_motor ros_robot_controller_msgs/msg/MotorsState \"{data: [{id: 1, rps: 0.0}, {id: 2, rps: 0.0}, {id: 3, rps: 0.0}, {id: 4, rps: 0.0}]}\""
+    container_shell "timeout -k 1s 3s ros2 topic pub --once -w 1 /ros_robot_controller/set_motor ros_robot_controller_msgs/msg/MotorsState \"{data: [{id: 1, rps: 0.0}, {id: 2, rps: 0.0}, {id: 3, rps: 0.0}, {id: 4, rps: 0.0}]}\" >/dev/null 2>&1 || true"
     echo "Robot stop: active goal cancel + explicit four-motor zero 전송"
-    docker exec "$CONTAINER" bash -lc "pkill -TERM -f 'fire_extinguisher.launch.py|fire_suppression_node' || true"
-    sleep 2
-    echo "Pump OFF: suppression SIGTERM cleanup 적용"
-    docker exec "$CONTAINER" bash -lc "pkill -TERM -f '$PRODUCTION_PATTERN' || true"
+    if [[ -n "$RUN_LOG_DIR" ]]; then
+        docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
+for file in "$RUN_LOG_DIR"/*.pgid; do
+    [[ -f "$file" ]] || continue
+    pgid="$(cat "$file")"
+    [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || continue
+    members="$(ps -eo pgid=,stat= | awk -v wanted="$pgid" '\''$1 == wanted && $2 !~ /^Z/'\'')"
+    [[ -n "$members" ]] || continue
+    kill -INT -- "-$pgid" 2>/dev/null || true
+done'
+        sleep 5
+        docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
+for file in "$RUN_LOG_DIR"/*.pgid; do
+    [[ -f "$file" ]] || continue
+    pgid="$(cat "$file")"
+    [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || continue
+    members="$(ps -eo pgid=,stat= | awk -v wanted="$pgid" '\''$1 == wanted && $2 !~ /^Z/'\'')"
+    [[ -n "$members" ]] || continue
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+done'
+        sleep 2
+        docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
+remaining=0
+for file in "$RUN_LOG_DIR"/*.pgid; do
+    [[ -f "$file" ]] || continue
+    pgid="$(cat "$file")"
+    [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || continue
+    members="$(ps -eo pgid=,stat= | awk -v wanted="$pgid" '\''$1 == wanted && $2 !~ /^Z/'\'')"
+    [[ -z "$members" ]] || remaining=1
+done
+exit "$remaining"' || {
+            echo "wrapper 소유 production process group 종료 미완료" >&2
+            return 6
+        }
+    fi
+    echo "Pump OFF: suppression process group 종료 적용"
     echo "production runtime 종료 요청 완료"
 }
 

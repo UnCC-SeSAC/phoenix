@@ -13,6 +13,7 @@ from .domain import (
     ActionSubmissionStatus,
     ActionType,
     FireState,
+    MissionScope,
     utc_now,
 )
 from .llm import LLMError, LLMInferenceError, LLMOutputError
@@ -111,6 +112,14 @@ class VLAOrchestrator:
                 )
                 decision = self._correct_out_of_range_extinguish(decision)
 
+        if self._targets_non_mission_fire(decision):
+            return DecisionCycle(
+                decision,
+                None,
+                None,
+                "MISSION_TARGET_MISMATCH: FIRE_ONLY Mission의 고정 target과 다릅니다.",
+            )
+
         try:
             action = self.resolver.resolve(decision, self.world)
         except TargetResolutionError as exc:
@@ -182,6 +191,16 @@ class VLAOrchestrator:
             decision.mission_scope,
         )
 
+    def _targets_non_mission_fire(self, decision: ActionDecision) -> bool:
+        mission = self.world.mission
+        return bool(
+            mission
+            and mission.scope == MissionScope.FIRE_ONLY
+            and mission.target_fire_id
+            and decision.action in {ActionType.NAVIGATE_TO, ActionType.EXTINGUISH}
+            and decision.target != mission.target_fire_id
+        )
+
     def process_results(self, source: ActionResultSource) -> int:
         count = 0
         physical_action_completed = False
@@ -224,9 +243,15 @@ class VLAOrchestrator:
         if scene_signature != self._continuation_scene_signature():
             return None
         fire = self.world.fires.get(target)
+        mission = self.world.mission
         robot_pose = self.world.robot.pose
         if (
-            fire is None
+            mission is None
+            or (
+                mission.scope == MissionScope.FIRE_ONLY
+                and mission.target_fire_id != target
+            )
+            or fire is None
             or fire.state != FireState.ACTIVE
             or robot_pose is None
             or not self._entity_is_fresh(fire.last_seen)

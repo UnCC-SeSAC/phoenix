@@ -517,3 +517,67 @@ def test_first_scoped_qwen_decision_is_bound_with_one_call():
     assert orchestrator.llm.calls == 1
     assert world.mission.scope == MissionScope.FIRE_ONLY
     assert world.mission.target_fire_id == "fire_01"
+
+
+def test_fire_only_target_lock_blocks_duplicate_fire_suppression():
+    world, queue, orchestrator = make_orchestrator()
+    world.fires["fire_01"].position = Pose2D(0.5, 0)
+    world.update_robot_pose(Pose2D(0.2, 0))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "최초 대상 화점 진압",
+        "fire_01",
+        MissionScope.FIRE_ONLY,
+    ))
+
+    first = orchestrator.decide_once()
+    assert first.submission is not None
+    assert orchestrator.process_results(queue) == 1
+    assert world.mission.target_fire_id == "fire_01"
+
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_02", "fire", .9, Pose2D(.49, 0), now),
+    )))
+    orchestrator.llm.decision = ActionDecision(
+        ActionType.EXTINGUISH,
+        "새 ID 화점 진압",
+        "fire_02",
+        MissionScope.FIRE_ONLY,
+    )
+    duplicate = orchestrator.decide_once()
+
+    assert duplicate.submission is None
+    assert duplicate.blocked_reason.startswith("MISSION_TARGET_MISMATCH:")
+    assert len(orchestrator.dispatcher.spray.calls) == 1
+
+
+def test_new_mission_resets_fire_only_target_lock():
+    world, queue, orchestrator = make_orchestrator()
+    world.fires["fire_01"].position = Pose2D(0.5, 0)
+    world.update_robot_pose(Pose2D(0.2, 0))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "첫 Mission target",
+        "fire_01",
+        MissionScope.FIRE_ONLY,
+    ))
+    assert orchestrator.decide_once().submission is not None
+    assert orchestrator.process_results(queue) == 1
+
+    world.set_mission("m2", "새 화재를 진압해")
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_02", "fire", .9, Pose2D(.49, 0), now),
+    )))
+    orchestrator.llm.decision = ActionDecision(
+        ActionType.EXTINGUISH,
+        "새 Mission target",
+        "fire_02",
+        MissionScope.FIRE_ONLY,
+    )
+    second = orchestrator.decide_once()
+
+    assert second.submission is not None
+    assert world.mission.target_fire_id == "fire_02"
+    assert len(orchestrator.dispatcher.spray.calls) == 2
