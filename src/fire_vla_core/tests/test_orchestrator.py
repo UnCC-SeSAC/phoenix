@@ -111,7 +111,9 @@ def test_resolution_failure_preserves_decision_without_dispatch():
 
 
 def test_out_of_range_active_fire_extinguish_is_corrected_to_navigation():
-    _, _, orchestrator = make_orchestrator()
+    world, _, orchestrator = make_orchestrator()
+    world.fires["fire_01"].position = Pose2D(.5, 0)
+    world.update_robot_pose(Pose2D(.19, 0))
     decision = ActionDecision(
         ActionType.EXTINGUISH,
         "분사 범위라고 잘못 판단",
@@ -130,7 +132,8 @@ def test_out_of_range_active_fire_extinguish_is_corrected_to_navigation():
 
 def test_in_range_active_fire_keeps_extinguish_decision():
     world, _, orchestrator = make_orchestrator()
-    world.update_robot_pose(Pose2D(1.75, 0))
+    world.fires["fire_01"].position = Pose2D(.5, 0)
+    world.update_robot_pose(Pose2D(.20, 0))
     orchestrator.llm = StubLLM(
         ActionDecision(ActionType.EXTINGUISH, "분사 범위 안 화점 진압", "fire_01")
     )

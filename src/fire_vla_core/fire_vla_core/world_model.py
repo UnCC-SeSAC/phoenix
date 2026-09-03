@@ -36,7 +36,7 @@ from .domain import (
 class WorldModelConfig:
     person_confidence_threshold: float = 0.50
     fire_confidence_threshold: float = 0.40
-    spray_range_m: float = 0.25
+    spray_range_m: float = 0.30
     navigation_standoff_m: float = 0.20
     person_fire_risk_distance_m: float = 0.10
     max_event_log_entries: int = 500

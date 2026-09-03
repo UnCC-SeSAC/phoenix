@@ -57,18 +57,18 @@ def test_extinguish_requires_active_fire_in_range():
     assert ActionValidator().validate(action, world).approved is True
 
 
-def test_extinguish_rejects_fire_beyond_twenty_five_centimeters():
+def test_extinguish_rejects_fire_beyond_thirty_centimeters():
     world = make_world()
-    world.update_robot_pose(Pose2D(.24, 0))
+    world.update_robot_pose(Pose2D(.19, 0))
     action = TargetResolver().resolve(
         ActionDecision(ActionType.EXTINGUISH, "분사", "fire_01"), world
     )
     assert ActionValidator().validate(action, world).approved is False
 
 
-def test_extinguish_allows_twenty_five_centimeter_boundary():
+def test_extinguish_allows_thirty_centimeter_boundary():
     world = make_world()
-    world.update_robot_pose(Pose2D(.25, 0))
+    world.update_robot_pose(Pose2D(.20, 0))
     action = TargetResolver().resolve(
         ActionDecision(ActionType.EXTINGUISH, "분사", "fire_01"), world
     )
