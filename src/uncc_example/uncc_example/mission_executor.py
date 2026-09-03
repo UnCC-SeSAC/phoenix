@@ -6,7 +6,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 

@@ -213,8 +213,6 @@ class VisionDetector(Node):
             self._publish_detections(results)
 
     def _compute_map_position(self, detection, stamp):
-
-    def _compute_map_position(self, detection, stamp):
         u = detection['x']
         v = detection['y']
         depth_m = detection['depth']
