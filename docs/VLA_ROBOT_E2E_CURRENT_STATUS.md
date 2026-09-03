@@ -1137,3 +1137,20 @@ Floor ROI는 넓은 무광 비가연성 받침을 사용한 40~45 cm 배치에�
 못했다. VLA Mission 단독 STOP API는 없고 통합 status observer timeout 원인도
 미확정이다. 현재 authoritative 실행 순서는
 `docs/VLA_HARDWARE_E2E_HAPPY_PATH.md`만 따른다.
+
+## 2026-09-03 최초 물리 소화 성공 checkpoint
+
+Authoritative 기준은
+`integration/vla-robot-e2e@76251b3f16ceffc6f680b628a6a6f6ce399e2d8f`다.
+`navigation_standoff_m=0.15 m`, `spray_range_m=0.30 m`, Nav2 XY goal tolerance
+`0.05 m`로 실행했다. Nav2는 약 `4.28 s`에 `SUCCEEDED`했고 도착 후 WorldModel
+base→fire 거리는 약 `0.198 m`였다. Robot stop은 `PASS`, suppression은 정확히 1회,
+Servo/Pump 실제 작동은 `PASS`였다. 물줄기는 불꽃보다 살짝 뒤에 착탄했지만 실제
+화염 제거는 `PASS`다.
+
+Physical suppression과 software terminal은 분리해 판정한다. Fire verification은
+`FAIL`이며 fire final state는 `ACTIVE`, Mission terminal은 `RUNNING`이다. 직접 남은
+blocker는 `fire_status_service`가 소화 후 `관찰 구간 내 YOLO 감지 기록 없음`을
+성공으로 처리하지 못한 verification 경계다. 성공한 stand-off `0.15 m`와 spray
+range `0.30 m`는 동결하며 다음 작업에서 변경하지 않는다. 다음 최소 작업은 이
+verification 결과를 `EXTINGUISHED`와 Mission `COMPLETED`로 연결하는 수정이다.

@@ -1,7 +1,7 @@
 # VLA Hardware E2E Happy Path
 
 이 문서는 `integration/vla-robot-e2e` Hardware E2E의 authoritative 1-page
-runbook이다. 기준은 `414abc6c57f61f6bdf44b5212f512d3937afc811`이다. 과거
+runbook이다. 기준은 `76251b3f16ceffc6f680b628a6a6f6ce399e2d8f`이다. 과거
 실행 기록은 증거일 뿐 현재 절차를 대체하지 않는다.
 
 ## 고정 계약
@@ -15,9 +15,9 @@ runbook이다. 기준은 `414abc6c57f61f6bdf44b5212f512d3937afc811`이다. 과�
 - PC Qwen은 Codex sandbox가 아니라 Intel GPU와 `/dev/dri`가 보이는 실제 PC
   host에서 canonical Python으로 시작한다. 이미 `/health`가 HTTP 200이면 재시작하지
   않는다.
-- Pump는 BCM14, Servo는 BCM13이다. `spray_range_m=0.25 m`, fire stand-off는
-  `0.20 m`, 실제 Nav2 XY goal tolerance는 `0.05 m`다. 최악 도착 fire 거리는
-  `0.20 + 0.05 = 0.25 m`다.
+- Pump는 BCM14, Servo는 BCM13이다. 최초 물리 소화 성공 기준인
+  `spray_range_m=0.30 m`, fire stand-off `0.15 m`, 실제 Nav2 XY goal tolerance
+  `0.05 m`를 동결한다. 후속 terminal 수정에서 이 geometry를 변경하지 않는다.
 
 ## 실행 순서
 
@@ -55,6 +55,14 @@ suppression failure 또는 물리 위험에서만 즉시 중단한다. Mission/N
 이유로 추정 재발행하지 않는다. 배터리 부족이나 수동 이동 후에는 이전 localization,
 fire, Mission, goal을 모두 폐기하고 바닥-start 절차를 처음부터 적용한다.
 
-현재 미완료 상태는 수정된 바닥-start 절차의 최종 실제 소화, 화염 제거 및 Mission
-`COMPLETED` 확인이다. VLA Mission 단독 STOP API와 통합 status observer timeout의
-원인은 아직 미확정이다.
+## 최초 물리 소화 성공 기준
+
+`76251b3` Hardware 실행에서 Nav2는 약 `4.28 s`에 `SUCCEEDED`했고 도착 후
+WorldModel의 base→fire 거리는 약 `0.198 m`였다. Robot stop 뒤 suppression은 정확히
+한 번 실행됐으며 Servo/Pump가 실제 작동했다. 물줄기는 불꽃보다 살짝 뒤에
+착탄했지만 실제 화염 제거는 `PASS`였다.
+
+소프트웨어 완료는 별개로 `FAIL`이다. `fire_status_service`가 소화 후
+`관찰 구간 내 YOLO 감지 기록 없음`을 성공 증거로 처리하지 못해 fire는 `ACTIVE`,
+Mission은 `RUNNING`으로 남았다. 다음 변경 범위는 verification→`EXTINGUISHED`→Mission
+`COMPLETED` 경계뿐이며, 위 성공 geometry와 Pump/Servo 설정은 변경하지 않는다.

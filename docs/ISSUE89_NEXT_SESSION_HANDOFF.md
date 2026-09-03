@@ -589,3 +589,17 @@ canonical Qwen HTTP 200을 확인한 뒤 wrapper clean start를 정확히 한 �
 현재 미완료 항목은 수정된 바닥-start 절차의 최종 실제 소화, VLA Mission 단독 STOP
 API, 통합 status observer timeout 원인이다. 책상에서 runtime을 시작한 뒤 바닥으로
 옮기거나 이전 localization/fire/Mission/goal을 재사용하지 않는다.
+
+## 2026-09-03 next session start point
+
+최초 물리 소화는 `76251b3f16ceffc6f680b628a6a6f6ce399e2d8f`에서 성공했다.
+동결값은 fire stand-off `0.15 m`, spray range `0.30 m`, Nav2 XY goal tolerance
+`0.05 m`다. Nav2는 약 `4.28 s`에 `SUCCEEDED`, 도착 후 WorldModel fire 거리는 약
+`0.198 m`, Robot stop은 `PASS`였다. Suppression은 1회 실행됐고 Servo/Pump가 실제
+작동했으며, 물줄기는 불꽃보다 살짝 뒤에 착탄했지만 실제 화염 제거는 `PASS`였다.
+
+남은 실패는 software verification/terminal 경계 하나다. 소화 후
+`fire_status_service`가 `관찰 구간 내 YOLO 감지 기록 없음`을 성공으로 처리하지 못해
+fire는 `ACTIVE`, Mission은 `RUNNING`으로 남았다. 다음 세션은 geometry, Nav2,
+Pump/Servo 값을 바꾸지 않고 verification→`EXTINGUISHED`→Mission `COMPLETED`의 최소
+수정부터 시작한다. 실제 소화 성공을 terminal 성공으로 과장하지 않는다.

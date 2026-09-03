@@ -867,11 +867,27 @@ localization, fire, Mission 또는 goal을 재사용하지 않는다.
 - Floor ROI valid pixel이 0이면 `depth_status=unknown`이며 Mission을 발행하지 않는다.
   넓은 무광 비가연성 받침과 40~45 cm 배치에서 실제 성공 Depth는 약 `0.471 m`였다.
 - 과거 `spray_range_m=0.8 m`에서는 약 45 cm 거리에서 제자리 분사했지만 물의 실제
-  도달거리는 약 25 cm였다. 현재 계약은 spray range `0.25 m`, fire stand-off
-  `0.20 m`, Nav2 XY tolerance `0.05 m`다. 과거 tolerance `0.25 m`의 최악 fire
-  거리는 `0.45 m`였고 현재 최악값은 `0.25 m`다.
+  도달거리는 약 25 cm였다. 이어 적용한 spray range `0.25 m`, fire stand-off
+  `0.20 m`는 historical checkpoint다. 최초 물리 소화 성공으로 확정한 현재 값은
+  아래 절의 spray range `0.30 m`, stand-off `0.15 m`이며 Nav2 XY tolerance는
+  `0.05 m`를 유지한다.
 - 위 값은 기존 freshness, Robot stop, suppression verification과 Pump OFF 계약을
   변경하지 않는다.
+
+### 물리 소화 성공 후 fire가 ACTIVE로 남음
+
+상태를 분리해 판정한다. `76251b3` 실행에서 stand-off `0.15 m`, spray range
+`0.30 m`로 Nav2가 약 `4.28 s`에 `SUCCEEDED`했고 도착 후 WorldModel fire 거리는 약
+`0.198 m`였다. Robot stop 뒤 suppression 1회와 Servo/Pump 실제 작동을 확인했으며,
+물줄기는 불꽃보다 살짝 뒤에 착탄했지만 실제 화염은 제거됐다. 따라서 physical fire
+suppression은 `PASS`다.
+
+Software verification은 `FAIL`이다. `fire_status_service`가 소화 후
+`관찰 구간 내 YOLO 감지 기록 없음`을 성공으로 처리하지 못해 fire가 `ACTIVE`,
+Mission이 `RUNNING`으로 남았다. 이 경우 거리, Nav2, Servo/Pump 실패로 재분류하거나
+blind retry하지 않는다. 성공한 stand-off `0.15 m`와 spray range `0.30 m`는
+동결한다. 다음 최소 수정은 무검출 관찰의 기존 유효성 계약을 확인해
+verification→`EXTINGUISHED`→Mission `COMPLETED` 경계만 고치는 것이다.
 
 ## Reported person이 같은 Mission에서 반복 생성·보고됨
 
