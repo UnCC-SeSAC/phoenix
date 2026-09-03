@@ -12,9 +12,14 @@ def generate_launch_description():
     mock_status_demo = LaunchConfiguration("mock_status_demo")
 
     return LaunchDescription([
-        DeclareLaunchArgument("ui_host", default_value="127.0.0.1"),
+        # frontier_fire_suppression_hw_test.launch.py와 동일한 기본값 —
+        # 런치하자마자 다른 PC에서 http://<이 기기 IP>:8080으로 바로
+        # 붙는다. 이 기기에서만 열려면 ui_host:=127.0.0.1,
+        # ui_allow_remote:=false로 덮어쓸 것 (LAN에 START/STOP 미션
+        # 제어까지 열리는 게 싫으면 반드시 그렇게 할 것).
+        DeclareLaunchArgument("ui_host", default_value="0.0.0.0"),
         DeclareLaunchArgument("ui_port", default_value="8080"),
-        DeclareLaunchArgument("ui_allow_remote", default_value="false"),
+        DeclareLaunchArgument("ui_allow_remote", default_value="true"),
         DeclareLaunchArgument("mock_vision", default_value="true"),
         DeclareLaunchArgument("mock_slam", default_value="true"),
         # true면 vla_orchestrator 대신 person/fire 7가지 상태를 한 번에 박아

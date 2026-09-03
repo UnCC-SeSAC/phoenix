@@ -1,10 +1,11 @@
 """firefighter_ui의 시맨틱 맵 마커(모양/상태별 색)를 눈으로 확인하기 위한 목업.
 
-★ VLA 의사결정 파이프라인을 흉내 내지 않습니다 — vla_orchestrator를 대체해
-  /vla/status에 완성된 world_model 스냅샷을 그대로 반복 발행할 뿐입니다.
-  person/fire 상태(REPORTED, EXTINGUISHED 등)는 실제로는 report/extinguish
-  액션이 성공해야 바뀌는데, 이 목업은 그 전이를 거치지 않고 처음부터 7개
-  상태를 동시에 박아 넣습니다 — 마커 렌더링만 확인하는 용도입니다.
+★ VLA/Rule-based 의사결정 파이프라인을 흉내 내지 않습니다 — vla_orchestrator
+  나 rule_based_ui_adapter를 대체해 /vla/status, /rule_based/status에 완성된
+  스냅샷을 그대로 반복 발행할 뿐입니다. person/fire 상태(REPORTED,
+  EXTINGUISHED, fire_unreachable 등)는 실제로는 report/extinguish/nav2
+  액션이 성공해야 바뀌는데, 이 목업은 그 전이를 거치지 않고 처음부터
+  전체 상태를 동시에 박아 넣습니다 — 마커 렌더링만 확인하는 용도입니다.
 """
 
 from __future__ import annotations
@@ -80,27 +81,70 @@ def build_demo_world() -> dict:
     }
 
 
+def _target(target_type: str, x: float, y: float) -> dict:
+    return {"type": target_type, "x": x, "y": y}
+
+
+def build_demo_rule_based_status() -> dict:
+    targets = [
+        _target("person_unconfirmed", 2.0, 3.0),
+        _target("person_confirmed", -2.0, 3.0),
+        _target("person_unreachable", -2.0, -2.0),
+        _target("fire_unvisited", 3.0, 0.5),
+        _target("fire_failed", 3.0, -2.0),
+        _target("fire_extinguished", 0.0, -3.0),
+        _target("fire_unreachable", -3.5, 0.5),
+    ]
+    counts = {
+        "person": sum(t["type"].startswith("person") for t in targets),
+        "fire": sum(t["type"].startswith("fire") for t in targets),
+    }
+    return {
+        "schema_version": 1,
+        "mode": "RULE_BASED",
+        "mission": {
+            "state": "EXPLORING",
+            "target_type": "idle",
+            "current_target": None,
+            "last_command": {"mission_id": "map_marker_demo", "command": "START", "status": "ACCEPTED"},
+        },
+        "robot": {"battery_raw": 80, "navigation_status": "IDLE"},
+        "exploration": {"status": "RUNNING"},
+        "detections": {"targets": targets, "counts": counts},
+        "suppression": {"status": "IDLE"},
+        "blocked_reason": "",
+    }
+
+
 class VLAStatusDemoNode(Node):
     def __init__(self) -> None:
         super().__init__("vla_status_demo")
         self.declare_parameter("status_topic", "/vla/status")
+        self.declare_parameter("rule_based_status_topic", "/rule_based/status")
         self.declare_parameter("publish_period_sec", 1.0)
         self._pub = self.create_publisher(
             String, str(self.get_parameter("status_topic").value), 10
         )
+        self._rule_based_pub = self.create_publisher(
+            String,
+            str(self.get_parameter("rule_based_status_topic").value),
+            10,
+        )
         self._world = build_demo_world()
+        self._rule_based_status = build_demo_rule_based_status()
         self.create_timer(
             max(0.2, float(self.get_parameter("publish_period_sec").value)),
             self._tick,
         )
         self.get_logger().info(
-            "[맵 마커 목업] person/fire 7가지 상태를 고정 발행합니다 — "
-            "VLA 의사결정을 흉내 내지 않습니다"
+            "[맵 마커 목업] VLA person/fire 7가지 상태 + Rule-based 7분류를 "
+            "고정 발행합니다 — 의사결정을 흉내 내지 않습니다"
         )
 
     def _tick(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
         payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": now,
             "world_model": self._world,
             "decision": None,
             "validation": None,
@@ -110,6 +154,11 @@ class VLAStatusDemoNode(Node):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self._pub.publish(msg)
+
+        rule_payload = {"timestamp": now, **self._rule_based_status}
+        rule_msg = String()
+        rule_msg.data = json.dumps(rule_payload, ensure_ascii=False)
+        self._rule_based_pub.publish(rule_msg)
 
 
 def main(args=None) -> None:
