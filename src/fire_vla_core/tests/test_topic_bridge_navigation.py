@@ -113,8 +113,8 @@ def goal_payload(node):
         ("person_01", 2.0, 1.0, pytest.approx(0.463647609)),
         (
             "fire_01",
-            pytest.approx(2.810263340),
-            pytest.approx(-0.936754447),
+            pytest.approx(2.857697505),
+            pytest.approx(-0.952565835),
             pytest.approx(-0.321750554),
         ),
     ],

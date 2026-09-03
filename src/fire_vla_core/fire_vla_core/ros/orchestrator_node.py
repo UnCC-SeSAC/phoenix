@@ -117,7 +117,7 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("remote_qwen_timeout_sec", 3.0)
         self.declare_parameter("person_fire_risk_distance_m", 0.10)
         self.declare_parameter("spray_range_m", 0.30)
-        self.declare_parameter("navigation_standoff_m", 0.20)
+        self.declare_parameter("navigation_standoff_m", 0.15)
         self.declare_parameter("report_mode", "MOCK")
         self.declare_parameter("spray_mode", "MOCK")
         self.declare_parameter("mission_topic", "/vla/mission")

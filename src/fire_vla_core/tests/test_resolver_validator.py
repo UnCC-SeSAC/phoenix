@@ -27,16 +27,16 @@ def test_resolver_uses_authoritative_world_position():
     assert action.target_pose.y == 0
 
 
-def test_fire_navigation_goal_keeps_twenty_centimeter_standoff():
+def test_fire_navigation_goal_keeps_fifteen_centimeter_standoff():
     world = make_world()
     action = TargetResolver().resolve(
         ActionDecision(ActionType.NAVIGATE_TO, "이동", "fire_01"), world
     )
-    assert action.target_pose.x == pytest.approx(0.30)
+    assert action.target_pose.x == pytest.approx(0.35)
     assert action.target_pose.y == pytest.approx(0.0)
     assert action.target_pose.distance_to(
         world.fires["fire_01"].position
-    ) == pytest.approx(0.20)
+    ) == pytest.approx(0.15)
 
 
 def test_validator_rejects_new_physical_action_while_one_is_running():
