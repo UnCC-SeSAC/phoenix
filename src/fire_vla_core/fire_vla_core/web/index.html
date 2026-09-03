@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- firefighter_ui_node 가 ui_default_mode 파라미터로 이 값을 치환해 서빙합니다. -->
+  <meta name="phoenix-default-mode" content="__DEFAULT_MODE__">
   <title>Phoenix Fire Response Control Center</title>
   <style>
     :root {
@@ -144,7 +146,8 @@
 <script>
 const $=id=>document.getElementById(id);
 const svgNS='http://www.w3.org/2000/svg';
-let activeMode='VLA';
+const DEFAULT_MODE=(()=>{const raw=document.querySelector('meta[name="phoenix-default-mode"]')?.content?.trim().toUpperCase();return raw==='RULE_BASED'?'RULE_BASED':'VLA';})();
+let activeMode=DEFAULT_MODE;
 const timelineEvents=[];
 const eventKeys=new Set();
 const dash=v=>(v===null||v===undefined||v==='')?'-':String(v);
@@ -373,6 +376,7 @@ async function toggleVision(){
 $('visionToggle').addEventListener('click',toggleVision);
 refreshVision();setInterval(refreshVision,200);refreshMapLayer();setInterval(refreshMapLayer,200);
 for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
+$('modeSelector').value=activeMode;
 configureMode();
 refresh();setInterval(refresh,1000);
 </script>

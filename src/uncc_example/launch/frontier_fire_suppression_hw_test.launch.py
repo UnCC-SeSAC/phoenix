@@ -378,6 +378,10 @@ def generate_launch_description():
                         value_type=bool),
                     'rule_based_status_topic': '/rule_based/status',
                     'rule_based_mission_topic': '/rule_based/mission',
+                    # 이 launch는 vla_orchestrator를 아예 안 띄운다 —
+                    # 접속하자마자 VLA 화면("상태 대기 중")이 아니라
+                    # Rule-based 화면부터 뜨게 한다.
+                    'ui_default_mode': 'RULE_BASED',
                 }],
             ),
         ],

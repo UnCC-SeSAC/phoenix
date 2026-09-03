@@ -261,6 +261,7 @@ class FirefighterHTTPServer:
         allow_remote: bool = False,
         max_stream_clients: int = 4,
         set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
+        default_mode: str = _VLA_MODE,
     ) -> None:
         host, port = validate_server_config(host, port, allow_remote=allow_remote)
         self._status_store = status_store
@@ -275,8 +276,15 @@ class FirefighterHTTPServer:
         self._max_stream_clients = int(max_stream_clients)
         self._stream_clients = 0
         self._stream_lock = threading.Lock()
-        self._index_html = index_html or (
+        raw_index_html = index_html or (
             files("fire_vla_core.web").joinpath("index.html").read_bytes()
+        )
+        # ui_default_mode: hw_test(Rule-based 전용)처럼 vla_orchestrator가
+        # 아예 안 뜨는 배포에서는 접속하자마자 VLA 화면부터 뜨면 "상태를
+        # 기다리는 중"만 보입니다 — 서빙 시점에 index.html의 자리표시자를
+        # 실제 기본 모드로 치환해 둡니다.
+        self._index_html = raw_index_html.replace(
+            b"__DEFAULT_MODE__", normalize_mode(default_mode).encode("ascii")
         )
         handler = self._handler_type()
         self._server = ThreadingHTTPServer((host, port), handler)
@@ -536,6 +544,7 @@ class FirefighterUINode(Node):
         self.declare_parameter(
             "rule_based_mission_topic", "/rule_based/mission"
         )
+        self.declare_parameter("ui_default_mode", _VLA_MODE)
         self.declare_parameter("ui_allow_remote", False)
         self.declare_parameter("max_stream_clients", 4)
         self.declare_parameter("ui_vision_enabled", True)
@@ -648,6 +657,7 @@ class FirefighterUINode(Node):
                 if self._vision_enabled_pub is not None
                 else None
             ),
+            default_mode=str(self.get_parameter("ui_default_mode").value),
         )
         self._http.start()
         host, port = self._http.address
