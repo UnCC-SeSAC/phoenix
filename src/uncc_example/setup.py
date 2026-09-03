@@ -60,6 +60,7 @@ setup(
                 "frontier_state_controller = "
                 "uncc_example.frontier_state_controller:main"
             ),
+            "nudge_and_suppress = uncc_example.nudge_and_suppress:main",
         ],
     },
 )
