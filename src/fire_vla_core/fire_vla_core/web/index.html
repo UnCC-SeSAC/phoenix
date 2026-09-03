@@ -87,7 +87,7 @@
 </header>
 <main>
   <section class="panel">
-    <h2>Live Vision</h2>
+    <h2>Live Vision <button type="button" id="visionToggle">CAMERA ON</button></h2>
     <div class="vision-frame" id="visionFrame" aria-label="Live camera stream with detection overlay">
       <img id="visionStream" alt="Live camera stream" hidden>
       <div id="visionBoxes"></div>
@@ -203,6 +203,9 @@ async function refreshVision(){
     if(!response.ok)throw new Error();
     const overlay=await response.json();
     if(!overlay.available){setVisionAvailable(false);return;}
+    // 다른 브라우저 탭/기기가 켰거나 새로고침으로 로컬 상태를 잃은
+    // 경우에도, 실제로 박스가 들어오면 버튼 라벨을 실제 상태에 맞춘다.
+    if(!visionEnabled){visionEnabled=true;updateVisionToggleLabel();}
     setVisionAvailable(true);
     renderVisionBoxes(overlay);
   }catch(_error){setVisionAvailable(false);}
@@ -331,6 +334,21 @@ async function submitMission(text){const requestedMode=activeMode;try{const resp
 $('modeSelector').addEventListener('change',event=>{activeMode=event.target.value;configureMode();refresh();});
 $('missionForm').addEventListener('submit',event=>{event.preventDefault();const text=$('missionInput').value.trim();if(text&&activeMode==='VLA')submitMission(text);});
 $('visionStream').addEventListener('error',()=>setVisionAvailable(false));
+let visionEnabled=false;
+function updateVisionToggleLabel(){$('visionToggle').textContent=visionEnabled?'CAMERA OFF':'CAMERA ON';}
+updateVisionToggleLabel();
+async function toggleVision(){
+  const next=!visionEnabled;
+  $('visionToggle').disabled=true;
+  try{
+    const response=await fetch('/api/vision/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next})});
+    if(!response.ok)throw new Error();
+    visionEnabled=next;
+    if(!visionEnabled)setVisionAvailable(false);
+  }catch(_error){/* 실패 시 상태 유지 */}
+  finally{$('visionToggle').disabled=false;updateVisionToggleLabel();}
+}
+$('visionToggle').addEventListener('click',toggleVision);
 refreshVision();setInterval(refreshVision,200);refreshMapLayer();setInterval(refreshMapLayer,200);
 for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
 configureMode();

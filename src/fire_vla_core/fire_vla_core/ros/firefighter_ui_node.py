@@ -25,13 +25,14 @@ try:
     )
     from rclpy.time import Time
     from sensor_msgs.msg import CompressedImage
-    from std_msgs.msg import String
+    from std_msgs.msg import Bool, String
     from tf2_ros import Buffer, TransformException, TransformListener
 except ImportError:
     # ROS 없이도 import되어야 pytest가 돕니다. 이름을 전부 채워 둡니다.
     rclpy = None
     Node = object
     String = None
+    Bool = None
     OccupancyGrid = None
     CompressedImage = None
     Time = None
@@ -196,6 +197,10 @@ class OverlayStore:
                 return {"available": False, "boxes": []}
             return {"available": True, **copy.deepcopy(self._overlay)}
 
+    def clear(self) -> None:
+        with self._lock:
+            self._overlay = None
+
 
 class MapStore:
     """SLAM 지도 PNG + world<->pixel 메타 + 로봇 pose.
@@ -255,10 +260,12 @@ class FirefighterHTTPServer:
         map_store: MapStore | None = None,
         allow_remote: bool = False,
         max_stream_clients: int = 4,
+        set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
     ) -> None:
         host, port = validate_server_config(host, port, allow_remote=allow_remote)
         self._status_store = status_store
         self._submit_mission = submit_mission
+        self._set_vision_enabled = set_vision_enabled
         # 비어 있는 스토어를 기본값으로 둡니다 — 엔드포인트는 항상 존재하고
         # "아직 데이터 없음"을 응답합니다. ui_vision_enabled=false일 때도
         # 프론트엔드가 404가 아니라 available:false를 받습니다.
@@ -354,6 +361,9 @@ class FirefighterHTTPServer:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
             def do_POST(self) -> None:
+                if self.path == "/api/vision/enabled":
+                    self._handle_vision_enabled_post()
+                    return
                 if self.path != "/api/mission":
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                     return
@@ -382,6 +392,33 @@ class FirefighterHTTPServer:
                     )
                     return
                 self._send_json(HTTPStatus.ACCEPTED, mission)
+
+            def _handle_vision_enabled_post(self) -> None:
+                if owner._set_vision_enabled is None:
+                    self._send_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"error": "vision toggle을 지원하지 않는 설정입니다."},
+                    )
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length <= 0 or length > _MAX_REQUEST_BYTES:
+                        raise ValueError("invalid content length")
+                    data = json.loads(self.rfile.read(length).decode("utf-8"))
+                    if not isinstance(data, dict):
+                        raise ValueError("JSON object가 필요합니다.")
+                    enabled = data.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled는 boolean이어야 합니다.")
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    self._send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": str(exc) or "invalid request"},
+                    )
+                    return
+                self._send_json(
+                    HTTPStatus.ACCEPTED, owner._set_vision_enabled(enabled)
+                )
 
             def log_message(self, format: str, *args) -> None:
                 return
@@ -505,6 +542,7 @@ class FirefighterUINode(Node):
         self.declare_parameter("ui_map_enabled", True)
         self.declare_parameter("vision_topic", "/ui/camera/compressed")
         self.declare_parameter("vision_overlay_topic", "/ui/camera/overlay")
+        self.declare_parameter("vision_enabled_topic", "/ui/camera/enabled")
         self.declare_parameter("map_topic", "/map")
         # ★ src/slam/config/slam.yaml과 같은 프레임명이어야 합니다.
         self.declare_parameter("map_frame", "map")
@@ -548,6 +586,7 @@ class FirefighterUINode(Node):
             10,
         )
 
+        self._vision_enabled_pub = None
         if bool(self.get_parameter("ui_vision_enabled").value):
             # ★ 정수 10을 쓰면 RELIABLE이 되어 센서 구독이 조용히 실패합니다.
             self.create_subscription(
@@ -561,6 +600,13 @@ class FirefighterUINode(Node):
                 str(self.get_parameter("vision_overlay_topic").value),
                 self._overlay_callback,
                 qos_profile_sensor_data,
+            )
+            # ui_stream_node 가 이걸 구독해서 카메라 인코딩 구독을 통째로
+            # destroy_subscription 한다 — CPU를 실제로 아낀다.
+            self._vision_enabled_pub = self.create_publisher(
+                Bool,
+                str(self.get_parameter("vision_enabled_topic").value),
+                10,
             )
 
         if bool(self.get_parameter("ui_map_enabled").value):
@@ -596,6 +642,11 @@ class FirefighterUINode(Node):
             allow_remote=allow_remote,
             max_stream_clients=int(
                 self.get_parameter("max_stream_clients").value
+            ),
+            set_vision_enabled=(
+                self._set_vision_enabled
+                if self._vision_enabled_pub is not None
+                else None
             ),
         )
         self._http.start()
@@ -688,6 +739,17 @@ class FirefighterUINode(Node):
         )
         publisher.publish(msg)
         return payload if mode == _VLA_MODE else {**payload, "mode": mode}
+
+    def _set_vision_enabled(self, enabled: bool) -> dict[str, Any]:
+        msg = Bool()
+        msg.data = enabled
+        self._vision_enabled_pub.publish(msg)
+        if not enabled:
+            # ui_stream_node 가 구독을 끊으면 더 이상 오버레이가 안 오므로,
+            # 여기서 즉시 지워서 브라우저가 오래된 박스를 계속 보여주지
+            # 않게 한다.
+            self._overlays.clear()
+        return {"enabled": enabled}
 
     def destroy_node(self):
         self._http.close()

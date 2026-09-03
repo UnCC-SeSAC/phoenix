@@ -38,7 +38,7 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from vision_msgs.msg import Detection2DArray
 
 from image_pipeline.ui_stream import normalize_boxes, stream_size, throttle
@@ -77,27 +77,63 @@ class UiStreamNode(Node):
         self._n_unmatched = 0
         self._last_report = time.monotonic()
 
-        img_topic = str(p("input_topic").value)
-        det_topic = str(p("detections_topic").value)
+        self._img_topic = str(p("input_topic").value)
+        self._det_topic = str(p("detections_topic").value)
         self.frame_pub = self.create_publisher(
             CompressedImage, str(p("stream_topic").value), qos_profile_sensor_data)
         self.overlay_pub = self.create_publisher(
             String, str(p("overlay_topic").value), qos_profile_sensor_data)
+
+        # enabled=false 면 아래 두 구독을 destroy_subscription 으로 완전히
+        # 없앤다 — 플래그로 콜백 앞에서 return 하는 것과 달리, 이미지
+        # 역직렬화 자체가 안 일어나서 CPU 사용량이 진짜로 0에 가까워진다.
+        self._img_sub = None
+        self._det_sub = None
+        self.enabled = bool(p("start_enabled").value)
+        if self.enabled:
+            self._subscribe_vision()
+
         self.create_subscription(
-            Detection2DArray, det_topic, self.on_detections, qos_profile_sensor_data)
-        self.create_subscription(
-            Image, img_topic, self.on_image, qos_profile_sensor_data)
+            Bool, str(p("enabled_topic").value), self._on_enabled_msg, 10)
 
         self.get_logger().info(
-            f"[UI] {img_topic} + {det_topic} -> {p('stream_topic').value} "
-            f"| {self.fps:g}fps, max_width={self.max_width or '원본'}, "
-            f"q={self.quality}")
+            f"[UI] {self._img_topic} + {self._det_topic} -> "
+            f"{p('stream_topic').value} | {self.fps:g}fps, "
+            f"max_width={self.max_width or '원본'}, q={self.quality}, "
+            f"start_enabled={self.enabled}")
+
+    def _subscribe_vision(self):
+        self._det_sub = self.create_subscription(
+            Detection2DArray, self._det_topic, self.on_detections,
+            qos_profile_sensor_data)
+        self._img_sub = self.create_subscription(
+            Image, self._img_topic, self.on_image, qos_profile_sensor_data)
+
+    def _on_enabled_msg(self, msg: Bool) -> None:
+        enabled = bool(msg.data)
+        if enabled == self.enabled:
+            return
+        self.enabled = enabled
+        if enabled:
+            self._subscribe_vision()
+            self.get_logger().info("[UI] vision stream 재개 — 구독 복원")
+        else:
+            self.destroy_subscription(self._img_sub)
+            self.destroy_subscription(self._det_sub)
+            self._img_sub = None
+            self._det_sub = None
+            self._dets.clear()
+            self.get_logger().info(
+                "[UI] vision stream 중지 — 구독 해제, 인코딩 CPU 사용 없음")
 
     def _declare_params(self):
         self.declare_parameter("input_topic", "/image_enhanced")
         self.declare_parameter("detections_topic", "/yolo_result")
         self.declare_parameter("stream_topic", "/ui/camera/compressed")
         self.declare_parameter("overlay_topic", "/ui/camera/overlay")
+        self.declare_parameter("enabled_topic", "/ui/camera/enabled")
+        # 기본은 꺼진 채로 시작 — UI에서 CAMERA ON 눌러야 인코딩이 붙는다.
+        self.declare_parameter("start_enabled", False)
         # ★ 학습 때 순서 그대로. 틀리면 불을 사람으로 표시합니다.
         self.declare_parameter("class_names", [""])
         self.declare_parameter("stream_fps", 8.0)
