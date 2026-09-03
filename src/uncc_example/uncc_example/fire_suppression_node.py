@@ -3,11 +3,10 @@
 """
 화재진압 Action 서버.
 
-- SLAM(frontier_exploration_ros2)의 기존 control_exploration 서비스를
-  ACTION_STOP/ACTION_START로 호출해 탐사를 일시 정지/재개한다.
-- YOLO 상태는 fire_status_service_node가 노출하는 check_fire_status
-  서비스를 통해 확인한다.
-- 펌프(GPIO13)/서보(GPIO18)는 라즈베리파이 GPIO를 직접 제어한다.
+- 펌프(GPIO14)/서보(GPIO13)는 라즈베리파이 GPIO를 직접 제어해 분사 시퀀스를 수행한다.
+- 분사가 끝나면 fire_status_service_node가 노출하는 check_fire_status
+  서비스를 호출해 불이 꺼졌는지 확인하고, 안 꺼졌으면 최대 max_attempts회까지
+  재시도한다.
 - 분사 후 재시도 대기 구간에서는 서보 PWM 신호를 detach()로 끊어서
   떨림/웅- 소음을 없앤다 (테스트 스크립트에서 검증된 패턴 반영).
 - 스윕 자체는 EMA 스무딩/가변속 없이 min/max 각도를 단순 왕복하는
@@ -77,7 +76,7 @@ SERVO_SETTLE_SECONDS = 0.6
 # 타이머 하나만 만들어두고 남은 틱 수를 세는 방식으로 sleep 을 구현한다.
 SLEEP_TICK_SECONDS = 0.05
 
-# ControlExploration 서비스는 frontier_exploration_ros2가 이미 제공 (수정 불필요)
+# fire_status_service_node가 노출하는 서비스 이름 (수정 불필요)
 CHECK_FIRE_STATUS_SERVICE = 'check_fire_status'
 
 
