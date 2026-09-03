@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 from types import SimpleNamespace
 
+from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
 
 from uncc_example.vla_spray_bridge_node import VLASprayBridge
@@ -62,6 +63,31 @@ def test_unavailable_action_server_returns_correlated_failure():
         }
     ]
     assert bridge._active_action_id is None
+
+
+def test_completed_physical_attempt_is_forwarded_for_world_model_verification():
+    bridge = bridge_stub()
+    bridge._active_action_id = 'action_0001'
+    bridge._active_fire_id = 'fire_0001'
+    bridge._finish = lambda status, message: VLASprayBridge._finish(
+        bridge, status, message
+    )
+    wrapped = SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(
+            success=False,
+            message='관찰 구간 내 YOLO 감지 기록 없음',
+        ),
+    )
+
+    VLASprayBridge._on_result(bridge, SimpleNamespace(result=lambda: wrapped))
+
+    assert bridge._result_pub.messages == [{
+        'action_id': 'action_0001',
+        'fire_id': 'fire_0001',
+        'status': 'SUCCEEDED',
+        'message': '관찰 구간 내 YOLO 감지 기록 없음',
+    }]
 
 
 def test_suppression_servo_starts_detached():

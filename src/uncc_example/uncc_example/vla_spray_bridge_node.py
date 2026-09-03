@@ -94,7 +94,9 @@ class VLASprayBridge(Node):
             result = wrapped.result
             if wrapped.status == GoalStatus.STATUS_CANCELED:
                 status = 'CANCELED'
-            elif wrapped.status == GoalStatus.STATUS_SUCCEEDED and result.success:
+            elif wrapped.status == GoalStatus.STATUS_SUCCEEDED:
+                # The action owns physical attempt completion; WorldModel owns
+                # the subsequent fire-disappearance verification.
                 status = 'SUCCEEDED'
             else:
                 status = 'ABORTED'

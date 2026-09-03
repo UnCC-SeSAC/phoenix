@@ -133,13 +133,13 @@ def test_duplicate_result_is_ignored():
 
 def test_fire_requires_valid_negative_observations_to_be_extinguished():
     config = WorldModelConfig(
-        verification_required_observations=2,
+        verification_required_observations=3,
         verification_delay_sec=0.0,
         verification_timeout_sec=5.0,
         observation_max_age_sec=10.0,
     )
     world = make_world(config)
-    start = utc_now() - timedelta(seconds=2)
+    start = utc_now() - timedelta(seconds=4)
     world.update_observation_batch(ObservationBatch(start.isoformat(), (SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()),)))
     action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
     world.apply_submission(action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED))
@@ -147,7 +147,88 @@ def test_fire_requires_valid_negative_observations_to_be_extinguished():
     world.update_observation_batch(ObservationBatch((start + timedelta(seconds=1)).isoformat(), tuple()))
     assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
     world.update_observation_batch(ObservationBatch((start + timedelta(seconds=2)).isoformat(), tuple()))
+    assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+    world.update_observation_batch(ObservationBatch((start + timedelta(seconds=3)).isoformat(), tuple()))
     assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+
+
+def test_fire_only_mission_completes_after_three_valid_empty_frames():
+    config = WorldModelConfig(
+        verification_required_observations=3,
+        verification_delay_sec=0.5,
+        verification_timeout_sec=5.0,
+        observation_max_age_sec=10.0,
+    )
+    world = make_world(config)
+    start = utc_now() - timedelta(seconds=4)
+    world.update_observation_batch(ObservationBatch(start.isoformat(), (
+        SemanticObservation(
+            "fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()
+        ),
+    )))
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_01")
+    action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    world.apply_action_result(ActionResult(
+        "a1",
+        ExecutionSource.SPRAY,
+        ActionResultStatus.SUCCEEDED,
+        "fire_01",
+        timestamp=start.isoformat(),
+    ))
+
+    for offset in (1, 2, 3):
+        world.update_observation_batch(ObservationBatch(
+            (start + timedelta(seconds=offset)).isoformat(), tuple()
+        ))
+
+    assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+    assert world.mission.status.value == "COMPLETED"
+
+
+def test_no_perception_message_does_not_verify_suppression():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    world.apply_action_result(ActionResult(
+        "a1", ExecutionSource.SPRAY, ActionResultStatus.SUCCEEDED, "fire_01"
+    ))
+
+    assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+    assert world.fires["fire_01"].verification_valid_observations == 0
+
+
+def test_continued_fire_detection_returns_to_active_and_keeps_mission_running():
+    world = make_world(WorldModelConfig(verification_delay_sec=0.0))
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_01")
+    action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    world.apply_action_result(ActionResult(
+        "a1", ExecutionSource.SPRAY, ActionResultStatus.SUCCEEDED, "fire_01"
+    ))
+    observed_at = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(observed_at, (
+        SemanticObservation(
+            "fire_01", "fire", .9, Pose2D(.5, 0), observed_at
+        ),
+    )))
+
+    assert world.fires["fire_01"].state == FireState.ACTIVE
+    assert world.mission.status.value == "RUNNING"
 
 
 def test_invalid_frame_does_not_count_as_negative_verification():
@@ -160,6 +241,33 @@ def test_invalid_frame_does_not_count_as_negative_verification():
     world.apply_action_result(ActionResult("a1", ExecutionSource.SPRAY, ActionResultStatus.SUCCEEDED, "fire_01", timestamp=start.isoformat()))
     world.update_observation_batch(ObservationBatch((start + timedelta(seconds=1)).isoformat(), tuple(), frame_valid=False))
     assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+
+
+def test_stale_frame_does_not_count_as_negative_verification():
+    config = WorldModelConfig(
+        verification_required_observations=1,
+        verification_delay_sec=0.0,
+        observation_max_age_sec=0.1,
+    )
+    world = make_world(config)
+    now = utc_now()
+    world.update_observation_batch(ObservationBatch(now.isoformat(), (
+        SemanticObservation(
+            "fire_01", "fire", .9, Pose2D(.5, 0), now.isoformat()
+        ),
+    )))
+    action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    world.apply_action_result(ActionResult(
+        "a1", ExecutionSource.SPRAY, ActionResultStatus.SUCCEEDED, "fire_01"
+    ))
+    stale = (utc_now() - timedelta(seconds=1)).isoformat()
+    world.update_observation_batch(ObservationBatch(stale, tuple()))
+
+    assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+    assert world.fires["fire_01"].verification_valid_observations == 0
 
 
 def test_empty_world_does_not_complete_mission_before_exploration_complete():
