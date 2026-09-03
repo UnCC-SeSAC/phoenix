@@ -1,6 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -9,6 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     mock_vision = LaunchConfiguration("mock_vision")
     mock_slam = LaunchConfiguration("mock_slam")
+    mock_status_demo = LaunchConfiguration("mock_status_demo")
 
     return LaunchDescription([
         DeclareLaunchArgument("ui_host", default_value="127.0.0.1"),
@@ -16,12 +17,18 @@ def generate_launch_description():
         DeclareLaunchArgument("ui_allow_remote", default_value="false"),
         DeclareLaunchArgument("mock_vision", default_value="true"),
         DeclareLaunchArgument("mock_slam", default_value="true"),
+        # true면 vla_orchestrator 대신 person/fire 7가지 상태를 한 번에 박아
+        # 넣는 정적 목업(vla_status_demo)이 /vla/status를 낸다 — 시맨틱 맵
+        # 마커(모양/상태별 색)만 확인할 때 쓴다. 같은 토픽에 둘이 동시에
+        # 발행하면 화면이 깜빡이므로 서로 배타적으로 뜬다.
+        DeclareLaunchArgument("mock_status_demo", default_value="false"),
 
         Node(
             package="fire_vla_core",
             executable="vla_orchestrator",
             name="vla_orchestrator",
             output="screen",
+            condition=UnlessCondition(mock_status_demo),
             parameters=[{
                 "llm_backend": "mock",
                 "decision_period_sec": 1.0,
@@ -30,6 +37,14 @@ def generate_launch_description():
                 "spray_mode": "MOCK",
                 "status_topic": "/vla/status",
             }],
+        ),
+        Node(
+            package="fire_vla_core",
+            executable="vla_status_demo",
+            name="vla_status_demo",
+            output="screen",
+            condition=IfCondition(mock_status_demo),
+            parameters=[{"status_topic": "/vla/status"}],
         ),
 
         # --- 목업 영상 체인 ---------------------------------------------

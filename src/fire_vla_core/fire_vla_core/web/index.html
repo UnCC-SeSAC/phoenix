@@ -233,14 +233,30 @@ function mapProject(meta){
   }};
 }
 
+// 상태 문자열은 모드별로 어휘가 다릅니다 — VLA는 domain.py의 PersonState/
+// FireState(REPORTED, ACTIVE, ...), Rule-based는 state_manager의 7분류
+// (person_confirmed, fire_unvisited, ...)를 씁니다. 둘 다 키로 등록해 두면
+// 모드를 몰라도 같은 함수가 맞는 색을 고릅니다.
+const PERSON_STATE_COLOR={
+  DETECTED:'#fbbf24',person_unconfirmed:'#fbbf24',
+  REPORTED:'#4ade80',person_confirmed:'#4ade80',
+  LOST:'#64748b',person_unreachable:'#f87171',
+};
+const FIRE_STATE_COLOR={
+  ACTIVE:'#fb7185',fire_unvisited:'#fb7185',
+  PENDING_VERIFICATION:'#f59e0b',fire_failed:'#f59e0b',
+  EXTINGUISHED:'#94a3b8',fire_extinguished:'#94a3b8',
+  INACCESSIBLE:'#a855f7',fire_unreachable:'#a855f7',
+};
+
 function collectMarkers(world){
   const current=world.current_action||{},markers=[];
   if(validPose(world.robot?.home_pose))markers.push({kind:'H',id:'Home',position:world.robot.home_pose,color:'#a78bfa'});
   // 로봇은 TF에서 온 live pose를 우선합니다 — 5Hz라 부드럽고 두 모드 모두에서 옵니다.
   if(validPose(mapState.robot))markers.push({kind:'R',id:'Robot',position:mapState.robot,color:'#38bdf8',yaw:mapState.robot.yaw});
   else if(validPose(world.robot?.pose))markers.push({kind:'R',id:'Robot',position:world.robot.pose,color:'#38bdf8'});
-  for(const item of world.people||[])if(validPose(item.position))markers.push({kind:'P',id:item.id,position:item.position,color:'#4ade80'});
-  for(const item of world.fires||[])if(validPose(item.position))markers.push({kind:'F',id:item.id,position:item.position,color:'#fb7185'});
+  for(const item of world.people||[])if(validPose(item.position))markers.push({kind:'P',id:item.id,position:item.position,color:PERSON_STATE_COLOR[item.state]||'#4ade80',state:item.state});
+  for(const item of world.fires||[])if(validPose(item.position))markers.push({kind:'F',id:item.id,position:item.position,color:FIRE_STATE_COLOR[item.state]||'#fb7185',state:item.state});
   if(validPose(current.target_pose))markers.push({kind:'T',id:current.target||'Target',position:current.target_pose,color:'#fbbf24',target:true});
   return markers;
 }
@@ -291,9 +307,15 @@ function renderMap(world){
         x2:point.x+length*Math.cos(angle),y2:point.y-length*Math.sin(angle),
         stroke:marker.color,'stroke-width':unit/5}));
     }
-    svg.append(svgElement('circle',{cx:point.x,cy:point.y,r:marker.target?unit*1.25:unit,fill:marker.target?'none':marker.color,stroke:marker.color,'stroke-width':marker.target?unit/4:unit/12}));
+    if(marker.kind==='F'){
+      // 불은 삼각형, 나머지는 원 — 모양으로도 사람/불을 구분해 색맹·흑백 출력에서도 갈립니다.
+      const points=`${point.x},${point.y-unit*1.15} ${point.x-unit},${point.y+unit*.85} ${point.x+unit},${point.y+unit*.85}`;
+      svg.append(svgElement('polygon',{points,fill:marker.color,stroke:marker.color,'stroke-width':unit/12,'stroke-linejoin':'round'}));
+    }else{
+      svg.append(svgElement('circle',{cx:point.x,cy:point.y,r:marker.target?unit*1.25:unit,fill:marker.target?'none':marker.color,stroke:marker.color,'stroke-width':marker.target?unit/4:unit/12}));
+    }
     svg.append(svgElement('text',{x:point.x,y:point.y+unit*.35,'text-anchor':'middle',fill:marker.target?marker.color:'#07111b','font-size':unit*.9,'font-weight':900},marker.kind));
-    svg.append(svgElement('text',{x:point.x+unit*1.35,y:point.y-unit*1.1,fill:'#cbd9e7','font-size':unit*.8},`${marker.id} ${pose(marker.position)}`));
+    svg.append(svgElement('text',{x:point.x+unit*1.35,y:point.y-unit*1.1,fill:'#cbd9e7','font-size':unit*.8},`${marker.id}${marker.state?` [${marker.state}]`:''} ${pose(marker.position)}`));
   }
 }
 
