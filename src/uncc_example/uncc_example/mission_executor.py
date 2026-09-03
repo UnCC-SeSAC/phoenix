@@ -18,8 +18,6 @@ from .log_utils import make_event_logger
 
 from frontier_exploration_ros2.srv import ControlExploration
 
-from frontier_exploration_ros2.srv import ControlExploration
-
 
 class MissionExecutor(Node):
 
@@ -300,7 +298,7 @@ class MissionExecutor(Node):
         if pose_stamped is None:
             return
 
-        if self.state == StateManager.FIRE_DETECTED and self._fire_cycle_active:
+        if self.state == StateManager.FIRE_DETECTED and self._fire_goal_handle is not None:
             return
 
         target_xy = (

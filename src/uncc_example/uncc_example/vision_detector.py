@@ -177,40 +177,25 @@ class VisionDetector(Node):
                 results.append(converted)
 
         if results:
-            self._publish_detections(results, stamp_sec, stamp_nanosec)
+            self._publish_detections(results)
 
     def _convert_detection(self, detection, stamp):
         if not isinstance(detection, dict):
             return None
 
-        # 프레임 전체가 같은 시각을 공유하므로 한 번만 변환해둔다.
-        stamp = Time(
-            seconds=payload['stamp_sec'],
-            nanoseconds=payload['stamp_nanosec'],
-        ).to_msg()
+        class_name = detection.get('class_name')
+        if class_name not in self.target_classes:
+            return None
 
-        results = []
+        map_point = self._compute_map_position(detection, stamp)
+        if map_point is None:
+            return None
 
-        for detection in payload.get('detections', []):
-
-            class_name = detection.get('class_name')
-
-            if class_name not in self.target_classes:
-                continue
-
-            map_point = self._compute_map_position(detection, stamp)
-
-            if map_point is None:
-                continue
-
-            results.append({
-                'class': class_name,
-                'x': map_point.point.x,
-                'y': map_point.point.y,
-            })
-
-        if results:
-            self._publish_detections(results)
+        return {
+            'class': class_name,
+            'x': map_point.point.x,
+            'y': map_point.point.y,
+        }
 
     def _compute_map_position(self, detection, stamp):
         u = detection['x']
