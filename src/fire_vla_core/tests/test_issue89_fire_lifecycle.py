@@ -95,7 +95,7 @@ def test_navigation_success_flows_to_single_suppression_and_ui_status():
     assert len(spray.calls) == 1
 
 
-def test_failed_suppression_stops_at_existing_two_attempt_limit():
+def test_failed_suppression_marks_fire_inaccessible_after_three_attempts():
     world, results, navigation, spray, orchestrator = make_system(
         spray_result=ActionResultStatus.FAILED
     )
@@ -114,8 +114,64 @@ def test_failed_suppression_stops_at_existing_two_attempt_limit():
     assert orchestrator.process_results(results) == 1
     assert world.fires["fire_0001"].spray_count == 2
 
+    third = orchestrator.decide_once()
+    assert third.submission is not None
+    assert orchestrator.process_results(results) == 1
+    assert world.fires["fire_0001"].spray_count == 3
+
     blocked = orchestrator.decide_once()
-    assert blocked.submission is None
-    assert "최대 분사" in blocked.validation.reason
+    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert blocked.decision.action != ActionType.EXTINGUISH
+    assert [call.action for call in navigation.calls] == [ActionType.RETURN_HOME]
+    assert len(spray.calls) == 3
+
+
+def test_redetected_fire_retries_then_becomes_inaccessible():
+    world, results, navigation, spray, orchestrator = make_system()
+    world.update_robot_pose(Pose2D(1.0, 0.0))
+
+    for attempt in range(3):
+        cycle = orchestrator.decide_once()
+        assert cycle.decision.action == ActionType.EXTINGUISH
+        assert cycle.submission is not None
+        assert orchestrator.process_results(results) == 1
+        assert world.fires["fire_0001"].state == FireState.PENDING_VERIFICATION
+        now = utc_now_iso()
+        world.update_observation_batch(ObservationBatch(now, (
+            SemanticObservation(
+                "fire_0001", "fire", 0.9, Pose2D(1.0, 0.0), now, "SMALL"
+            ),
+        )))
+        assert world.fires["fire_0001"].spray_count == attempt + 1
+
+    terminal = orchestrator.decide_once()
+
+    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert terminal.decision.action != ActionType.EXTINGUISH
+    assert [call.action for call in navigation.calls] == [ActionType.RETURN_HOME]
+    assert len(spray.calls) == 3
+
+
+def test_inaccessible_fire_does_not_block_next_fire():
+    world, results, navigation, spray, orchestrator = make_system(
+        spray_result=ActionResultStatus.FAILED
+    )
+    world.update_robot_pose(Pose2D(1.0, 0.0))
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation(
+            "fire_0002", "fire", 0.9, Pose2D(1.1, 0.0), now, "SMALL"
+        ),
+    )))
+
+    for _ in range(3):
+        cycle = orchestrator.decide_once()
+        assert cycle.validation.action.target == "fire_0001"
+        assert orchestrator.process_results(results) == 1
+
+    next_cycle = orchestrator.decide_once()
+
+    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert next_cycle.validation.action.target == "fire_0002"
+    assert len(spray.calls) == 4
     assert len(navigation.calls) == 0
-    assert len(spray.calls) == 2

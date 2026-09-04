@@ -206,11 +206,12 @@ def test_inactive_fire_is_rejected_without_publish(state):
     assert node.publishers["/vla/spray_command"].messages == []
 
 
-def test_max_attempts_is_rejected_without_publish():
-    _, node, _, orchestrator, _ = make_system(spray_count=2)
+def test_max_attempts_marks_fire_inaccessible_without_publish():
+    world, node, _, orchestrator, _ = make_system(spray_count=3)
     cycle = orchestrator.decide_once()
     assert cycle.submission is None
-    assert "최대 분사" in cycle.validation.reason
+    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert "ACTIVE" in cycle.validation.reason
     assert node.publishers["/vla/spray_command"].messages == []
 
 

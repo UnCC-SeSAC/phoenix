@@ -35,7 +35,7 @@ class TopicBridgeSprayAdapter(SprayPort, ActionResultSource):
         command_topic: str = "/vla/spray_command",
         result_topic: str = "/vla/spray_result",
         cancel_topic: str = "/vla/spray_cancel",
-        max_spray_attempts: int = 2,
+        max_spray_attempts: int = 3,
     ) -> None:
         if String is None:
             raise RuntimeError("ROS2 std_msgs 패키지를 찾을 수 없습니다.")

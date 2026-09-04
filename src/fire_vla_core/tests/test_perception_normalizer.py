@@ -98,6 +98,34 @@ def test_nonempty_upstream_id_is_preserved():
     assert list(world.people) == ["tracker-person-42"]
 
 
+def test_new_upstream_fire_id_reuses_nearby_canonical_fire():
+    world = WorldModel()
+    normalizer = CanonicalPerceptionNormalizer(world)
+    apply(normalizer, world, payload(
+        detection("fire", 2.0, 1.0, entity_id="fire-camera-1")
+    ))
+
+    batch = apply(normalizer, world, payload(
+        detection("fire", 2.03, 1.01, entity_id="fire-camera-2")
+    ))
+
+    assert batch.observations[0].entity_id == "fire-camera-1"
+    assert list(world.fires) == ["fire-camera-1"]
+
+
+def test_same_batch_nearby_fire_ids_collapse_to_one_observation():
+    world = WorldModel()
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = apply(normalizer, world, payload(
+        detection("fire", 2.0, 1.0, entity_id="fire-camera-1"),
+        detection("fire", 2.03, 1.01, entity_id="fire-camera-2"),
+    ))
+
+    assert [item.entity_id for item in batch.observations] == ["fire-camera-1"]
+    assert list(world.fires) == ["fire-camera-1"]
+
+
 def test_batch_association_is_one_to_one():
     world = WorldModel()
     now = utc_now().isoformat()
@@ -210,7 +238,7 @@ def test_distant_fire_remains_separate_after_association_ttl():
     assert batch.observations[0].entity_id == "fire_0002"
 
 
-def test_resolved_fire_id_is_not_reused_after_association_ttl():
+def test_extinguished_fire_keeps_canonical_id_during_same_mission():
     world = WorldModel()
     old = (utc_now() - timedelta(seconds=8)).isoformat()
     world.fires["fire_0001"] = FireEntity(
@@ -223,7 +251,24 @@ def test_resolved_fire_id_is_not_reused_after_association_ttl():
 
     batch = normalizer.normalize(payload(detection("fire", 2.02, 1.0)))
 
-    assert batch.observations[0].entity_id == "fire_0002"
+    assert batch.observations[0].entity_id == "fire_0001"
+
+
+def test_mission_reset_allows_new_fire_id_at_same_position():
+    world = WorldModel()
+    normalizer = CanonicalPerceptionNormalizer(world)
+    apply(normalizer, world, payload(
+        detection("fire", 2.0, 1.0, entity_id="fire-camera-1")
+    ))
+
+    world.set_mission("mission_02", "새 임무")
+    normalizer.reset_associations()
+    batch = apply(normalizer, world, payload(
+        detection("fire", 2.01, 1.0, entity_id="fire-camera-2")
+    ))
+
+    assert batch.observations[0].entity_id == "fire-camera-2"
+    assert list(world.fires) == ["fire-camera-2"]
 
 
 def test_equal_distance_tie_breaks_by_entity_id():

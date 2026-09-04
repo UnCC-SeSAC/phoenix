@@ -108,12 +108,28 @@ class CanonicalPerceptionNormalizer:
             if upstream_id is not None and not isinstance(upstream_id, str):
                 raise ValueError("entity_id는 문자열이어야 합니다.")
             entity_id = upstream_id.strip() if upstream_id is not None else ""
-            if not entity_id:
+
+            if class_name == "fire" and any(
+                item.class_name == "fire"
+                and position.distance_to(item.position) <= self._radius_m
+                for item in observations
+            ):
+                continue
+
+            entities = (
+                self._world.people
+                if class_name == "person"
+                else self._world.fires
+            )
+            if not entity_id or (
+                class_name == "fire" and entity_id not in entities
+            ):
                 entity_id = self._associate(
                     class_name,
                     position,
                     observed_time,
                     used_ids,
+                    fallback_id=entity_id or None,
                 )
             if entity_id in used_ids:
                 raise ValueError(
@@ -143,6 +159,7 @@ class CanonicalPerceptionNormalizer:
         position: Pose2D,
         observed_time: datetime,
         used_ids: set[str],
+        fallback_id: str | None = None,
     ) -> str:
         entities = (
             self._world.people
@@ -163,6 +180,8 @@ class CanonicalPerceptionNormalizer:
                 and entity.state in {
                     FireState.ACTIVE,
                     FireState.PENDING_VERIFICATION,
+                    FireState.EXTINGUISHED,
+                    FireState.INACCESSIBLE,
                 }
             )
             if (
@@ -176,6 +195,8 @@ class CanonicalPerceptionNormalizer:
                 candidates.append((distance, entity_id))
         if candidates:
             return min(candidates, key=lambda item: (item[0], item[1]))[1]
+        if fallback_id:
+            return fallback_id
         return self._new_id(class_name, entities, used_ids)
 
     def _new_id(

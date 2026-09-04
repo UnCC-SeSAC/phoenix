@@ -64,6 +64,16 @@ class VLAOrchestrator:
         if self.world.mission.status.value != "RUNNING":
             return DecisionCycle(None, None, None, f"Mission이 {self.world.mission.status.value} 상태입니다.")
 
+        for fire in self.world.fires.values():
+            if (
+                fire.state == FireState.ACTIVE
+                and fire.spray_count >= self.validator.max_spray_attempts
+            ):
+                self.world.mark_fire_inaccessible(fire.id)
+        self.world.complete_mission_if_resolved()
+        if self.world.mission.status.value != "RUNNING":
+            return DecisionCycle(None, None, None)
+
         qwen_selected_navigation = False
         if self.world.current_action is not None:
             decision = ActionDecision(ActionType.WAIT, "물리 행동이 실행 중이므로 완료 결과를 기다린다")
@@ -140,6 +150,16 @@ class VLAOrchestrator:
             )
 
         semantic_key = self._semantic_action_key(validation.action)
+        if (
+            semantic_key in self._non_retryable_semantic_keys
+            and validation.action.action == ActionType.EXTINGUISH
+            and validation.action.target in self.world.fires
+            and self.world.fires[validation.action.target].state == FireState.ACTIVE
+            and 0
+            < self.world.fires[validation.action.target].spray_count
+            < self.validator.max_spray_attempts
+        ):
+            self._non_retryable_semantic_keys.discard(semantic_key)
         if semantic_key in self._non_retryable_semantic_keys:
             return DecisionCycle(
                 decision,

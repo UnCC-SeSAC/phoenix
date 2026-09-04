@@ -23,7 +23,7 @@ class ActionValidator:
     map_max_x: float = 100.0
     map_min_y: float = -100.0
     map_max_y: float = 100.0
-    max_spray_attempts: int = 2
+    max_spray_attempts: int = 3
 
     def validate(self, action: Action, world: WorldModel) -> ValidationResult:
         if not action.action_id or not action.reason:
