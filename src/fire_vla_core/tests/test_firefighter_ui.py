@@ -41,6 +41,7 @@ from fire_vla_core.ros.firefighter_ui_node import (
     ControlModeOwner,
     FirefighterHTTPServer,
     FrameStore,
+    MapStore,
     OverlayStore,
     StatusStore,
     create_mission_payload,
@@ -317,6 +318,19 @@ def test_http_root_serves_required_v2_panels(http_server):
         "/api/vision/enabled",
     ):
         assert vision_contract in html
+    for map_contract in (
+        'id="slamMap"',
+        'id="semanticMap"',
+        "/api/map",
+        "/api/map.png",
+        "projectMapPoint",
+        "renderSemanticMap(world,presentation)",
+        "mapState.robot",
+        "PERSON_STATE_COLOR[item.state]",
+        "FIRE_STATE_COLOR[item.state]",
+        "marker.target?unit*1.25:unit",
+    ):
+        assert map_contract in html
 
 
 def test_vision_detection_api_supports_empty_and_populated_frames():
@@ -400,6 +414,76 @@ def test_camera_stream_wiring_stops_processing_and_handles_bad_frames():
     assert "destroy_subscription(self._image_subscription)" in node_source
     assert "except Exception as exc" in node_source
     assert 'launch_component ui_stream "ros2 run image_pipeline ui_stream_node' in wrapper
+
+
+def test_map_store_and_api_preserve_svg_fallback_without_map():
+    maps = MapStore()
+    assert maps.get() == {"available": False, "version": 0, "robot": None}
+    maps.update_robot({"x": 1.0, "y": -2.0, "yaw": 0.5})
+    assert maps.get()["robot"] == {"x": 1.0, "y": -2.0, "yaw": 0.5}
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, StatusStore(), lambda _text: {}, map_store=maps
+    )
+    server.start()
+    try:
+        status, _, body = request(server, "/api/map")
+        assert status == 200 and json.loads(body)["available"] is False
+        with pytest.raises(HTTPError) as error:
+            request(server, "/api/map.png")
+        assert error.value.code == 503
+    finally:
+        server.close()
+
+
+def test_map_png_api_serves_current_version_and_metadata():
+    maps = MapStore()
+    metadata = {
+        "resolution": 0.05,
+        "origin": {"x": -1.0, "y": -2.0, "yaw": 0.2},
+        "render_step": 2,
+        "png_width": 20,
+        "png_height": 10,
+    }
+    assert maps.update_map(b"\x89PNG-test", metadata) == 1
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, StatusStore(), lambda _text: {}, map_store=maps
+    )
+    server.start()
+    try:
+        _, _, body = request(server, "/api/map")
+        payload = json.loads(body)
+        assert payload["available"] is True and payload["version"] == 1
+        assert payload["origin"] == metadata["origin"]
+        status, content_type, body = request(server, "/api/map.png")
+        assert status == 200 and content_type == "image/png"
+        assert body == b"\x89PNG-test"
+    finally:
+        server.close()
+
+
+def test_map_projection_uses_origin_yaw_resolution_and_downsample():
+    html = (
+        Path(__file__).parents[1] / "fire_vla_core" / "web" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "Number(metadata.resolution)*step" in html
+    assert "Number(position.x)-Number(origin.x)" in html
+    assert "Number(position.y)-Number(origin.y)" in html
+    assert "Math.cos(yaw)*dx+Math.sin(yaw)*dy" in html
+    assert "-Math.sin(yaw)*dx+Math.cos(yaw)*dy" in html
+    assert "height-" in html
+
+
+def test_map_ros_contract_handles_missing_tf_without_stopping_ui():
+    node_source = (
+        Path(__file__).parents[1] / "fire_vla_core" / "ros" /
+        "firefighter_ui_node.py"
+    ).read_text(encoding="utf-8")
+    assert '"map_topic", "/map"' in node_source
+    assert '"map_frame", "map"' in node_source
+    assert '"base_frame", "base_footprint"' in node_source
+    assert "DurabilityPolicy.TRANSIENT_LOCAL" in node_source
+    assert "except TransformException:" in node_source
+    assert "self._maps.update_robot(None)" in node_source
 
 
 def test_submission_replay_fixture_is_explicit_and_renderable(http_server):

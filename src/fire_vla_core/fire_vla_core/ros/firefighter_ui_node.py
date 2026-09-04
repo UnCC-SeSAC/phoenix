@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import threading
+import time
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,19 +14,33 @@ from urllib.parse import parse_qs, urlparse
 
 try:
     import rclpy
+    from nav_msgs.msg import OccupancyGrid
     from rclpy.node import Node
     from rclpy.qos import (
-        DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data,
+        DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
+        qos_profile_sensor_data,
     )
+    from rclpy.time import Time
     from sensor_msgs.msg import CompressedImage
     from std_msgs.msg import Bool, String
+    from tf2_ros import Buffer, TransformException, TransformListener
 except ImportError:
     rclpy = None
     Node = object
     String = None
     Bool = None
     CompressedImage = None
+    OccupancyGrid = None
+    Time = None
+    Buffer = None
+    TransformListener = None
+    TransformException = Exception
+    HistoryPolicy = None
     qos_profile_sensor_data = None
+
+from fire_vla_core.ros.occupancy_png import (
+    downsample_step, grid_metadata, render_occupancy_png, yaw_from_quaternion,
+)
 
 
 _MAX_REQUEST_BYTES = 64 * 1024
@@ -214,6 +230,42 @@ class OverlayStore:
             self._overlay = None
 
 
+class MapStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._png: bytes | None = None
+        self._metadata: dict[str, Any] | None = None
+        self._robot: dict[str, float] | None = None
+        self._version = 0
+
+    def update_map(self, png: bytes, metadata: dict[str, Any]) -> int:
+        with self._lock:
+            self._png = bytes(png)
+            self._metadata = copy.deepcopy(metadata)
+            self._version += 1
+            return self._version
+
+    def update_robot(self, pose: dict[str, float] | None) -> None:
+        with self._lock:
+            self._robot = None if pose is None else dict(pose)
+
+    def png(self) -> tuple[bytes | None, int]:
+        with self._lock:
+            return self._png, self._version
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            robot = None if self._robot is None else dict(self._robot)
+            if self._metadata is None:
+                return {"available": False, "version": 0, "robot": robot}
+            return {
+                "available": True,
+                "version": self._version,
+                "robot": robot,
+                **copy.deepcopy(self._metadata),
+            }
+
+
 class FirefighterHTTPServer:
     def __init__(
         self,
@@ -226,6 +278,7 @@ class FirefighterHTTPServer:
         index_html: bytes | None = None,
         frame_store: FrameStore | None = None,
         overlay_store: OverlayStore | None = None,
+        map_store: MapStore | None = None,
         set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
     ) -> None:
         host, port = validate_server_config(host, port)
@@ -234,6 +287,7 @@ class FirefighterHTTPServer:
         self._control_owner = control_owner or ControlModeOwner(lambda _mode: None)
         self._frames = frame_store or FrameStore()
         self._overlays = overlay_store or OverlayStore()
+        self._maps = map_store or MapStore()
         self._set_vision_enabled = set_vision_enabled
         self._index_html = index_html or (
             files("fire_vla_core.web").joinpath("index.html").read_bytes()
@@ -308,6 +362,12 @@ class FirefighterHTTPServer:
                     return
                 if parsed.path == "/api/vision/detections":
                     self._send_json(HTTPStatus.OK, owner._overlays.get())
+                    return
+                if parsed.path == "/api/map":
+                    self._send_json(HTTPStatus.OK, owner._maps.get())
+                    return
+                if parsed.path == "/api/map.png":
+                    self._send_map_png()
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
@@ -433,6 +493,22 @@ class FirefighterHTTPServer:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
+            def _send_map_png(self) -> None:
+                png, version = owner._maps.png()
+                if png is None:
+                    self._send_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"error": "map is unavailable"},
+                    )
+                    return
+                self.send_response(HTTPStatus.OK.value)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(png)))
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("ETag", f'"{version}"')
+                self.end_headers()
+                self.wfile.write(png)
+
         return Handler
 
 
@@ -452,10 +528,24 @@ class FirefighterUINode(Node):
         self.declare_parameter("vision_topic", "/ui/camera/compressed")
         self.declare_parameter("vision_overlay_topic", "/ui/camera/overlay")
         self.declare_parameter("vision_enabled_topic", "/ui/camera/enabled")
+        self.declare_parameter("map_topic", "/map")
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("base_frame", "base_footprint")
+        self.declare_parameter("map_render_period_sec", 1.0)
+        self.declare_parameter("map_max_pixels", 250_000)
+        self.declare_parameter("robot_pose_period_sec", 0.2)
 
         self._store = StatusStore()
         self._frames = FrameStore()
         self._overlays = OverlayStore()
+        self._maps = MapStore()
+        self._last_map_render = 0.0
+        self._map_render_period = float(
+            self.get_parameter("map_render_period_sec").value
+        )
+        self._map_max_pixels = int(self.get_parameter("map_max_pixels").value)
+        self._map_frame = str(self.get_parameter("map_frame").value)
+        self._base_frame = str(self.get_parameter("base_frame").value)
         self._mission_pub = self.create_publisher(
             String, str(self.get_parameter("mission_topic").value), 10
         )
@@ -499,6 +589,23 @@ class FirefighterUINode(Node):
         self._vision_enabled_pub = self.create_publisher(
             Bool, str(self.get_parameter("vision_enabled_topic").value), 10
         )
+        self.create_subscription(
+            OccupancyGrid,
+            str(self.get_parameter("map_topic").value),
+            self._map_callback,
+            QoSProfile(
+                depth=1,
+                history=HistoryPolicy.KEEP_LAST,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+        self.create_timer(
+            max(0.05, float(self.get_parameter("robot_pose_period_sec").value)),
+            self._poll_robot_pose,
+        )
         self._http = FirefighterHTTPServer(
             str(self.get_parameter("ui_host").value),
             int(self.get_parameter("ui_port").value),
@@ -507,6 +614,7 @@ class FirefighterUINode(Node):
             control_owner=self._control_owner,
             frame_store=self._frames,
             overlay_store=self._overlays,
+            map_store=self._maps,
             set_vision_enabled=self._set_vision_enabled,
         )
         self._http.start()
@@ -531,6 +639,36 @@ class FirefighterUINode(Node):
             self._overlays.update(overlay)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"vision overlay parsing failed: {exc}")
+
+    def _map_callback(self, msg: OccupancyGrid) -> None:
+        now = time.monotonic()
+        if now - self._last_map_render < self._map_render_period:
+            return
+        self._last_map_render = now
+        width, height = int(msg.info.width), int(msg.info.height)
+        step = downsample_step(width, height, self._map_max_pixels)
+        metadata = grid_metadata(msg)
+        metadata["render_step"] = step
+        metadata["png_width"] = math.ceil(width / step)
+        metadata["png_height"] = math.ceil(height / step)
+        self._maps.update_map(
+            render_occupancy_png(msg.data, width, height, step), metadata
+        )
+
+    def _poll_robot_pose(self) -> None:
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                self._map_frame, self._base_frame, Time()
+            )
+        except TransformException:
+            self._maps.update_robot(None)
+            return
+        translation = transform.transform.translation
+        self._maps.update_robot({
+            "x": float(translation.x),
+            "y": float(translation.y),
+            "yaw": yaw_from_quaternion(transform.transform.rotation),
+        })
 
     def _update_status(self, msg: String, mode: str) -> None:
         try:
