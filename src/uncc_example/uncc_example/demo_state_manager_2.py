@@ -2,8 +2,8 @@
 
 시나리오:
   1. 시작점을 기준으로 -15° / +15° 초기 스캔을 수행한다.
-  2. 사람과 군집인 fire 및 단독 fire가 모두 확정될 때까지 기다린다.
-  3. 군집 fire를 진압하고, base로 돌아가지 않은 채 단독 fire를 진압한다.
+  2. 확정된 fire 중 사람과 군집인 fire를 우선 선택한다.
+  3. 첫 fire를 진압하고, base로 돌아가지 않은 채 다음 fire를 진압한다.
   4. 두 번째 진압이 끝난 뒤에만 시작점으로 최종 복귀한다.
 """
 
@@ -25,7 +25,7 @@ class DemoStateManager2(DemoStateManager):
         )
 
     def target_complete_callback(self, request, response):
-        """첫 진압 뒤 중간 복귀 대신 큐의 단독 fire로 바로 진행한다."""
+        """첫 진압 뒤 중간 복귀 대신 큐의 다음 fire로 바로 진행한다."""
         if (
             self.state == self.RETURNING_TO_CHARGE
             and self.active_target is None
@@ -40,14 +40,14 @@ class DemoStateManager2(DemoStateManager):
         response = StateManager.target_complete_callback(self, request, response)
 
         if completed_fire and completed_phase == self.PHASE_CLUSTER_FIRE:
-            # 초기 스캔에서 이미 확인한 단독 fire를 바로 선택한다. 혹시
-            # 객체 확정이 지연됐을 때만 single_fire_timeout 동안 기다린다.
+            # 남은 fire를 바로 선택한다. 다음 fire 확정이 지연됐을 때만
+            # single_fire_timeout 동안 기다린다.
             now = time.monotonic()
             self.phase = self.PHASE_SINGLE_FIRE
             self._single_detection_ready_at = now
             self._single_detection_deadline = now + self.single_fire_timeout_sec
             self._event_logger.info(
-                '군집 화재 처리 완료: base 복귀 없이 단독 화재로 진행'
+                '1차 화재 처리 완료: base 복귀 없이 다음 화재로 진행'
             )
         elif completed_fire and completed_phase == self.PHASE_SINGLE_FIRE:
             self.phase = self.PHASE_FINAL_RETURN
@@ -56,12 +56,13 @@ class DemoStateManager2(DemoStateManager):
         return response
 
     def _process_cluster_fire(self, now):
-        """두 목표가 모두 초기 스캔에서 확보된 뒤에만 첫 출동한다."""
+        """첫 fire를 선택한다. 군집 fire가 있으면 단독 fire보다 우선한다."""
         cluster_fire = self._pick_cluster_fire()
         single_fire = self._pick_single_fire()
 
-        if cluster_fire is not None and single_fire is not None:
-            self._enter_urgent_target(cluster_fire)
+        first_fire = cluster_fire or single_fire
+        if first_fire is not None:
+            self._enter_urgent_target(first_fire)
             return
 
         self._enter_terminal_state(self.WAITING_CLUSTER_FIRE)
@@ -73,9 +74,26 @@ class DemoStateManager2(DemoStateManager):
             self._begin_initial_sweep(now, new_round=True)
             return
 
-        self._fail_mission(
-            '초기 좌우 스캔에서 군집 fire와 단독 fire를 모두 찾지 못함'
-        )
+        self._fail_mission('초기 좌우 스캔에서 처리할 fire를 찾지 못함')
+
+    def _process_single_fire(self, now):
+        """두 번째 출동도 동일한 큐 우선순위로 남은 fire를 선택한다."""
+        if now < self._single_detection_ready_at:
+            self._enter_terminal_state(self.DETECTING_SINGLE_FIRE)
+            return
+
+        cluster_fire = self._pick_cluster_fire()
+        single_fire = self._pick_single_fire()
+        next_fire = cluster_fire or single_fire
+
+        if next_fire is not None:
+            self._enter_urgent_target(next_fire)
+            return
+
+        self._enter_terminal_state(self.DETECTING_SINGLE_FIRE)
+
+        if now >= self._single_detection_deadline:
+            self._fail_mission('1차 진압 후 다음 fire를 제한시간 내 찾지 못함')
 
 
 def main(args=None):

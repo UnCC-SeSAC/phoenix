@@ -18,7 +18,7 @@ from .state_manager import StateManager
 
 
 class DemoStateManager(StateManager):
-    """초기 좌우 스캔, 군집 화재, 단독 화재 순서로 임무를 수행한다."""
+    """초기 좌우 스캔 후 우선순위 fire와 단독 fire를 처리한다."""
 
     INITIAL_SWEEP = 'INITIAL_SWEEP'
     WAITING_CLUSTER_FIRE = 'WAITING_CLUSTER_FIRE'
@@ -136,7 +136,7 @@ class DemoStateManager(StateManager):
 
         if completed_fire and completed_phase == self.PHASE_CLUSTER_FIRE:
             self.phase = self.PHASE_RETURN_AFTER_CLUSTER
-            self._event_logger.info('군집 화재 처리 완료: 1차 base 복귀')
+            self._event_logger.info('1차 화재 처리 완료: 1차 base 복귀')
         elif completed_fire and completed_phase == self.PHASE_SINGLE_FIRE:
             self.phase = self.PHASE_FINAL_RETURN
             self._event_logger.info('단독 화재 처리 완료: 최종 base 복귀')
@@ -226,7 +226,10 @@ class DemoStateManager(StateManager):
         self._event_logger.info('초기 좌우 스캔 완료: 군집 화재 선택')
 
     def _process_cluster_fire(self, now):
-        target = self._pick_cluster_fire()
+        """군집 fire를 우선하고, 없으면 단독 fire를 첫 목표로 고른다."""
+        cluster_fire = self._pick_cluster_fire()
+        single_fire = self._pick_single_fire()
+        target = cluster_fire or single_fire
 
         if target is not None:
             self._enter_urgent_target(target)
@@ -241,9 +244,7 @@ class DemoStateManager(StateManager):
             self._begin_initial_sweep(now, new_round=True)
             return
 
-        self._fail_mission(
-            '[불, 사람] 군집을 초기 좌우 스캔에서 찾지 못함'
-        )
+        self._fail_mission('초기 좌우 스캔에서 처리할 fire를 찾지 못함')
 
     # =========================================================
     # Base heading alignment and second fire
