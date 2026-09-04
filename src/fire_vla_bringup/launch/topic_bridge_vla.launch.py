@@ -56,6 +56,14 @@ def _create_vla_node(context):
                 LaunchConfiguration("person_fire_risk_distance_m"),
                 value_type=float,
             ),
+            "navigation_standoff_m": ParameterValue(
+                LaunchConfiguration("navigation_standoff_m"),
+                value_type=float,
+            ),
+            "spray_range_m": ParameterValue(
+                LaunchConfiguration("spray_range_m"),
+                value_type=float,
+            ),
             "decision_period_sec": 1.0,
             "navigation_mode": "TOPIC_BRIDGE",
             "report_mode": "TOPIC_BRIDGE",
@@ -102,6 +110,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "person_fire_risk_distance_m",
             default_value="0.10",
+        ),
+        DeclareLaunchArgument(
+            "navigation_standoff_m",
+            default_value="0.15",
+        ),
+        DeclareLaunchArgument(
+            "spray_range_m",
+            default_value="0.30",
         ),
         DeclareLaunchArgument(
             "start_perception_bridge",

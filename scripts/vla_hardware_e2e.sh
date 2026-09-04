@@ -9,6 +9,8 @@ RUN_LOG_DIR=""
 DRY_RUN="${VLA_E2E_DRY_RUN:-0}"
 CAMERA_WAIT_SEC=8
 STATUS_WAIT_SEC=15
+NAVIGATION_STANDOFF_M="${VLA_NAVIGATION_STANDOFF_M:-0.15}"
+SPRAY_RANGE_M="${VLA_SPRAY_RANGE_M:-0.30}"
 LOCK_FILE="/tmp/vla_hardware_e2e.lock"
 HEF_PATH="/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef"
 ONNX_PATH="/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx"
@@ -180,10 +182,11 @@ start_runtime() {
     launch_component yolo "ros2 launch image_pipeline yolo.launch.py model_path:=$HEF_PATH postprocess_path:=$ONNX_PATH backend:=hailo layout:=end2end class_names:='[fire,person]'"
     launch_component detection3d "ros2 launch image_pipeline detection_3d.launch.py"
     launch_component ui_stream "ros2 run image_pipeline ui_stream_node --ros-args -p class_names:='[fire,person]'"
-    launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0"
+    launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0 navigation_standoff_m:=$NAVIGATION_STANDOFF_M spray_range_m:=$SPRAY_RANGE_M"
     launch_component ui "ros2 run fire_vla_core firefighter_ui"
     launch_component navigation "ros2 launch uncc_example vla_navigation_bridge.launch.py"
     launch_component suppression "ros2 launch uncc_example fire_extinguisher.launch.py"
+    echo "VLA_PARAMETERS: navigation_standoff_m=$NAVIGATION_STANDOFF_M spray_range_m=$SPRAY_RANGE_M"
     echo "production runtime 시작 요청 완료. 로그: $RUN_LOG_DIR/e2e_*.log"
 }
 
@@ -198,6 +201,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from lifecycle_msgs.srv import GetState
@@ -232,6 +236,16 @@ class Status(Node):
         self.nav = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self.suppression = ActionClient(self, SuppressFire, "/suppress_fire")
         self.bt_state = "UNKNOWN"
+        self.vla_parameters = {
+            "navigation_standoff_m": "UNKNOWN",
+            "spray_range_m": "UNKNOWN",
+        }
+        self.vla_parameter_client = AsyncParameterClient(self, "/vla_orchestrator")
+        if self.vla_parameter_client.wait_for_service(timeout_sec=0.2):
+            future = self.vla_parameter_client.get_parameters(
+                tuple(self.vla_parameters)
+            )
+            future.add_done_callback(self.capture_vla_parameters)
         self.bt_state_client = self.create_client(GetState, "/bt_navigator/get_state")
         if self.bt_state_client.wait_for_service(timeout_sec=0.2):
             future = self.bt_state_client.call_async(GetState.Request())
@@ -243,6 +257,13 @@ class Status(Node):
             self.bt_state = future.result().current_state.label
         except Exception:
             self.bt_state = "UNKNOWN"
+
+    def capture_vla_parameters(self, future):
+        try:
+            for name, value in zip(self.vla_parameters, future.result().values):
+                self.vla_parameters[name] = value.double_value
+        except Exception:
+            pass
 
     def finish(self):
         for name, value in self.seen.items():
@@ -266,6 +287,11 @@ class Status(Node):
         print(
             f"SUPPRESSION_ACTION_SERVER: "
             f"{'PASS' if self.suppression.server_is_ready() else 'FAIL'}"
+        )
+        print(
+            "VLA_PARAMETERS: "
+            f"navigation_standoff_m={self.vla_parameters['navigation_standoff_m']} "
+            f"spray_range_m={self.vla_parameters['spray_range_m']}"
         )
         rclpy.shutdown()
 
