@@ -62,6 +62,47 @@ def test_new_mission_clears_entities_but_preserves_robot_and_home_pose():
     assert world.unexplored_zones == map_zones
 
 
+def test_new_mission_rejects_current_action_and_preserves_existing_state():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_01", "person", .9, Pose2D(1, 2), now),
+        SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    mission = world.mission
+    people = dict(world.people)
+    fires = dict(world.fires)
+    action = Action("a1", ActionType.NAVIGATE_TO, "이전 이동", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+
+    with pytest.raises(ValueError, match="^MISSION_REJECTED_ACTIVE_ACTION$"):
+        world.set_mission("m2", "새 임무")
+
+    assert world.mission is mission
+    assert world.current_action is action
+    assert world.pending_actions == {"a1": action}
+    assert world.people == people
+    assert world.fires == fires
+
+
+def test_new_mission_rejects_pending_action_without_current_action():
+    world = make_world()
+    mission = world.mission
+    action = Action("a1", ActionType.WAIT, "이전 대기")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    assert world.current_action is None
+
+    with pytest.raises(ValueError, match="^MISSION_REJECTED_ACTIVE_ACTION$"):
+        world.set_mission("m2", "새 임무")
+
+    assert world.mission is mission
+    assert world.pending_actions == {"a1": action}
+
+
 @pytest.mark.parametrize("distance", [0.0, 0.10])
 def test_active_fire_threatens_person_at_inclusive_demo_boundary(distance):
     world = make_world(WorldModelConfig(person_fire_risk_distance_m=0.10))

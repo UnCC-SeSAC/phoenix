@@ -249,7 +249,7 @@ def test_initial_decision_runs_once_and_unchanged_input_is_noop():
 
 
 def test_semantic_observation_and_mission_change_trigger_new_decisions():
-    world, _, orchestrator = make_orchestrator()
+    world, queue, orchestrator = make_orchestrator()
     orchestrator.llm = wait_llm()
     orchestrator.decide_once()
     now = utc_now_iso()
@@ -258,6 +258,7 @@ def test_semantic_observation_and_mission_change_trigger_new_decisions():
     )))
     orchestrator.decide_once()
     assert orchestrator.llm.calls == 2
+    assert orchestrator.process_results(queue) == 1
     world.set_mission("m2", "새로운 임무")
     orchestrator.decide_once()
     assert orchestrator.llm.calls == 3

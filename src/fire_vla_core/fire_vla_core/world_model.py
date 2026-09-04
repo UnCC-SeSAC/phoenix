@@ -67,6 +67,8 @@ class WorldModel:
     _processed_terminal_action_id_set: set[str] = field(default_factory=set, repr=False)
 
     def set_mission(self, mission_id: str, text: str) -> None:
+        if self.current_action is not None or self.pending_actions:
+            raise ValueError("MISSION_REJECTED_ACTIVE_ACTION")
         self.people.clear()
         self.fires.clear()
         self.mission = Mission(id=mission_id, text=text, status=MissionStatus.RUNNING)
