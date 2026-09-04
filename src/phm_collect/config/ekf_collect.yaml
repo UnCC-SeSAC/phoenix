@@ -1,3 +1,19 @@
+# PHM 잔차 수집 전용 EKF 설정.
+#
+# controller/config/ekf.yaml 에서 'namespace/' 치환자만 실제 프레임으로 확정한 사본입니다.
+# 원본은 nav2_common 의 ReplaceString 으로 런치 시점에 치환하는데, phm_collect 는
+# 기존 런치 체인을 include 하지 않으므로(need_compile 함정 회피) 여기서는 확정값을 씁니다.
+# 단일 로봇 전용입니다 — 다중 로봇 네임스페이스를 쓸 거면 원본 경로를 쓰세요.
+#
+# 입력 구성 (2026-08-31 기준)
+#   odom0 = odom_raw        휠 오도메트리에서 속도(vx, vy, vyaw)만
+#   odom1 = odom_rf2o_fixed rf2o 스캔매칭에서 절대 위치(x, y, yaw)만
+#   imu0  = imu             자이로 요레이트(vyaw)만
+#
+# rf2o 의 twist 는 일부러 안 씁니다. 정지 상태 |wz| 가 자이로의 15~23배로 시끄러워서
+# (live08/09 실측) 요레이트 채널에 넣으면 자기 잡음만으로 오경보가 납니다.
+# 반면 rf2o 의 pose 드리프트는 60초에 yaw 2.2도 / 위치 1cm 로 작아서 안전합니다.
+
 ### ekf config file ###
 /**:
     ros__parameters:
@@ -5,12 +21,12 @@
       # The frequency, in Hz, at which the filter will output a position estimate. Note that the filter will not begin
       # computation until it receives at least one message from one of the inputs. It will then run continuously at the
       # frequency specified here, regardless of whether it receives more measurements. Defaults to 30 if unspecified.
-      frequency: 50.0
+      frequency: 20.0
 
       # The period, in seconds, after which we consider a sensor to have timed out. In this event, we carry out a predict
       # cycle on the EKF without correcting it. This parameter can be thought of as the minimum frequency with which the
       # filter will generate new output. Defaults to 1 / frequency if not specified.
-      sensor_timeout: 0.1 # 5주기
+      sensor_timeout: 2.0
 
       # ekf_localization_node and ukf_localization_node both use a 3D omnidirectional motion model. If this parameter is
       # set to true, no 3D information will be used in your state estimate. Use this if you are operating in a planar
@@ -67,10 +83,10 @@
       #     3a. Set your "world_frame" to your map_frame value
       #     3b. MAKE SURE something else is generating the odom->base_link transform. Note that this can even be another state
       #         estimation node from robot_localization! However, that instance should *not* fuse the global data.
-      map_frame: namespace/map              # Defaults to "map" if unspecified
-      odom_frame: namespace/odom            # Defaults to "odom" if unspecified
-      base_link_frame: namespace/base_footprint  # Defaults to "base_link" if unspecified
-      world_frame: namespace/odom           # Defaults to the value of odom_frame if unspecified
+      map_frame: map              # Defaults to "map" if unspecified
+      odom_frame: odom            # Defaults to "odom" if unspecified
+      base_link_frame: base_footprint  # Defaults to "base_link" if unspecified
+      world_frame: odom           # Defaults to the value of odom_frame if unspecified
 
       # The filter accepts an arbitrary number of inputs from each input message type (nav_msgs/Odometry,
       # geometry_msgs/PoseWithCovarianceStamped, geometry_msgs/TwistWithCovarianceStamped,
@@ -129,22 +145,6 @@
       #odom0_twist_rejection_threshold: 1.0
 
       # Further input parameter examples
-      # ★ odom_rf2o(원본)가 아니라 odom_rf2o_fixed(릴레이 출력)를 씁니다.
-      #
-      # 이 로봇은 라이다가 뒤를 보고 장착돼 있습니다(lidar.urdf.xacro:8 이
-      # rpy="0 0 pi" 로 선언). 그런데 rf2o 는 base_frame_id 를 줘도 자기 출력을
-      # 레이저 프레임 그대로 발행합니다. 그래서 원본은:
-      #   - 전진 지령 중 96% 에서 twist.linear.x 가 음수 (실측 중앙 -0.188, live24)
-      #   - covariance 36칸이 전부 0 (실측 582건 전부)
-      # 원본을 그대로 융합하면 EKF 가 휠 오도메트리와 **정반대 방향**의 위치를
-      # 먹습니다(odom_raw 와 이동 벡터가 148~159도 차이).
-      #
-      # controller/rf2o_covariance_relay.py 가 x,y 와 vx,vy 부호를 뒤집고
-      # covariance 를 채워 odom_rf2o_fixed 로 재발행합니다. yaw 는 안 뒤집습니다 —
-      # z축 180도 회전은 yaw 를 보존하고, 실측에서도 자이로와 부호가 맞았습니다.
-      #
-      # 릴레이는 phm_collect/launch/phm_monitor.launch.py 가 rf2o 와 함께 띄웁니다.
-      # 둘 다 안 떠 있으면 이 입력은 그냥 안 오고 EKF 는 odom0/imu0 로만 돕니다.
       odom1: odom_rf2o_fixed
       odom1_config: [true, true, false,
                      false, false, true,
@@ -178,7 +178,7 @@
 
       imu0: imu
       imu0_config: [false, false, false,
-                    false, false, true,
+                    false, false, false,
                     false, false, false,
                     false, false, true,
                     false,  false, false]

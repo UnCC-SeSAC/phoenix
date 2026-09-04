@@ -105,6 +105,57 @@ class StatusStore:
             return copy.deepcopy(self._statuses[mode])
 
 
+class PhmStore:
+    """로봇의 PHM 감시 노드가 낸 마지막 상태.
+
+    `/phm/status` 는 `phm_collect` 의 `phm_monitor` 노드가 1Hz 로 내는
+    std_msgs/String 안의 JSON 입니다. `/vla/status` 와 같은 모양이라 여기서도
+    내용을 해석하지 않고 그대로 보관합니다 — 검출 규칙이 바뀌어도 UI 는 안 바뀝니다.
+
+    ★ 도착 시각을 같이 들고 있는 이유
+        phm_monitor 가 죽으면 마지막 값이 그대로 남습니다. 그걸 그대로 보여주면
+        **고장이 없는 것처럼** 보입니다. `/api/phm` 이 age_sec 과 stale 을 같이
+        내보내서 화면이 '오래된 값' 임을 표시할 수 있게 합니다.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._payload: dict[str, Any] | None = None
+        self._received_at: float | None = None
+
+    def update(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._payload = copy.deepcopy(payload)
+            self._received_at = time.time()
+
+    def get(self, stale_sec: float) -> dict[str, Any]:
+        with self._lock:
+            payload = copy.deepcopy(self._payload)
+            received_at = self._received_at
+        if payload is None:
+            return {
+                "schema_version": 1,
+                "mode": "PHM",
+                "available": False,
+                "health": "UNKNOWN",
+                "alarms": [],
+                "blocked_reason": "PHM status를 기다리는 중입니다. "
+                                  "phm_monitor 노드가 떠 있는지 확인하세요.",
+            }
+        age = time.time() - received_at
+        payload["available"] = True
+        payload["age_sec"] = round(age, 2)
+        payload["stale"] = age > stale_sec
+        if payload["stale"]:
+            # 값 자체는 그대로 넘깁니다. 다만 건전성은 '모름' 으로 덮습니다 —
+            # 끊긴 노드의 마지막 OK 를 OK 로 보여주면 안 됩니다.
+            payload["health"] = "UNKNOWN"
+            payload["blocked_reason"] = (
+                f"PHM status가 {age:.1f}초째 갱신되지 않았습니다."
+            )
+        return payload
+
+
 def validate_server_config(host: str, port: int, *, allow_remote: bool = False):
     normalized_host = host.strip().lower()
     if not normalized_host:
@@ -258,6 +309,8 @@ class FirefighterHTTPServer:
         frame_store: FrameStore | None = None,
         overlay_store: OverlayStore | None = None,
         map_store: MapStore | None = None,
+        phm_store: "PhmStore | None" = None,
+        phm_stale_sec: float = 5.0,
         allow_remote: bool = False,
         max_stream_clients: int = 4,
         set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
@@ -273,6 +326,10 @@ class FirefighterHTTPServer:
         self._frames = frame_store or FrameStore()
         self._overlays = overlay_store or OverlayStore()
         self._maps = map_store or MapStore()
+        # PHM 도 같은 원칙입니다 — phm_monitor 가 안 떠 있어도 /api/phm 은 404 가
+        # 아니라 available:false 를 돌려줍니다. 프론트엔드가 분기를 하나 덜 씁니다.
+        self._phm = phm_store or PhmStore()
+        self._phm_stale_sec = float(phm_stale_sec)
         self._max_stream_clients = int(max_stream_clients)
         self._stream_clients = 0
         self._stream_lock = threading.Lock()
@@ -349,6 +406,11 @@ class FirefighterHTTPServer:
                         return
                     self._send_json(
                         HTTPStatus.OK, owner._status_store.get(mode)
+                    )
+                    return
+                if parsed.path == "/api/phm":
+                    self._send_json(
+                        HTTPStatus.OK, owner._phm.get(owner._phm_stale_sec)
                     )
                     return
                 if parsed.path == "/api/vision/stream":
@@ -559,8 +621,16 @@ class FirefighterUINode(Node):
         self.declare_parameter("map_render_period_sec", 1.0)
         self.declare_parameter("map_max_pixels", 250_000)
         self.declare_parameter("robot_pose_period_sec", 0.2)
+        # PHM: 로봇의 phm_monitor 노드(phm_collect)가 내는 건전성 상태.
+        # 모드가 아니라 **상시 패널**입니다 — 건전성은 VLA/rule-based 와 직교하고,
+        # 모드를 바꿨다고 사라지면 안 됩니다. 그래서 /api/status 가 아니라
+        # 별도 /api/phm 으로 나갑니다.
+        self.declare_parameter("ui_phm_enabled", True)
+        self.declare_parameter("phm_status_topic", "/phm/status")
+        self.declare_parameter("phm_stale_sec", 5.0)
 
         self._store = StatusStore()
+        self._phm = PhmStore()
         self._frames = FrameStore()
         self._overlays = OverlayStore()
         self._maps = MapStore()
@@ -594,6 +664,15 @@ class FirefighterUINode(Node):
             self._rule_based_status_callback,
             10,
         )
+
+        self._phm_stale_sec = float(self.get_parameter("phm_stale_sec").value)
+        if bool(self.get_parameter("ui_phm_enabled").value):
+            self.create_subscription(
+                String,
+                str(self.get_parameter("phm_status_topic").value),
+                self._phm_callback,
+                10,
+            )
 
         self._vision_enabled_pub = None
         if bool(self.get_parameter("ui_vision_enabled").value):
@@ -648,6 +727,8 @@ class FirefighterUINode(Node):
             frame_store=self._frames,
             overlay_store=self._overlays,
             map_store=self._maps,
+            phm_store=self._phm,
+            phm_stale_sec=self._phm_stale_sec,
             allow_remote=allow_remote,
             max_stream_clients=int(
                 self.get_parameter("max_stream_clients").value
@@ -684,6 +765,15 @@ class FirefighterUINode(Node):
             self.get_logger().warning(
                 f"{mode} status parsing failed: {exc}"
             )
+
+    def _phm_callback(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+            if not isinstance(data, dict):
+                raise ValueError("phm status payload는 JSON object여야 합니다.")
+            self._phm.update(data)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self.get_logger().warning(f"phm status parsing failed: {exc}")
 
     def _frame_callback(self, msg) -> None:
         self._frames.update(bytes(msg.data))

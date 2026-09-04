@@ -71,6 +71,20 @@
     th { color:var(--muted); font-size:10px; letter-spacing:.09em; text-transform:uppercase; }
     tbody tr:last-child td { border-bottom:0; }
     .result-box { padding:14px; border:1px solid var(--line); background:#09111b99; }
+    /* PHM — 로봇 건전성. 모드와 무관한 상시 패널입니다. */
+    .phm-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+    .phm-axis { padding:13px; border:1px solid var(--line); background:#09111b99; }
+    .phm-axis.alarm { border-color:var(--bad); background:#1c0f16; }
+    .phm-axis.dim { opacity:.55; }
+    .phm-num { font-variant-numeric:tabular-nums; }
+    /* 창 안에서 임계를 넘은 표본 비율. 경보 조건이 '비율' 이라 이걸 보여주는 게
+       잔차 숫자 하나보다 판정에 가깝습니다. */
+    .phm-bar { position:relative; height:6px; margin-top:8px; border-radius:3px; background:#1b2a3a; overflow:hidden; }
+    .phm-bar i { position:absolute; inset:0 auto 0 0; background:var(--cyan); }
+    .phm-bar.alarm i { background:var(--bad); }
+    .phm-bar b { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--amber); }
+    .phm-note { margin:10px 0 0; padding:9px 11px; border-left:3px solid var(--amber); background:#1a1509; color:#f4e6c4; font-size:12px; }
+    .phm-host { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; color:var(--muted); font-size:12px; }
     @media (max-width:900px) { main { grid-template-columns:1fr; } .wide { grid-column:auto; } .bottom-grid { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -127,6 +141,24 @@
   <section class="panel">
     <h2>Situation Timeline</h2>
     <ol id="timeline" class="timeline"><li class="empty">canonical status event를 기다리는 중입니다.</li></ol>
+  </section>
+
+  <!-- PHM 은 모드 전환과 무관합니다. 건전성은 VLA/rule-based 와 직교하고,
+       모드를 바꿨다고 사라지면 안 됩니다. /api/status 가 아니라 /api/phm 을 봅니다. -->
+  <section class="panel wide">
+    <h2>Robot Health (PHM)
+      <span id="phmHealth" class="status muted" style="margin-left:12px">UNKNOWN</span>
+      <span id="phmAge" class="meta">-</span>
+    </h2>
+    <div class="phm-grid" id="phmAxes"></div>
+    <p id="phmBlocked" class="phm-note" hidden></p>
+    <p id="phmLimit" class="phm-note" hidden></p>
+    <div class="phm-host">
+      <span id="phmBattery">battery -</span>
+      <span id="phmCpu">cpu -</span>
+      <span id="phmTemp">temp -</span>
+      <span id="phmCmd">cmd -</span>
+    </div>
   </section>
 
   <section class="panel wide bottom-grid">
@@ -379,7 +411,115 @@ refreshVision();setInterval(refreshVision,200);refreshMapLayer();setInterval(ref
 for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
 $('modeSelector').value=activeMode;
 configureMode();
+
+// ---------------------------------------------------------------- PHM
+// /api/phm 은 로봇의 phm_monitor 가 낸 JSON 을 UI 노드가 **해석하지 않고** 실어
+// 나른 것입니다. 여기서도 최소한만 해석합니다 — 임계·규칙은 로봇이 정합니다.
+//
+// ★ 화면이 지켜야 할 것 세 가지
+//   1) 경보 이름을 바꾸지 않습니다. 이 검출기는 '들림' 만 잡습니다(LIFT_SUSPECTED).
+//      'TRACTION LOSS' 같은 포괄적인 이름으로 바꾸면 거짓말이 됩니다.
+//   2) not_detected 를 화면에 드러냅니다. 경보가 없다고 'ALL CLEAR' 라고 쓰면
+//      안 잡는 고장(슬립)까지 없다고 말하는 셈입니다.
+//   3) stale / 축별 fresh 를 흐리게 표시합니다. 끊긴 값이 정상으로 보이면 안 됩니다.
+const PHM_HEALTH={OK:['ok','NOMINAL'],ALARM:['bad','ALARM'],UNKNOWN:['muted','UNKNOWN']};
+
+function phmAxisCard(axis){
+  const alarm=Boolean(axis.alarm), stale=axis.fresh===false;
+  const el=document.createElement('div');
+  el.className=`phm-axis${alarm?' alarm':''}${stale?' dim':''}`;
+  const thr=Number(axis.threshold);
+  const res=finite(axis.residual)?Number(axis.residual):null;
+  const ratio=finite(axis.ratio)?Number(axis.ratio):0;
+
+  const label=document.createElement('span');
+  label.className='label';
+  label.textContent=`${dash(axis.label)} · ${dash(axis.meas)}`;
+  const value=document.createElement('p');
+  value.className='primary phm-num';
+  value.textContent=res===null?'-':`${res.toFixed(3)} ${dash(axis.unit)}`;
+  const sub=document.createElement('p');
+  sub.className='secondary phm-num';
+  sub.textContent=`threshold ${finite(thr)?thr.toFixed(3):'-'} · 평가 ${dash(axis.evaluated)}건`
+    +(stale?` · ${dash(axis.age_sec)}초째 갱신 없음`:'');
+
+  // 경보 조건은 '창 안에서 임계를 넘은 표본의 비율' 입니다. 잔차 숫자 하나보다
+  // 이 막대가 판정에 가깝습니다. 노란 눈금이 경보가 걸리는 지점입니다.
+  const bar=document.createElement('div');
+  bar.className=`phm-bar${alarm?' alarm':''}`;
+  const fill=document.createElement('i');
+  fill.style.width=`${Math.max(0,Math.min(1,ratio))*100}%`;
+  bar.append(fill);
+  const rule=phmRules[axis.axis];
+  if(rule&&finite(rule.frac)){const mark=document.createElement('b');mark.style.left=`${Number(rule.frac)*100}%`;bar.append(mark);}
+
+  el.append(label,value,sub,bar);
+  return el;
+}
+
+let phmRules={};
+
+function renderPhm(data){
+  const health=String(data.health||'UNKNOWN').toUpperCase();
+  const [cls,text]=PHM_HEALTH[health]||PHM_HEALTH.UNKNOWN;
+  const badge=$('phmHealth');
+  badge.className=`status ${cls}`;
+  badge.textContent=text;
+  $('phmAge').textContent=data.available===false?'-'
+    :`age ${finite(data.age_sec)?Number(data.age_sec).toFixed(1):'-'}s`;
+
+  phmRules=data.rules||{};
+  const axes=data.axes||{};
+  const host=$('phmAxes');
+  host.replaceChildren();
+  const alarms=Array.isArray(data.alarms)?data.alarms:[];
+  const alarmed=new Set(alarms.map(a=>a.axis));
+  for(const key of Object.keys(axes)){
+    const axis={...axes[key],axis:key,alarm:axes[key].alarm||alarmed.has(key)};
+    host.append(phmAxisCard(axis));
+  }
+  if(!host.childElementCount){
+    const empty=document.createElement('p');
+    empty.className='secondary';
+    empty.textContent='축 데이터 없음';
+    host.append(empty);
+  }
+
+  const blocked=$('phmBlocked');
+  blocked.hidden=!data.blocked_reason;
+  blocked.textContent=data.blocked_reason||'';
+
+  // 안 잡는 고장을 항상 밝힙니다 — 경보가 없어도(특히 없을 때) 필요합니다.
+  const limit=$('phmLimit');
+  const missed=Array.isArray(data.not_detected)?data.not_detected:[];
+  limit.hidden=missed.length===0;
+  limit.textContent=missed.length
+    ? `이 검출기가 잡지 않는 고장: ${missed.join(', ')} — 경보가 없다고 이상이 없는 것은 아닙니다.`
+    : '';
+
+  const battery=finite(data.battery_mv)?`${(Number(data.battery_mv)/1000).toFixed(2)} V`:'-';
+  $('phmBattery').textContent=`battery ${battery}`;
+  const cpu=finite(data.host?.cpu_used_pct)?`${Number(data.host.cpu_used_pct).toFixed(0)}%`:'-';
+  $('phmCpu').textContent=`cpu ${cpu}`;
+  const temps=Object.values(data.host?.thermal_c||{});
+  $('phmTemp').textContent=`temp ${temps.length?`${Number(temps[0]).toFixed(1)}°C`:'-'}`;
+  $('phmCmd').textContent=`cmd ${dash(data.cmd_source)}`;
+}
+
+async function refreshPhm(){
+  try{
+    const response=await fetch('/api/phm',{cache:'no-store'});
+    if(!response.ok)throw new Error();
+    renderPhm(await response.json());
+  }catch(_error){
+    // 엔드포인트 자체에 못 닿는 것과 phm_monitor 가 없는 것은 다릅니다.
+    // 후자는 available:false 로 정상 응답이 옵니다.
+    renderPhm({health:'UNKNOWN',blocked_reason:'UI 서버에서 PHM 상태를 가져오지 못했습니다.'});
+  }
+}
+
 refresh();setInterval(refresh,1000);
+refreshPhm();setInterval(refreshPhm,1000);
 </script>
 </body>
 </html>

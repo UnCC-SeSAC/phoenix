@@ -14,6 +14,11 @@ def generate_launch_description():
         DeclareLaunchArgument("ui_allow_remote", default_value="false"),
         DeclareLaunchArgument("ui_vision_enabled", default_value="true"),
         DeclareLaunchArgument("ui_map_enabled", default_value="true"),
+        # PHM: 로봇의 phm_monitor(phm_collect)가 내는 건전성 상태를 /api/phm 으로
+        # 실어 나릅니다. 노드가 안 떠 있어도 available:false 를 돌려주므로
+        # 켜 두어도 무해합니다.
+        DeclareLaunchArgument("ui_phm_enabled", default_value="true"),
+        DeclareLaunchArgument("phm_status_topic", default_value="/phm/status"),
         DeclareLaunchArgument("map_frame", default_value="map"),
         DeclareLaunchArgument("base_frame", default_value="base_footprint"),
         Node(
@@ -35,6 +40,10 @@ def generate_launch_description():
                 "ui_map_enabled": ParameterValue(
                     LaunchConfiguration("ui_map_enabled"), value_type=bool
                 ),
+                "ui_phm_enabled": ParameterValue(
+                    LaunchConfiguration("ui_phm_enabled"), value_type=bool
+                ),
+                "phm_status_topic": LaunchConfiguration("phm_status_topic"),
                 "map_frame": LaunchConfiguration("map_frame"),
                 "base_frame": LaunchConfiguration("base_frame"),
                 "status_topic": "/vla/status",

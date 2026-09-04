@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://relaxng.org/ns/structure/1.0"?>
+<package format="3">
+  <name>phm_collect</name>
+  <version>0.1.0</version>
+  <description>
+    PHM 잔차 수집 전용 최소 기동 패키지. 지령(cmd_vel)과 독립 실측(gyro, rf2o)만 올리고
+    카메라·비전·미션·웹 계층은 띄우지 않습니다. bringup 대비 48노드 -> 10노드.
+  </description>
+  <maintainer email="rjh2280@gmail.com">rjh</maintainer>
+  <license>MIT</license>
+
+  <!-- phm_monitor 노드가 쓰는 것. 위 목록은 collect.launch.py 가 띄우는 스택입니다. -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- 하드웨어 / 구동 -->
+  <exec_depend>ros_robot_controller</exec_depend>
+  <exec_depend>controller</exec_depend>
+  <exec_depend>mentorpi_description</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+
+  <!-- 센서 -->
+  <exec_depend>ldlidar_stl_ros2</exec_depend>
+  <exec_depend>imu_calib</exec_depend>
+  <exec_depend>imu_complementary_filter</exec_depend>
+  <exec_depend>calibration</exec_depend>
+
+  <!-- 오도메트리 -->
+  <exec_depend>rf2o_laser_odometry</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+
+  <!-- 수동 주행 -->
+  <exec_depend>joy</exec_depend>
+  <exec_depend>peripherals</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
