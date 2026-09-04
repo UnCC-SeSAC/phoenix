@@ -20,6 +20,8 @@ from nav2_msgs.action import NavigateToPose, Spin, DriveOnHeading
 
 from interfaces.action import SuppressFire
 from interfaces.srv import SetString
+from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 
 from .state_manager import StateManager
 from .log_utils import make_event_logger
@@ -194,6 +196,18 @@ class MissionExecutor(Node):
         # [None, STATE_RUNNING, STATE_IDLE, STATE_STOPPING] 중 하나
         self._frontier_state = None
         self._frontier_request_pending = False
+
+        # -----------------------------
+        # 작은 시연 맵에서는 fire/person 을 만나기 전에 frontier 가
+        # 맵을 다 훑고 return_to_start 를 켜버려서 시작하자마자 복귀해
+        # 버린다. launch 에서 return_to_start_on_complete 를 꺼두고,
+        # target 을 한 번이라도 처리한 뒤에만 여기서 다시 켠다.
+        # -----------------------------
+        self._frontier_param_client = self.create_client(
+            SetParameters,
+            "/frontier_explorer/set_parameters",
+        )
+        self._return_to_start_unlocked = False
 
     # =========================================================
     # Subscriptions
@@ -942,6 +956,8 @@ class MissionExecutor(Node):
 
     def notify_target_complete(self, status=StateManager.TARGET_STATUS_SUCCESS):
 
+        self._unlock_return_to_start()
+
         if not self.target_complete_client.service_is_ready():
             self.get_logger().warn(
                 "state_manager/target_complete 서비스가 아직 준비되지 않음"
@@ -963,6 +979,41 @@ class MissionExecutor(Node):
 
         if not response.success:
             self.get_logger().error("state_manager rejected target_complete")
+
+    def _unlock_return_to_start(self):
+        """fire/person target 을 한 번이라도 처리한 뒤에만 frontier 의
+        return_to_start_on_complete 를 켠다 — 그 전에는 맵을 다 훑어도
+        시작지점으로 복귀하지 않고 계속 탐사/대기하게 둔다."""
+
+        if self._return_to_start_unlocked:
+            return
+
+        if not self._frontier_param_client.service_is_ready():
+            return
+
+        self._return_to_start_unlocked = True
+
+        request = SetParameters.Request()
+        request.parameters = [
+            Parameter(
+                name="return_to_start_on_complete",
+                value=ParameterValue(
+                    type=ParameterType.PARAMETER_BOOL,
+                    bool_value=True,
+                ),
+            )
+        ]
+
+        future = self._frontier_param_client.call_async(request)
+        future.add_done_callback(self._unlock_return_to_start_done)
+
+    def _unlock_return_to_start_done(self, future):
+
+        try:
+            future.result()
+
+        except Exception as e:
+            self.get_logger().error(f"return_to_start_on_complete 설정 실패: {e}")
 
 
 def main(args=None):

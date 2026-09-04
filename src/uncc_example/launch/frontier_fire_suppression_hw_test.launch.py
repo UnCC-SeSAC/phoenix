@@ -221,8 +221,11 @@ def generate_launch_description():
                         'map_processing_rate_hz': 0.5,
                         # 처음에는 기능을 단순하게
                         'goal_preemption_enabled': False,
-                        # 탐사 완료 후, 시작지점 복귀 True
-                        'return_to_start_on_complete': True,
+                        # 탐사 완료 후 시작지점 복귀 — 작은 시연 맵에서는
+                        # fire/person 을 만나기 전에 맵을 다 훑어버려서
+                        # 꺼두고 시작한다. mission_executor 가 target 을
+                        # 한 번이라도 처리하면 런타임에 다시 켠다.
+                        'return_to_start_on_complete': False,
                     },
                 ],
             ),
