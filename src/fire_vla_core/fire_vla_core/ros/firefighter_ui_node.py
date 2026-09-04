@@ -13,12 +13,18 @@ from urllib.parse import parse_qs, urlparse
 try:
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from std_msgs.msg import String
+    from rclpy.qos import (
+        DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data,
+    )
+    from sensor_msgs.msg import CompressedImage
+    from std_msgs.msg import Bool, String
 except ImportError:
     rclpy = None
     Node = object
     String = None
+    Bool = None
+    CompressedImage = None
+    qos_profile_sensor_data = None
 
 
 _MAX_REQUEST_BYTES = 64 * 1024
@@ -29,6 +35,9 @@ _NONE_MODE = "NONE"
 _ALLOWED_MODES = {_VLA_MODE, _RULE_BASED_MODE}
 _ALLOWED_CONTROL_MODES = {*_ALLOWED_MODES, _NONE_MODE}
 _RULE_BASED_COMMANDS = {"START", "STOP"}
+_STREAM_BOUNDARY = "phoenixframe"
+_STREAM_WAIT_SEC = 1.0
+_STREAM_IDLE_LIMIT = 15
 
 
 def normalize_mode(value: str | None) -> str:
@@ -163,6 +172,48 @@ def normalize_rule_based_command(text: str) -> str:
     return command
 
 
+class FrameStore:
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._frame: bytes | None = None
+        self._sequence = 0
+
+    def update(self, jpeg: bytes) -> None:
+        with self._condition:
+            self._frame = bytes(jpeg)
+            self._sequence += 1
+            self._condition.notify_all()
+
+    def wait_for(self, last_sequence: int, timeout: float):
+        with self._condition:
+            if self._sequence != last_sequence:
+                return self._frame, self._sequence
+            self._condition.wait(timeout)
+            if self._sequence == last_sequence:
+                return None, last_sequence
+            return self._frame, self._sequence
+
+
+class OverlayStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._overlay: dict[str, Any] | None = None
+
+    def update(self, overlay: dict[str, Any]) -> None:
+        with self._lock:
+            self._overlay = copy.deepcopy(overlay)
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            if self._overlay is None:
+                return {"available": False, "boxes": []}
+            return {"available": True, **copy.deepcopy(self._overlay)}
+
+    def clear(self) -> None:
+        with self._lock:
+            self._overlay = None
+
+
 class FirefighterHTTPServer:
     def __init__(
         self,
@@ -173,11 +224,17 @@ class FirefighterHTTPServer:
         *,
         control_owner: ControlModeOwner | None = None,
         index_html: bytes | None = None,
+        frame_store: FrameStore | None = None,
+        overlay_store: OverlayStore | None = None,
+        set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
     ) -> None:
         host, port = validate_server_config(host, port)
         self._status_store = status_store
         self._submit_mission = submit_mission
         self._control_owner = control_owner or ControlModeOwner(lambda _mode: None)
+        self._frames = frame_store or FrameStore()
+        self._overlays = overlay_store or OverlayStore()
+        self._set_vision_enabled = set_vision_enabled
         self._index_html = index_html or (
             files("fire_vla_core.web").joinpath("index.html").read_bytes()
         )
@@ -246,9 +303,18 @@ class FirefighterHTTPServer:
                 if parsed.path == "/api/control-mode":
                     self._send_json(HTTPStatus.OK, owner._control_owner.get())
                     return
+                if parsed.path == "/api/vision/stream":
+                    self._stream_frames()
+                    return
+                if parsed.path == "/api/vision/detections":
+                    self._send_json(HTTPStatus.OK, owner._overlays.get())
+                    return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
             def do_POST(self) -> None:
+                if self.path == "/api/vision/enabled":
+                    self._handle_vision_enabled()
+                    return
                 if self.path == "/api/control-mode":
                     try:
                         length = int(self.headers.get("Content-Length", "0"))
@@ -295,6 +361,30 @@ class FirefighterHTTPServer:
                     return
                 self._send_json(HTTPStatus.ACCEPTED, mission)
 
+            def _handle_vision_enabled(self) -> None:
+                if owner._set_vision_enabled is None:
+                    self._send_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"error": "vision toggle is unavailable"},
+                    )
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length <= 0 or length > _MAX_REQUEST_BYTES:
+                        raise ValueError("invalid content length")
+                    data = json.loads(self.rfile.read(length).decode("utf-8"))
+                    enabled = data.get("enabled") if isinstance(data, dict) else None
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled must be boolean")
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                if not enabled:
+                    owner._overlays.clear()
+                self._send_json(
+                    HTTPStatus.ACCEPTED, owner._set_vision_enabled(enabled)
+                )
+
             def log_message(self, format: str, *args) -> None:
                 return
 
@@ -315,6 +405,34 @@ class FirefighterHTTPServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _stream_frames(self) -> None:
+                self.send_response(HTTPStatus.OK.value)
+                self.send_header(
+                    "Content-Type",
+                    f"multipart/x-mixed-replace; boundary={_STREAM_BOUNDARY}",
+                )
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                sequence, idle = 0, 0
+                try:
+                    while idle < _STREAM_IDLE_LIMIT:
+                        frame, sequence = owner._frames.wait_for(
+                            sequence, _STREAM_WAIT_SEC
+                        )
+                        if frame is None:
+                            idle += 1
+                            continue
+                        idle = 0
+                        self.wfile.write(
+                            f"--{_STREAM_BOUNDARY}\r\n"
+                            f"Content-Type: image/jpeg\r\n"
+                            f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii")
+                        )
+                        self.wfile.write(frame + b"\r\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
         return Handler
 
 
@@ -331,8 +449,13 @@ class FirefighterUINode(Node):
         self.declare_parameter(
             "rule_based_mission_topic", "/rule_based/mission"
         )
+        self.declare_parameter("vision_topic", "/ui/camera/compressed")
+        self.declare_parameter("vision_overlay_topic", "/ui/camera/overlay")
+        self.declare_parameter("vision_enabled_topic", "/ui/camera/enabled")
 
         self._store = StatusStore()
+        self._frames = FrameStore()
+        self._overlays = OverlayStore()
         self._mission_pub = self.create_publisher(
             String, str(self.get_parameter("mission_topic").value), 10
         )
@@ -361,12 +484,30 @@ class FirefighterUINode(Node):
             self._rule_based_status_callback,
             10,
         )
+        self.create_subscription(
+            CompressedImage,
+            str(self.get_parameter("vision_topic").value),
+            self._frame_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("vision_overlay_topic").value),
+            self._overlay_callback,
+            qos_profile_sensor_data,
+        )
+        self._vision_enabled_pub = self.create_publisher(
+            Bool, str(self.get_parameter("vision_enabled_topic").value), 10
+        )
         self._http = FirefighterHTTPServer(
             str(self.get_parameter("ui_host").value),
             int(self.get_parameter("ui_port").value),
             self._store,
             self._publish_mission,
             control_owner=self._control_owner,
+            frame_store=self._frames,
+            overlay_store=self._overlays,
+            set_vision_enabled=self._set_vision_enabled,
         )
         self._http.start()
         host, port = self._http.address
@@ -377,6 +518,19 @@ class FirefighterUINode(Node):
 
     def _rule_based_status_callback(self, msg: String) -> None:
         self._update_status(msg, _RULE_BASED_MODE)
+
+    def _frame_callback(self, msg: CompressedImage) -> None:
+        if msg.data:
+            self._frames.update(bytes(msg.data))
+
+    def _overlay_callback(self, msg: String) -> None:
+        try:
+            overlay = json.loads(msg.data)
+            if not isinstance(overlay, dict) or not isinstance(overlay.get("boxes"), list):
+                raise ValueError("overlay must contain boxes")
+            self._overlays.update(overlay)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self.get_logger().warning(f"vision overlay parsing failed: {exc}")
 
     def _update_status(self, msg: String, mode: str) -> None:
         try:
@@ -409,6 +563,12 @@ class FirefighterUINode(Node):
         msg = String()
         msg.data = mode
         self._control_mode_pub.publish(msg)
+
+    def _set_vision_enabled(self, enabled: bool) -> dict[str, Any]:
+        msg = Bool()
+        msg.data = enabled
+        self._vision_enabled_pub.publish(msg)
+        return {"enabled": enabled}
 
     def destroy_node(self):
         self._http.close()

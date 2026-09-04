@@ -9,6 +9,7 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <!-- 태스크②: 2D/3D 검출 메시지. 4.x와 3.x의 필드 모양이 달라

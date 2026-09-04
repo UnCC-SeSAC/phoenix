@@ -7,6 +7,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+import fire_vla_core.ros.firefighter_ui_node as firefighter_ui_module
+
 from fire_vla_core.adapters.mock_adapters import (
     MockNavigationAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter,
 )
@@ -38,6 +40,8 @@ from fire_vla_core.ros.topic_bridge_person_report_adapter import (
 from fire_vla_core.ros.firefighter_ui_node import (
     ControlModeOwner,
     FirefighterHTTPServer,
+    FrameStore,
+    OverlayStore,
     StatusStore,
     create_mission_payload,
     normalize_mode,
@@ -304,6 +308,98 @@ def test_http_root_serves_required_v2_panels(http_server):
         "marker.state?` [${marker.state}]`",
     ):
         assert marker_contract in html
+    for vision_contract in (
+        'id="visionToggle"',
+        'id="visionStream"',
+        'id="visionBoxes"',
+        "/api/vision/stream",
+        "/api/vision/detections",
+        "/api/vision/enabled",
+    ):
+        assert vision_contract in html
+
+
+def test_vision_detection_api_supports_empty_and_populated_frames():
+    overlays = OverlayStore()
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, StatusStore(), lambda _text: {},
+        overlay_store=overlays,
+    )
+    server.start()
+    try:
+        status, _, body = request(server, "/api/vision/detections")
+        assert status == 200
+        assert json.loads(body) == {"available": False, "boxes": []}
+        overlays.update({"width": 640, "height": 480, "boxes": []})
+        _, _, body = request(server, "/api/vision/detections")
+        assert json.loads(body) == {
+            "available": True, "width": 640, "height": 480, "boxes": []
+        }
+        overlays.update({"width": 640, "height": 480, "boxes": [{"cx": .5}]})
+        _, _, body = request(server, "/api/vision/detections")
+        assert json.loads(body)["boxes"] == [{"cx": .5}]
+    finally:
+        server.close()
+
+
+def test_mock_jpeg_frame_is_exposed_as_mjpeg(monkeypatch):
+    monkeypatch.setattr(firefighter_ui_module, "_STREAM_WAIT_SEC", 0.01)
+    monkeypatch.setattr(firefighter_ui_module, "_STREAM_IDLE_LIMIT", 1)
+    frames = FrameStore()
+    frames.update(b"\xff\xd8mock-jpeg\xff\xd9")
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, StatusStore(), lambda _text: {}, frame_store=frames
+    )
+    server.start()
+    try:
+        status, content_type, body = request(server, "/api/vision/stream")
+        assert status == 200
+        assert content_type.startswith("multipart/x-mixed-replace")
+        assert b"Content-Type: image/jpeg" in body
+        assert b"\xff\xd8mock-jpeg\xff\xd9" in body
+    finally:
+        server.close()
+
+
+def test_vision_toggle_routes_boolean_and_clears_stale_overlay():
+    toggles = []
+    overlays = OverlayStore()
+    overlays.update({"boxes": [{"class_name": "fire"}]})
+    server = FirefighterHTTPServer(
+        "127.0.0.1", 0, StatusStore(), lambda _text: {},
+        overlay_store=overlays,
+        set_vision_enabled=lambda enabled: toggles.append(enabled) or {"enabled": enabled},
+    )
+    server.start()
+    try:
+        status, _, body = request(
+            server, "/api/vision/enabled", body=json.dumps({"enabled": False})
+        )
+        assert status == 202 and json.loads(body) == {"enabled": False}
+        assert toggles == [False]
+        assert overlays.get() == {"available": False, "boxes": []}
+        status, _, _ = request(
+            server, "/api/vision/enabled", body=json.dumps({"enabled": True})
+        )
+        assert status == 202 and toggles == [False, True]
+        with pytest.raises(HTTPError) as error:
+            request(server, "/api/vision/enabled", body='{"enabled":"yes"}')
+        assert error.value.code == 400
+    finally:
+        server.close()
+
+
+def test_camera_stream_wiring_stops_processing_and_handles_bad_frames():
+    node_source = (
+        Path(__file__).parents[2] / "image_pipeline" / "image_pipeline" /
+        "ui_stream_node.py"
+    ).read_text(encoding="utf-8")
+    wrapper = (Path(__file__).parents[3] / "scripts" / "vla_hardware_e2e.sh").read_text()
+    assert '"input_topic", "/image_enhanced"' in node_source
+    assert '"detections_topic", "/yolo_result"' in node_source
+    assert "destroy_subscription(self._image_subscription)" in node_source
+    assert "except Exception as exc" in node_source
+    assert 'launch_component ui_stream "ros2 run image_pipeline ui_stream_node' in wrapper
 
 
 def test_submission_replay_fixture_is_explicit_and_renderable(http_server):
