@@ -63,8 +63,11 @@ const check = (name, cond, detail='') => {
 
 const base = (over={}) => ({
   schema_version:1, mode:'PHM', health:'OK', alarms:[], not_detected:['SLIP'],
-  available:true, stale:false, age_sec:0.4, battery_mv:7826,
-  host:{cpu_used_pct:14.0, thermal_c:{'thermal_zone0:cpu-thermal':52.6}},
+  available:true, stale:false, age_sec:0.4, battery_mv:7826, battery_low_mv:7000,
+  host_warnings:[],
+  host:{cpu_used_pct:14.0, thermal_c:{'thermal_zone0:cpu-thermal':52.6},
+        loadavg_1m:0.82, cpu_mhz:1500, cpu_mhz_max:1800, freq_ratio:0.83,
+        mem_used_pct:41.0, mem_avail_mb:2380},
   cmd_source:'/controller/cmd_vel', blocked_reason:null,
   rules:{yaw:{thr:0.35,frac:0.9167}, fwd:{thr:0.15,frac:0.8333}},
   axes:{
@@ -80,8 +83,14 @@ check('health 배지 NOMINAL', els.phmHealth.textContent==='NOMINAL', els.phmHea
 check('배지 색 ok', els.phmHealth.className.includes('ok'), els.phmHealth.className);
 check('축 카드 2개', els.phmAxes.childElementCount===2);
 check('★ 경보 없어도 not_detected 노출', !els.phmLimit.hidden && els.phmLimit.textContent.includes('SLIP'));
-check('배터리 V 변환', els.phmBattery.textContent==='battery 7.83 V', els.phmBattery.textContent);
-check('온도 표시', els.phmTemp.textContent==='temp 52.6°C', els.phmTemp.textContent);
+const stats = () => els.phmHostGrid.children.map(c => c.textContent);
+check('파이 상태 카드 6개', els.phmHostGrid.childElementCount===6, els.phmHostGrid.childElementCount);
+check('배터리 V 변환', stats().some(t=>t.includes('7.83 V')), stats()[0]);
+check('배터리 임계 표시', stats().some(t=>t.includes('low < 7.00 V')));
+check('온도 표시', stats().some(t=>t.includes('52.6°C')));
+check('CPU + load', stats().some(t=>t.includes('14%')&&t.includes('load 0.82')));
+check('메모리 여유', stats().some(t=>t.includes('41%')&&t.includes('2380 MB free')));
+check('경고 칩 없음', els.phmFlags.childElementCount===0);
 
 console.log('[2] 경보');
 renderPhm(base({health:'ALARM',
@@ -93,6 +102,29 @@ const fwdCard = els.phmAxes.children.find(c=>c.textContent.includes('전진속�
 check('경보 축 카드에 alarm 클래스', fwdCard && fwdCard.className.includes('alarm'), fwdCard && fwdCard.className);
 const yawCard = els.phmAxes.children.find(c=>c.textContent.includes('요레이트'));
 check('정상 축은 alarm 아님', yawCard && !yawCard.className.includes('alarm'));
+
+console.log('[2b] 파이 경고 — 배터리/저전압');
+renderPhmHost_case();
+function renderPhmHost_case(){
+  renderPhm(base({battery_mv:6800,
+    host_warnings:[{name:'BATTERY_LOW',detail:'6800 mV < 7000 mV'},
+                   {name:'UNDER_VOLTAGE_SEEN',detail:'under_voltage_occurred'},
+                   {name:'THROTTLED',detail:'throttled_now'}],
+    host:{...base().host, cpu_used_pct:96.0, freq_ratio:0.33, mem_used_pct:93.0,
+          thermal_c:{'thermal_zone0:cpu-thermal':82.4}}}));
+  const cards = els.phmHostGrid.children;
+  const find = t => cards.find(c=>c.textContent.includes(t));
+  check('★ 배터리 부족이면 bad', find('6.80 V')?.className.includes('bad'), find('6.80 V')?.className);
+  check('80°C 이상이면 bad', find('82.4°C')?.className.includes('bad'), find('82.4°C')?.className);
+  check('CPU 90% 이상이면 warn', find('96%')?.className.includes('warn'), find('96%')?.className);
+  check('주파수 절반 이하면 warn', find('33% of max')?.className.includes('warn'));
+  check('메모리 90% 이상이면 warn', find('93%')?.className.includes('warn'));
+  check('경고 칩 3개', els.phmFlags.childElementCount===3, els.phmFlags.childElementCount);
+  const chips = els.phmFlags.children;
+  check('★ 현재/이력 구분 — 이력은 now 아님',
+        chips.find(c=>c.textContent.includes('이력'))?.className.includes('now')===false);
+  check('★ 현재 스로틀은 now', chips.find(c=>c.textContent==='스로틀 (현재)')?.className.includes('now'));
+}
 
 console.log('[3] stale — 끊긴 값을 정상으로 보이면 안 됨');
 renderPhm(base({health:'UNKNOWN', stale:true, age_sec:9.3,
@@ -108,6 +140,7 @@ console.log('[4] phm_monitor 미기동');
 renderPhm({schema_version:1,mode:'PHM',available:false,health:'UNKNOWN',alarms:[],
            blocked_reason:'PHM status를 기다리는 중입니다. phm_monitor 노드가 떠 있는지 확인하세요.'});
 check('축 없음 안내', els.phmAxes.textContent.includes('축 데이터 없음'));
+check('파이 상태는 값 없이도 카드를 그림', els.phmHostGrid.childElementCount===6);
 check('age 표시 안 함', els.phmAge.textContent==='-', els.phmAge.textContent);
 check('not_detected 없으면 숨김', els.phmLimit.hidden);
 

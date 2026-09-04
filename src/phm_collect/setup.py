@@ -26,5 +26,8 @@ setup(
         # 냅니다. firefighter_ui 가 /vla/status 를 다루는 것과 같은 모양이라,
         # UI 노드는 이 값을 해석하지 않고 그대로 웹으로 넘길 수 있습니다.
         'phm_monitor = phm_collect.phm_monitor_node:main',
+        # 센서가 없는 기기에서 전체 경로를 확인하기 위한 목업 발행기.
+        # 수집한 JSONL 을 진짜 ROS 토픽으로 다시 틀어 줍니다.
+        'phm_mock_source = phm_collect.phm_mock_source_node:main',
     ]},
 )

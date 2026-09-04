@@ -47,7 +47,14 @@ def sample_payload(health="OK", alarms=None):
         },
         "cmd_source": "/controller/cmd_vel",
         "battery_mv": 7826,
-        "host": {"cpu_used_pct": 14.0},
+        # 임계는 uncc_example/state_manager.py:54 의 low_battery_threshold 와 같은 값을
+        # 로봇이 실어 보냅니다. 화면이 따로 들고 있으면 주행 로직과 어긋납니다.
+        "battery_low_mv": 7000,
+        "host_warnings": [],
+        "host": {"cpu_used_pct": 14.0, "loadavg_1m": 0.82,
+                 "thermal_c": {"thermal_zone0:cpu-thermal": 52.6},
+                 "cpu_mhz": 1500, "freq_ratio": 0.83,
+                 "mem_used_pct": 41.0, "mem_avail_mb": 2380},
         "blocked_reason": None,
         "rules": {"yaw": {"thr": 0.35}, "fwd": {"thr": 0.15}},
     }
@@ -153,7 +160,7 @@ def test_index_html_serves_phm_panel(phm_server):
     page = body.decode("utf-8")
     assert "Robot Health (PHM)" in page
     for element_id in ("phmHealth", "phmAge", "phmAxes", "phmBlocked",
-                       "phmLimit", "phmBattery", "phmCpu", "phmTemp", "phmCmd"):
+                       "phmLimit", "phmHostGrid", "phmFlags"):
         assert f'id="{element_id}"' in page, f"{element_id} 가 없습니다"
     # 모드 전환과 무관한 상시 패널이어야 합니다 — /api/status 가 아니라 /api/phm.
     assert "fetch('/api/phm'" in page
@@ -178,3 +185,31 @@ def test_phm_render_rules_hold(tmp_path):
     result = subprocess.run([node, str(harness), str(index)],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_host_warnings_round_trip(phm_server):
+    """전원·발열 경고는 잔차 경보와 **따로** 나갑니다.
+
+    배터리가 낮다고 구동 고장은 아니고 반대도 마찬가지입니다. 한 배열에 섞으면
+    화면에서 원인을 못 가립니다.
+    """
+    server, phm = phm_server
+    warnings = [{"name": "BATTERY_LOW", "detail": "6800 mV < 7000 mV"},
+                {"name": "UNDER_VOLTAGE_SEEN", "detail": "under_voltage_occurred"}]
+    payload = sample_payload()
+    payload["battery_mv"] = 6800
+    payload["host_warnings"] = warnings
+    phm.update(payload)
+    data = get_phm(server)
+    assert data["host_warnings"] == warnings
+    assert data["alarms"] == []          # 잔차 경보는 비어 있어야 합니다
+    assert data["battery_low_mv"] == 7000
+
+
+def test_host_metrics_survive_round_trip(phm_server):
+    server, phm = phm_server
+    phm.update(sample_payload())
+    host = get_phm(server)["host"]
+    for key in ("cpu_used_pct", "loadavg_1m", "thermal_c", "cpu_mhz",
+                "freq_ratio", "mem_used_pct", "mem_avail_mb"):
+        assert key in host, f"{key} 가 빠졌습니다"

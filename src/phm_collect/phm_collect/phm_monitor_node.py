@@ -79,6 +79,11 @@ class PhmMonitor(Node):
         self.declare_parameter("imu_topic", core.AXES["yaw"]["topic"])
         self.declare_parameter("rf2o_topic", core.AXES["fwd"]["topic"])
         self.declare_parameter("battery_topic", "/ros_robot_controller/battery")
+        # ★ 새로 만든 값이 아닙니다. uncc_example/state_manager.py:54 의
+        # low_battery_threshold 와 같은 값을 씁니다 — 화면과 주행 로직이 서로 다른
+        # 기준으로 '배터리 부족' 을 말하면 안 됩니다.
+        # (실측 범위: live2x 수집 147건에서 6,957~8,190 mV)
+        self.declare_parameter("battery_low_mv", 7000)
         # 지령 토픽은 둘 다 구독하고 **실제로 오는 쪽**을 씁니다. 주행 방식에 따라
         # 살아 있는 토픽이 다릅니다 (nav2 는 /cmd_vel, 조이스틱은 /controller/cmd_vel).
         self.declare_parameter("cmd_topics", list(core.CMD_TOPICS))
@@ -165,6 +170,11 @@ class PhmMonitor(Node):
                 sysfs.update(hostm.decode_throttle_bits(int(sysfs["throttled_raw"], 16)))
                 thr = sysfs
         out.update(thr)
+        try:
+            with open("/proc/loadavg") as f:
+                out["loadavg_1m"] = float(f.read().split()[0])
+        except (OSError, ValueError, IndexError):
+            pass
         # CPU 사용률은 두 샘플의 jiffies 차이로만 구할 수 있습니다.
         j = hostm.read_cpu_jiffies()
         if j and self._jiffies:
@@ -209,6 +219,25 @@ class PhmMonitor(Node):
         elif not any(a["evaluated"] for a in axes.values()):
             blocked = "정지 상태입니다 — 지령이 있어야 판정합니다."
 
+        # ---- 파이 상태 요약 ----
+        # 화면이 host dict 를 뒤져 해석하게 두지 않습니다. **무엇이 문제인지는 여기서
+        # 판단**하고, 화면은 그리기만 합니다 — /api/phm 을 쓰는 다른 소비자가
+        # 생겨도 같은 기준을 씁니다.
+        low_mv = int(self.get_parameter("battery_low_mv").value)
+        warnings = []
+        if self.battery_mv is not None and self.battery_mv < low_mv:
+            warnings.append({"name": "BATTERY_LOW",
+                             "detail": f"{self.battery_mv} mV < {low_mv} mV"})
+        # 파이의 스로틀/저전압은 '지금' 과 '한 번이라도' 가 다릅니다. 후자는 sticky 라
+        # 전원이 순간적으로 흔들렸던 이력을 보여줍니다 — 로봇이 이상하게 굴 때
+        # 제일 먼저 볼 값입니다.
+        for key, name in (("under_voltage_now", "UNDER_VOLTAGE"),
+                          ("throttled_now", "THROTTLED"),
+                          ("under_voltage_occurred", "UNDER_VOLTAGE_SEEN"),
+                          ("throttled_occurred", "THROTTLED_SEEN")):
+            if self._host.get(key):
+                warnings.append({"name": name, "detail": key})
+
         payload = {
             "schema_version": SCHEMA_VERSION,
             "mode": "PHM",
@@ -221,6 +250,10 @@ class PhmMonitor(Node):
             "axes": axes,
             "cmd_source": self._cmd_src(),
             "battery_mv": self.battery_mv,
+            "battery_low_mv": low_mv,
+            # 잔차 경보와 **따로** 냅니다. 배터리가 낮다고 구동 고장은 아니고,
+            # 반대도 마찬가지입니다. 섞으면 화면에서 원인을 못 가립니다.
+            "host_warnings": warnings,
             "host": self._host,
             "blocked_reason": blocked,
             "rules": {k: dict(v) for k, v in core.RULES.items()},

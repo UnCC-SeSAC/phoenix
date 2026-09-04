@@ -84,7 +84,21 @@
     .phm-bar.alarm i { background:var(--bad); }
     .phm-bar b { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--amber); }
     .phm-note { margin:10px 0 0; padding:9px 11px; border-left:3px solid var(--amber); background:#1a1509; color:#f4e6c4; font-size:12px; }
-    .phm-host { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; color:var(--muted); font-size:12px; }
+    /* 파이 상태 — 잔차 축과 시각적으로 구분되게 한 단 낮춰 둡니다.
+       구동 고장(잔차)과 전원·발열 문제는 원인도 조치도 다릅니다. */
+    .phm-host { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+    .phm-host-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:9px; }
+    .phm-stat { padding:9px 10px; border:1px solid var(--line); background:#09111b99; }
+    .phm-stat .label { font-size:9px; }
+    .phm-stat b { display:block; margin-top:3px; font-size:17px; font-weight:800; font-variant-numeric:tabular-nums; }
+    .phm-stat small { display:block; margin-top:2px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+    .phm-stat.warn b { color:var(--amber); } .phm-stat.bad b { color:var(--bad); }
+    .phm-stat.warn { border-color:var(--amber); } .phm-stat.bad { border-color:var(--bad); }
+    /* 스로틀·저전압은 지나간 이력(sticky)도 봐야 합니다 — 로봇이 이상하게 굴 때
+       제일 먼저 볼 값이라 칩으로 따로 세웁니다. */
+    .phm-flags { display:flex; gap:7px; flex-wrap:wrap; margin-top:9px; }
+    .phm-flag { padding:4px 8px; border:1px solid var(--amber); color:var(--amber); font-size:11px; font-weight:700; letter-spacing:.04em; }
+    .phm-flag.now { border-color:var(--bad); color:var(--bad); }
     @media (max-width:900px) { main { grid-template-columns:1fr; } .wide { grid-column:auto; } .bottom-grid { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -154,10 +168,9 @@
     <p id="phmBlocked" class="phm-note" hidden></p>
     <p id="phmLimit" class="phm-note" hidden></p>
     <div class="phm-host">
-      <span id="phmBattery">battery -</span>
-      <span id="phmCpu">cpu -</span>
-      <span id="phmTemp">temp -</span>
-      <span id="phmCmd">cmd -</span>
+      <h2 style="margin-bottom:9px">Pi / Power</h2>
+      <div class="phm-host-grid" id="phmHostGrid"></div>
+      <div class="phm-flags" id="phmFlags"></div>
     </div>
   </section>
 
@@ -497,13 +510,75 @@ function renderPhm(data){
     ? `이 검출기가 잡지 않는 고장: ${missed.join(', ')} — 경보가 없다고 이상이 없는 것은 아닙니다.`
     : '';
 
-  const battery=finite(data.battery_mv)?`${(Number(data.battery_mv)/1000).toFixed(2)} V`:'-';
-  $('phmBattery').textContent=`battery ${battery}`;
-  const cpu=finite(data.host?.cpu_used_pct)?`${Number(data.host.cpu_used_pct).toFixed(0)}%`:'-';
-  $('phmCpu').textContent=`cpu ${cpu}`;
-  const temps=Object.values(data.host?.thermal_c||{});
-  $('phmTemp').textContent=`temp ${temps.length?`${Number(temps[0]).toFixed(1)}°C`:'-'}`;
-  $('phmCmd').textContent=`cmd ${dash(data.cmd_source)}`;
+  renderPhmHost(data);
+}
+
+// ---- 파이 상태 ----
+// 무엇이 문제인지는 **로봇이 판단**해서 host_warnings 로 보냅니다(phm_monitor_node).
+// 여기서는 그리기만 합니다. 화면이 임계를 따로 들고 있으면 주행 로직과 어긋납니다 —
+// 배터리 임계는 uncc_example/state_manager.py 의 low_battery_threshold 와 같은 값입니다.
+function phmStat(label, value, sub, level){
+  const el=document.createElement('div');
+  el.className=`phm-stat${level?` ${level}`:''}`;
+  const l=document.createElement('span'); l.className='label'; l.textContent=label;
+  const b=document.createElement('b'); b.textContent=value;
+  el.append(l,b);
+  if(sub){const s=document.createElement('small');s.textContent=sub;el.append(s);}
+  return el;
+}
+
+function renderPhmHost(data){
+  const host=data.host||{};
+  const warn=new Set((data.host_warnings||[]).map(w=>w.name));
+  const grid=$('phmHostGrid');
+  grid.replaceChildren();
+
+  const mv=data.battery_mv, low=data.battery_low_mv;
+  grid.append(phmStat('Battery',
+    finite(mv)?`${(Number(mv)/1000).toFixed(2)} V`:'-',
+    finite(low)?`low < ${(Number(low)/1000).toFixed(2)} V`:'',
+    warn.has('BATTERY_LOW')?'bad':''));
+
+  const cpu=host.cpu_used_pct;
+  grid.append(phmStat('CPU', finite(cpu)?`${Number(cpu).toFixed(0)}%`:'-',
+    finite(host.loadavg_1m)?`load ${Number(host.loadavg_1m).toFixed(2)}`:'',
+    finite(cpu)&&Number(cpu)>=90?'warn':''));
+
+  // 첫 zone 을 씁니다 — 키 이름이 장비마다 다릅니다(thermal_zone0:cpu-thermal 등).
+  const temps=Object.values(host.thermal_c||{});
+  const t=temps.length?Number(temps[0]):null;
+  // 파이는 80°C 부터 스로틀합니다. 그 전에 눈에 띄게 합니다.
+  grid.append(phmStat('Temp', t===null?'-':`${t.toFixed(1)}°C`, '',
+    t===null?'':(t>=80?'bad':(t>=70?'warn':''))));
+
+  const mhz=host.cpu_mhz, ratio=host.freq_ratio;
+  grid.append(phmStat('CPU Clock', finite(mhz)?`${Math.round(Number(mhz))}`:'-',
+    finite(ratio)?`${Math.round(Number(ratio)*100)}% of max`:'MHz',
+    // 주파수가 최대치의 절반 아래로 눌려 있으면 스로틀이나 전원 문제 신호입니다.
+    finite(ratio)&&Number(ratio)<0.5?'warn':''));
+
+  const mem=host.mem_used_pct;
+  grid.append(phmStat('Memory', finite(mem)?`${Number(mem).toFixed(0)}%`:'-',
+    finite(host.mem_avail_mb)?`${Math.round(Number(host.mem_avail_mb))} MB free`:'',
+    finite(mem)&&Number(mem)>=90?'warn':''));
+
+  grid.append(phmStat('Cmd Source', data.cmd_source?String(data.cmd_source).replace(/^\//,''):'-',
+    data.cmd_source?'':'지령 없음'));
+
+  // 스로틀/저전압. '지금'(now)과 '한 번이라도'(SEEN)를 색으로 구분합니다 —
+  // 후자는 sticky 라 전원이 순간 흔들렸던 이력을 보여줍니다.
+  const flags=$('phmFlags');
+  flags.replaceChildren();
+  const LABEL={UNDER_VOLTAGE:'저전압 (현재)',THROTTLED:'스로틀 (현재)',
+               UNDER_VOLTAGE_SEEN:'저전압 이력',THROTTLED_SEEN:'스로틀 이력',
+               BATTERY_LOW:'배터리 부족'};
+  for(const w of data.host_warnings||[]){
+    const chip=document.createElement('span');
+    chip.className=`phm-flag${w.name.endsWith('_SEEN')?'':' now'}`;
+    chip.textContent=LABEL[w.name]||w.name;
+    if(w.detail)chip.title=w.detail;
+    flags.append(chip);
+  }
 }
 
 async function refreshPhm(){

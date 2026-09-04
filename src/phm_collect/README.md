@@ -100,3 +100,108 @@ mecanum 기구학에 `linear.y=0` 을 넣으면 차동이 나오기 때문입니
 `rf2o_covariance_relay` 의 `POSE_COV`(yaw 0.05, xy 0.02)는 위 실측 대비 6~13배 보수적입니다.
 초기 브링업엔 안전하지만 rf2o pose 가 EKF 에 거의 기여를 못 합니다. **주행 런에서 드리프트를
 다시 잰 뒤** 조이세요 — 정지 수치로 조이면 안 됩니다.
+
+---
+
+## 센서 없는 기기에서 목업으로 검증하기
+
+로봇이 없거나 센서가 없어도 **수집한 JSONL 을 진짜 ROS 토픽으로 다시 틀어** PHM 전체
+경로를 확인할 수 있습니다. `phm_mock_source` 노드가 그 일을 합니다.
+
+검증된 환경: `lemma@192.168.1.174` 의 `IntelPi` 컨테이너 (ROS Humble, aarch64,
+Python 3.10, host 네트워크). 2026-09-04 실측.
+
+### 0) 준비 — 수집 파일을 기기로
+
+```bash
+# 호스트에서 (컨테이너의 /shared 는 파이의 ~/docker/shared 입니다)
+scp data_analysis/out/live24_normal3.jsonl \
+    data_analysis/out/live25_lift.jsonl   lemma@192.168.1.174:~/docker/shared/
+```
+
+정상 런과 고장 런을 **둘 다** 가져가세요. 고장이 잡히는 것만 보고 끝내면 오경보가
+없다는 것을 확인 못 합니다.
+
+### 1) 빌드
+
+```bash
+ssh lemma@192.168.1.174
+docker exec -it IntelPi bash
+source /opt/ros/humble/setup.bash
+cd /ros2_ws/phoenix
+colcon build --packages-select phm_collect fire_vla_core --symlink-install
+source install/setup.bash          # ★ 안 하면 'Package not found' 가 납니다
+```
+
+### 2) 띄우기 — 터미널 두 개
+
+```bash
+# [터미널 1] 목업 재생 + PHM 감시
+export ROS_DOMAIN_ID=205
+ros2 launch phm_collect phm_monitor_mock.launch.py \
+    jsonl:=/shared/live25_lift.jsonl loop:=true
+
+# [터미널 2] UI. 컨테이너가 host 네트워크라 이대로 브라우저에서 붙습니다.
+export ROS_DOMAIN_ID=205
+ros2 run fire_vla_core firefighter_ui --ros-args \
+    -p ui_host:=0.0.0.0 -p ui_allow_remote:=true \
+    -p ui_vision_enabled:=false -p ui_map_enabled:=false
+```
+
+그리고 브라우저에서 **http://192.168.1.174:8080** — `Robot Health (PHM)` 패널.
+
+> `ui_allow_remote:=true` 는 **Mission/START/STOP 제어 경계까지 LAN 에 엽니다.**
+> PHM 만 볼 거면 `ui_host:=127.0.0.1` 로 두고 컨테이너 안에서 curl 하세요.
+
+`rf2o` 는 띄우지 않습니다 — 목업이 `/odom_rf2o` 를 직접 냅니다. 같이 띄우면 발행자가
+둘이 됩니다. (라이다가 없으면 rf2o 는 어차피 아무것도 못 냅니다.)
+
+### 3) 무엇을 봐야 하나
+
+```bash
+ros2 topic hz /phm/status          # 1.000 Hz 여야 합니다
+curl -s http://127.0.0.1:8080/api/phm | python3 -m json.tool | head -30
+```
+
+| 재생 파일 | 기대 |
+|---|---|
+| `live25_lift.jsonl` | `health: ALARM`, `alarms` 에 `LIFT_SUSPECTED` |
+| `live24_normal3.jsonl` | `health: OK`, `alarms: []` — **여러 번 확인하세요** |
+
+`live24` 를 한 바퀴 돌리는 동안 경보가 **한 번도** 안 떠야 합니다. 이게 임계가
+살아 있다는 유일한 증거입니다.
+
+`잔차 > 임계` 이고 `창비율 = 1.000` 인데 경보가 아닌 순간이 정상 런에 나옵니다.
+**버그가 아닙니다** — 창이 표본으로 안 찬 것입니다(`MIN_FILL`, 진행상황 19.3).
+정지 후 재출발 구간이 경보가 되던 문제를 막는 조건입니다.
+
+### 4) 끊김도 확인하세요
+
+경보가 뜨는 것만큼 **끊긴 값을 정상으로 안 보여주는지**가 중요합니다.
+두 실패는 다르게 보여야 합니다.
+
+```bash
+pkill -f phm_mock_source     # 센서만 끊김  -> stale:false, 축 fresh:false, health UNKNOWN
+pkill -f phm_monitor         # 노드가 사라짐 -> stale:true (age 증가), health UNKNOWN
+```
+
+둘 다 `health` 는 `UNKNOWN` 이고 **잔차 값은 남아** 있어야 합니다
+('마지막으로 본 값' 을 화면에 표시하기 위해서입니다).
+
+### 5) 정리
+
+```bash
+pkill -f phm_mock_source; pkill -f phm_monitor
+# ros2 run 은 부모/자식 두 개라 PID 로 끄는 게 확실합니다
+ps -eo pid,args | grep firefighter_ui | grep -v grep
+kill <PID들>
+```
+
+### 확인되는 것 / 안 되는 것
+
+| | |
+|---|---|
+| **확인됨** | colcon 빌드, QoS 협상, DDS 왕복, `/phm/status` 주기, `/api/phm`, 브라우저 화면, 정상=무경보 / 고장=경보, 두 층의 끊김 처리 |
+| **확인 안 됨** | 실제 센서 주기·지터, rf2o 실기동, 진짜 주행, CPU 실부하 |
+
+**목업은 실기 검증을 대신하지 못합니다.** 배선이 맞는지를 볼 뿐입니다.
