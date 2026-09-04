@@ -59,7 +59,7 @@ class VisionDetector(Node):
         # 카메라가 로봇에 고정 장착이라 프레임 이름이 항상 같음 —
         # yolo_detector 가 매 메시지마다 안 보내고 여기서 고정값으로 둔다
         self.declare_parameter(
-            'depth_frame_id', 'camera_depth_optical_frame'
+            'depth_frame_id', 'ascamera_color_0'
         )
 
         # 이 클래스들만 fire/person 감지로 취급
