@@ -295,6 +295,15 @@ def test_http_root_serves_required_v2_panels(http_server):
         "lastRuleSituation=null;renderTimeline()",
     ):
         assert timeline_guard in html
+    for marker_contract in (
+        "const PERSON_STATE_COLOR=",
+        "const FIRE_STATE_COLOR=",
+        "marker.kind==='F'",
+        'svgElement("polygon"',
+        "marker.target?15:12",
+        "marker.state?` [${marker.state}]`",
+    ):
+        assert marker_contract in html
 
 
 def test_submission_replay_fixture_is_explicit_and_renderable(http_server):
