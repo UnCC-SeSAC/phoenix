@@ -64,8 +64,15 @@ class StateManager(Node):
 
         # 같은 위치(target_merge_radius 이내)에서 이 횟수만큼 감지돼야
         # 확정된 target 으로 등록한다 — depth/TF 지연으로 한두 프레임
+<<<<<<< HEAD
         # 튄 좌표가 그대로 target 이 되는 걸 막기 위함(연속일 필요는 없음)
         self.declare_parameter('target_confirm_hits', 2)
+=======
+        # 튄 좌표가 그대로 target 이 되는 걸 막기 위함(연속일 필요는 없음).
+        # person은 화면에 짧게 보이는 경우가 많아 fire보다 낮게 둔다.
+        self.declare_parameter('fire_target_confirm_hits', 3)
+        self.declare_parameter('person_target_confirm_hits', 2)
+>>>>>>> 879912b (feat: 객체마다 다른 누적 검출 횟수 적용)
 
         # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
         # 불부터 끄고, 멀면 사람부터 확인한다
@@ -85,8 +92,11 @@ class StateManager(Node):
         self.target_merge_radius = (
             self.get_parameter('target_merge_radius').value
         )
-        self.target_confirm_hits = (
-            self.get_parameter('target_confirm_hits').value
+        self.fire_target_confirm_hits = (
+            self.get_parameter('fire_target_confirm_hits').value
+        )
+        self.person_target_confirm_hits = (
+            self.get_parameter('person_target_confirm_hits').value
         )
         self.fire_person_proximity_threshold = (
             self.get_parameter('fire_person_proximity_threshold').value
@@ -121,7 +131,7 @@ class StateManager(Node):
         # 신규 감지 중복 판단(dedup)과, 나중에 지도에 표시할 데이터로 쓴다.
         self.found_targets = []
 
-        # target_confirm_hits 번 감지되기 전까지 대기하는 후보 목록.
+        # fire/person별 confirm hits 횟수만큼 감지되기 전까지 대기하는 후보 목록.
         # {'type', 'pose'(최초 감지 좌표, 갱신 안 함), 'hits'} 원소.
         self._pending_candidates = []
 
@@ -305,7 +315,7 @@ class StateManager(Node):
 
     def _add_detection(self, target_type, pose_stamped):
         """이미 확정된 대상과 겹치면 None. 아직 확정 전(후보)이면 카운트만
-        올리고 target_confirm_hits 미달이면 None. 도달하면 그때 비로소
+        올리고 객체 종류별 confirm hits 미달이면 None. 도달하면 그때 비로소
         확정해 등록하고 그 entry 를 반환한다. 무리 묶기는 여기서 안 하고
         _update_clusters 에서 한꺼번에 처리한다."""
 
@@ -327,7 +337,13 @@ class StateManager(Node):
 
         candidate['hits'] += 1
 
-        if candidate['hits'] < self.target_confirm_hits:
+        required_hits = (
+            self.fire_target_confirm_hits
+            if target_type == 'fire'
+            else self.person_target_confirm_hits
+        )
+
+        if candidate['hits'] < required_hits:
             return None
 
         self._pending_candidates.remove(candidate)

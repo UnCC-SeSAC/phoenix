@@ -260,6 +260,12 @@ def generate_launch_description():
         executable='state_manager',
         name='state_manager',
         output='both',
+        parameters=[{
+            'fire_target_confirm_hits': ParameterValue(
+                LaunchConfiguration('fire_target_confirm_hits'), value_type=int),
+            'person_target_confirm_hits': ParameterValue(
+                LaunchConfiguration('person_target_confirm_hits'), value_type=int),
+        }],
     )
 
     mission_executor = Node(
@@ -319,6 +325,12 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'fire_target_confirm_hits', default_value='3',
+            description='fire 좌표를 확정하는 데 필요한 동일 위치 검출 횟수'),
+        DeclareLaunchArgument(
+            'person_target_confirm_hits', default_value='2',
+            description='person 좌표를 확정하는 데 필요한 동일 위치 검출 횟수'),
         DeclareLaunchArgument(
             'model_path', default_value='',
             description='실제 YOLO 가중치 절대경로 (.onnx | .hef). '
