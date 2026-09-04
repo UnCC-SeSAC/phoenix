@@ -333,6 +333,32 @@ def test_http_root_serves_required_v2_panels(http_server):
         assert map_contract in html
 
 
+def test_mission_form_reads_and_trims_current_dom_value(http_server):
+    server, _ = http_server
+    _, _, body = request(server, "/")
+    html = body.decode("utf-8")
+    assert '<form id="missionForm" novalidate>' in html
+    assert "const text=$('missionInput').value.trim()" in html
+    assert "if(!text){$('missionResult').textContent='Error: Mission is empty.';return;}" in html
+
+
+def test_mission_form_defers_ime_submission_until_compositionend(http_server):
+    server, _ = http_server
+    _, _, body = request(server, "/")
+    html = body.decode("utf-8")
+    assert "'compositionstart',()=>{missionComposing=true;}" in html
+    assert "'compositionend',()=>{missionComposing=false;if(missionSubmitPending)" in html
+    assert "if(missionComposing){missionSubmitPending=true;return;}" in html
+
+
+def test_mission_form_blocks_fast_duplicate_submission(http_server):
+    server, _ = http_server
+    _, _, body = request(server, "/")
+    html = body.decode("utf-8")
+    assert "if(missionSubmitting||activeMode!=='VLA')return" in html
+    assert "missionSubmitting=true;try{await submitMission(text);}finally{missionSubmitting=false;}" in html
+
+
 def test_vision_detection_api_supports_empty_and_populated_frames():
     overlays = OverlayStore()
     server = FirefighterHTTPServer(

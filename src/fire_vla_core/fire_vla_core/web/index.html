@@ -110,8 +110,8 @@
 
   <section class="panel">
     <h2>Mission</h2>
-    <form id="missionForm">
-      <input id="missionInput" aria-label="Mission" placeholder="Assess the situation and prioritize human safety." required>
+    <form id="missionForm" novalidate>
+      <input id="missionInput" aria-label="Mission" placeholder="Assess the situation and prioritize human safety.">
       <button type="submit">RUN</button>
     </form>
     <div id="ruleControls" class="rule-controls" hidden>
@@ -199,7 +199,11 @@ async function refreshControlMode(){try{const response=await fetch('/api/control
 async function selectControlMode(mode){const previous=activeMode;try{const response=await fetch('/api/control-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});const data=await response.json();if(!response.ok)throw new Error(data.error||'CONTROL_MODE_MISMATCH');activeMode=data.active_control_mode;configureMode();refresh();}catch(error){activeMode=previous;$('modeSelector').value=previous;$('missionResult').textContent=`Error: ${error.message}`;}}
 async function submitMission(text){const requestedMode=activeMode;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:requestedMode})});const data=await response.json();if(requestedMode!==activeMode)return;$('missionResult').textContent=response.ok?`Sent: ${data.mission_id}`:`Error: ${data.error}`;if(response.ok&&requestedMode==='VLA')$('missionInput').value='';}catch(_error){if(requestedMode===activeMode)$('missionResult').textContent='Error: mission boundary is unavailable.';}}
 $('modeSelector').addEventListener('change',event=>selectControlMode(event.target.value));
-$('missionForm').addEventListener('submit',event=>{event.preventDefault();const text=$('missionInput').value.trim();if(text&&activeMode==='VLA')submitMission(text);});
+let missionComposing=false,missionSubmitPending=false,missionSubmitting=false;
+async function submitCurrentMission(){if(missionSubmitting||activeMode!=='VLA')return;const text=$('missionInput').value.trim();if(!text){$('missionResult').textContent='Error: Mission is empty.';return;}missionSubmitting=true;try{await submitMission(text);}finally{missionSubmitting=false;}}
+$('missionInput').addEventListener('compositionstart',()=>{missionComposing=true;});
+$('missionInput').addEventListener('compositionend',()=>{missionComposing=false;if(missionSubmitPending){missionSubmitPending=false;submitCurrentMission();}});
+$('missionForm').addEventListener('submit',event=>{event.preventDefault();if(missionComposing){missionSubmitPending=true;return;}submitCurrentMission();});
 $('visionStream').addEventListener('error',()=>setVisionAvailable(false));
 function updateVisionToggleLabel(){$('visionToggle').textContent=visionEnabled?'CAMERA OFF':'CAMERA ON';}
 async function toggleVision(){const next=!visionEnabled;$('visionToggle').disabled=true;try{const response=await fetch('/api/vision/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next})});if(!response.ok)throw new Error();visionEnabled=next;if(!visionEnabled)setVisionAvailable(false);else refreshVision();}catch(_error){}finally{$('visionToggle').disabled=false;updateVisionToggleLabel();}}
