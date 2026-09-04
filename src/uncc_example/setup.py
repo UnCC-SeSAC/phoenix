@@ -49,6 +49,7 @@ setup(
             "avoidance_manager = uncc_example.avoidance_manager:main",
             "state_manager = uncc_example.state_manager:main",
             "demo_state_manager = uncc_example.demo_state_manager:main",
+            "demo_state_manager_2 = uncc_example.demo_state_manager_2:main",
             "mission_executor = uncc_example.mission_executor:main",
             "vision_detector = uncc_example.vision_detector:main",
             "fire_keepout_node = uncc_example.fire_keepout_node:main",
