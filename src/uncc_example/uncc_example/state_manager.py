@@ -65,7 +65,7 @@ class StateManager(Node):
         # 같은 위치(target_merge_radius 이내)에서 이 횟수만큼 감지돼야
         # 확정된 target 으로 등록한다 — depth/TF 지연으로 한두 프레임
         # 튄 좌표가 그대로 target 이 되는 걸 막기 위함(연속일 필요는 없음)
-        self.declare_parameter('target_confirm_hits', 1)
+        self.declare_parameter('target_confirm_hits', 2)
 
         # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
         # 불부터 끄고, 멀면 사람부터 확인한다
