@@ -26,6 +26,11 @@
 - Mission active-action gate는 current/pending action이 있을 때 새 Mission을
   `MISSION_REJECTED_ACTIVE_ACTION`으로 거절한다. FIRE_ONLY target lock은 같은 Mission의
   다른 fallback fire ID에 추가 Nav2/suppression을 실행하지 않는다.
+- 같은 Mission에서 association radius 안의 새 fire ID는 최초 canonical fire ID로
+  연계한다. 소화된 fire도 Mission 동안 `EXTINGUISHED`로 유지해 재실행을 막고, 새
+  Mission boundary에서 entity/association을 초기화한다.
+- suppression 실패 또는 소화 검증 후 재탐지는 fire별 최대 3회까지 재시도한다.
+  세 번째 실패 뒤 해당 fire는 `INACCESSIBLE`로 전환하고 다른 fire 처리를 계속한다.
 - Firefighter UI는 기존 semantic marker에 더해 `/image_enhanced`와 `/yolo_result`
   Camera overlay, `/map` OccupancyGrid, map→base Robot pose 및 실제 지도 위
   person/fire/selected-target 표시를 지원한다. `/map`이 없으면 기존 SVG를 유지한다.
@@ -1062,7 +1067,8 @@ Pump OFF의 원격 확인 상태도 `UNKNOWN`이다.
 - 유효한 분사거리 밖 ACTIVE fire에 대한 Qwen `EXTINGUISH`는 같은 target의
   `NAVIGATE_TO`로 한 번 교정된다. #109 test expectation은 navigation 1건, spray
   0건으로 현재 정책에 맞춰졌다.
-- Qwen이 선택한 fire의 Nav2가 성공하고 fire/pose가 유효·fresh하며 `0.8 m` 이내이고
+- Qwen이 선택한 fire의 Nav2가 성공하고 fire/pose가 유효·fresh하며 설정된
+  `spray_range_m` 이내이고
   의미 있는 WorldModel 변화가 없을 때 같은 fire의 `EXTINGUISH`를 deterministic하게
   한 번 연결한다. 조건이 바뀌면 자동 분사하지 않고 Qwen이 재판단한다.
 - `scripts/vla_hardware_e2e.sh`가 canonical runtime의 `start`, `status`, `mission`,
