@@ -141,7 +141,7 @@ class VisionDetector(Node):
         try:
             payload = json.loads(msg.data)
         except json.JSONDecodeError as e:
-            self.get_logger().warn(
+            self._event_logger().warn(
                 f'Invalid detection JSON: {e}'
             )
             return
@@ -199,7 +199,7 @@ class VisionDetector(Node):
             )
 
         except TransformException as e:
-            self.get_logger().warn(
+            self._event_logger().warn(
                 f'TF transform failed: {e}'
             )
             return None
