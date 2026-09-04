@@ -1,5 +1,9 @@
 # VLA Robot Runtime Troubleshooting
 
+현재 적용 기준은
+`integration/vla-robot-e2e@3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`이다.
+과거 SHA와 parameter는 해당 incident의 historical evidence로만 사용한다.
+
 HW validation에서는 iteration 속도를 engineering constraint로 취급하고 다음 순서로
 진행한다.
 
@@ -12,6 +16,34 @@ HW validation에서는 iteration 속도를 engineering constraint로 취급하�
 ```
 
 이미 PASS한 Camera, HEF, Depth, TF 단계를 매번 장시간 재검증하지 않는다.
+
+## 새 SD카드에서 suppression action import 실패
+
+증상: `fire_suppression_node`가 startup 전에 `interfaces.action.SuppressFire` import
+오류로 종료된다. 이는 GPIO나 actuator 실패가 아니다.
+
+검증된 복구: isolated workspace에서 `interfaces`를 먼저 focused build하고
+`uncc_example`을 rebuild한 뒤 새 overlay에서 import를 확인한다. Workspace-local
+HEF/ONNX/JSON과 root 환경의 `gpiozero`/`lgpio` import도 runtime 시작 전에 한 번
+확인한다. 임의 pip/apt 설치나 팀 workspace build/install 재사용은 하지 않는다.
+
+## 배터리 부족으로 Pi 종료 또는 SSH timeout
+
+증상: Hardware cycle 중 Pi 응답과 SSH가 사라지며 Robot 전원이 부족하다.
+
+판정과 복구: 해당 cycle의 runtime, localization, Mission, action과 결과를 무효로
+처리한다. SSH timeout만으로 stop 성공이나 process 상태를 추측하지 않고 side-effect
+명령을 재발행하지 않는다. 배터리와 Pi 전원을 복구한 뒤 바닥 배치부터 새 cycle로
+시작한다. 이는 현재 해결된 운영 절차이며 별도 production blocker가 아니다.
+
+## Wrapper stop 후 owned process 잔존
+
+검증된 계약: wrapper가 기록한 PID/PGID, process start time과 command fingerprint가
+현재 process와 일치하는 owned non-zombie만 종료한다. Bounded cancel/motor-zero 뒤
+SIGINT→SIGTERM을 적용하고 그래도 남은 정확한 owned process에만 최종 SIGKILL을
+사용한다. Zombie는 active로 세지 않고 다른 run이나 팀 process는 보존한다. 종료
+판정에는 orphan Nav2 0, Pump OFF와 바퀴 정지의 물리 확인이 포함된다. 이 항목은 최신
+wrapper에 반영됐으며 현재 blocker가 아니다.
 명확한 direct error부터 처리하고, known problem에는 documented recovery를 정확히 1회
 적용한다. side-effect command가 SSH timeout을 냈다고 blind retry하지 않고 process
 존재 여부를 한 번 확인한다. 정상 iteration은 수십 초~수분 안에 끝내며, recovery가
@@ -889,6 +921,12 @@ blind retry하지 않는다. 성공한 stand-off `0.15 m`와 spray range `0.30 m
 동결한다. 다음 최소 수정은 무검출 관찰의 기존 유효성 계약을 확인해
 verification→`EXTINGUISHED`→Mission `COMPLETED` 경계만 고치는 것이다.
 
+위 `0.15/0.30 m`는 기존 노즐의 물리 성공값이다. 새 노즐에서는 앞바퀴 축–불꽃
+`40 cm`, 렌즈–불꽃 `38 cm`, 노즐–불꽃 `36 cm`에서 중앙 착탄을 확인했다. 다음
+Hardware cycle은 production 기본값을 바꾸지 않고 wrapper override
+`navigation_standoff_m=0.35`, `spray_range_m=0.40`만 시험한다. 이 후보는 terminal
+SUCCESS 전까지 `NOT_VERIFIED`이며 기존 해결값으로 기록하지 않는다.
+
 ## Reported person이 같은 Mission에서 반복 생성·보고됨
 
 증상: ID 없는 동일 person 관측이 `2~4 s` 간격으로 들어올 때 fallback entity ID가
@@ -904,18 +942,18 @@ radius 안이면 기존 ID에 연결한다. Radius 밖 관측은 새 ID가 되�
 people와 association 상태를 초기화한다. Unreported person TTL과 fire lifecycle은
 그대로 유지한다.
 
-## Suppression startup에서 Pump가 의도 없이 작동함
+## Suppression startup에서 Pump가 의도 없이 작동함 (historical, resolved)
 
-상태: `FAIL`, suppression `DISABLED`. Mission과 suppress goal 없이 node startup
-직후 Pump가 작동했다. 사용자가 물리적으로 OFF를 확인했고 관련 runtime은 종료했다.
+당시 상태는 `FAIL`, suppression `DISABLED`였다. Mission과 suppress goal 없이 node
+startup 직후 Pump가 작동했고 사용자가 물리 OFF를 확인한 뒤 runtime을 종료했다.
 
 직접 증거: 현장 관찰 배선은 Servo physical pin 7 (`BCM4`), Pump physical pin 8
 (`BCM14`)이었다. Production 코드 핀/극성과 실제 배선 계약이 일치한다고 확인되지
 않았다. 실패한 `active_high=True` 변경은 별도 patch로 보존하고 source에는 반영하지
 않았다.
 
-최소 복구: Hardware team이 Servo/Pump의 BCM pin, physical pin, active level과 공통
-GND를 확정하기 전에는 suppression node, spray bridge, fire extinguisher launch,
-전체 Hardware wrapper start와 GPIO 접근을 실행하지 않는다. 확정 후 불 OFF에서
-suppression startup 무동작 단독 시험을 먼저 수행한다. 핀이나 극성을 추측해 바꾸지
-않는다.
+검증된 해결: Hardware team 확정값 Pump BCM14, Servo BCM13, Pump
+`active_high=False`, `initial_value=0.0`을 적용했고 불 OFF startup 5초 무동작을
+확인했다. 따라서 suppression은 현재 disabled blocker가 아니다. 새 SD카드나 배선
+변경 후에는 전체 runtime 전에 동일 무동작 시험을 한 번 수행하며 핀이나 극성을
+추측해 바꾸지 않는다.

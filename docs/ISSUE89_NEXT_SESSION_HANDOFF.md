@@ -12,7 +12,7 @@ Full E2E를 바로 이어가기 위한 authoritative handoff다. 먼저
 
 - branch: `integration/vla-robot-e2e`
 - current software checkpoint before this documentation update:
-  `0a3af10882d29bfcc51aac34905fe1d84703b6ee`
+  `3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`
 - historical runtime/model checkpoint (2026-08-22):
   `fc44b2b4cdabce3db4f4675616f479b6b1e068d8`
 - session 시작 시 local HEAD와 `origin/integration/vla-robot-e2e`가 일치하는지만
@@ -590,7 +590,7 @@ canonical Qwen HTTP 200을 확인한 뒤 wrapper clean start를 정확히 한 �
 API, 통합 status observer timeout 원인이다. 책상에서 runtime을 시작한 뒤 바닥으로
 옮기거나 이전 localization/fire/Mission/goal을 재사용하지 않는다.
 
-## 2026-09-03 next session start point
+## 2026-09-03 next session start point (historical)
 
 최초 물리 소화는 `76251b3f16ceffc6f680b628a6a6f6ce399e2d8f`에서 성공했다.
 동결값은 fire stand-off `0.15 m`, spray range `0.30 m`, Nav2 XY goal tolerance
@@ -598,8 +598,57 @@ API, 통합 status observer timeout 원인이다. 책상에서 runtime을 시작
 `0.198 m`, Robot stop은 `PASS`였다. Suppression은 1회 실행됐고 Servo/Pump가 실제
 작동했으며, 물줄기는 불꽃보다 살짝 뒤에 착탄했지만 실제 화염 제거는 `PASS`였다.
 
-남은 실패는 software verification/terminal 경계 하나다. 소화 후
+당시 남은 실패는 software verification/terminal 경계 하나였다. 소화 후
 `fire_status_service`가 `관찰 구간 내 YOLO 감지 기록 없음`을 성공으로 처리하지 못해
 fire는 `ACTIVE`, Mission은 `RUNNING`으로 남았다. 다음 세션은 geometry, Nav2,
 Pump/Servo 값을 바꾸지 않고 verification→`EXTINGUISHED`→Mission `COMPLETED`의 최소
-수정부터 시작한다. 실제 소화 성공을 terminal 성공으로 과장하지 않는다.
+수정 대상이었다. 이 경계는 후속 `a8859f4`에서 유효 empty detection을 기존
+WorldModel verification으로 전달하도록 해결했으며 현재 blocker가 아니다. 실제 소화
+성공을 terminal 성공으로 과장하지 않는 판정 원칙은 유지한다.
+
+## 2026-09-04 presentation and Hardware restart point
+
+현재 software 기준은
+`integration/vla-robot-e2e@3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`이다.
+새 SD카드에서는 `interfaces`를 먼저 build해 `SuppressFire` import를 확인하고,
+workspace-local HEF/ONNX/JSON 및 root `gpiozero`/`lgpio` import를 준비해야 한다.
+
+현재 production 기본값은 stand-off `0.15 m`, spray range `0.30 m`다. 새 노즐은
+앞바퀴 축–불꽃 `40 cm`, 렌즈–불꽃 `38 cm`, 노즐–불꽃 `36 cm`에서 중앙 착탄했으며,
+다음 시험만 아래 공식 override를 사용한다. `0.35/0.40 m`는 아직 Hardware terminal
+SUCCESS로 검증되지 않았으므로 기본값으로 동결하지 않는다. Nav2 XY tolerance는
+`0.05 m`다.
+
+```bash
+# Ubuntu PC actual GPU host
+cd /home/chopper/Downloads/fire_vla_ros2_integration
+PYTHONPATH=src/fire_vla_core \
+  /home/chopper/Downloads/fire_vla_ros2_integration/.venv-xpu-qwen3/bin/python \
+  -m fire_vla_core.qwen_inference_server \
+  --host 0.0.0.0 --port 8088 --backend transformers \
+  --model-id Qwen/Qwen3-1.7B --device xpu:0 --max-new-tokens 64
+
+# Mac/operations terminal → Pi SSH
+ssh -CY uncc@<PI_IP>
+cd /ros2_ws/phoenix_vla
+export VLA_QWEN_ENDPOINT=http://<PC_IP>:8088/infer
+export VLA_NAVIGATION_STANDOFF_M=0.35
+export VLA_SPRAY_RANGE_M=0.40
+scripts/vla_hardware_e2e.sh start
+scripts/vla_hardware_e2e.sh status
+
+# Browser: http://<PI_IP>:8080, mode VLA, Mission exactly once
+
+# Pi SSH after result
+scripts/vla_hardware_e2e.sh stop
+```
+
+Mission active-action gate와 FIRE_ONLY target lock은 각각 Mission/action ownership 혼합과
+duplicate fire ID suppression을 차단한다. UI는 Camera+bbox overlay와 실제 SLAM Map,
+Robot/person/fire/selected-target를 표시하며 `/map` 부재 시 기존 SVG로 돌아간다.
+다음 실기에서는 이 Camera/Map 표시와 `0.35/0.40 m` fire-only terminal SUCCESS를
+함께 확인하고, 성공한 뒤에만 production 기본값 동결을 결정한다.
+
+Stop은 wrapper-owned process만 종료하고 orphan Nav2 0, zombie 제외, Pump OFF와 바퀴
+정지를 확인한다. 배터리 부족으로 Pi 종료 또는 SSH timeout이 발생한 cycle은 무효이며
+종료 성공을 추측하지 않는다.

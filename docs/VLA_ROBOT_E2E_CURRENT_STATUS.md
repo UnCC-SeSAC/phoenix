@@ -4,13 +4,37 @@
 
 - Branch: `integration/vla-robot-e2e`
 - Current software checkpoint before this documentation update:
-  `0a3af10882d29bfcc51aac34905fe1d84703b6ee`
+  `3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`
 - Software regression: focused `120 PASS`, full `273 PASS`, new failures `0`
 - Firefighter UI 포함 SW-only E2E: `PASS`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
 - This document is the integration checkpoint after the verified VLA, Hardware,
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
 - Model binaries and local runtime artifacts are not tracked.
+
+### 2026-09-04 current presentation checkpoint
+
+- Wrapper는 `VLA_NAVIGATION_STANDOFF_M`과 `VLA_SPRAY_RANGE_M`을 공식 launch
+  argument로 Orchestrator의 `WorldModelConfig`까지 전달하고 start/status에 실제
+  적용값을 표시한다. 미지정 기본값은 `0.15/0.30 m`다.
+- 다음 새 노즐 시험값 `0.35/0.40 m`는 **Hardware 미검증 후보**다. 실측은 앞바퀴
+  축–불꽃 `40 cm`, 렌즈–불꽃 `38 cm`, 노즐 끝–불꽃 `36 cm`이고 `36 cm`에서
+  중앙 착탄했다. 성공 전 production 기본값으로 동결하지 않는다. Nav2 tolerance는
+  `0.05 m`를 유지한다.
+- 새 SD카드는 `interfaces` 선행 build, workspace-local HEF/ONNX/JSON과 root의
+  `gpiozero`/`lgpio` import가 필요하다.
+- Mission active-action gate는 current/pending action이 있을 때 새 Mission을
+  `MISSION_REJECTED_ACTIVE_ACTION`으로 거절한다. FIRE_ONLY target lock은 같은 Mission의
+  다른 fallback fire ID에 추가 Nav2/suppression을 실행하지 않는다.
+- Firefighter UI는 기존 semantic marker에 더해 `/image_enhanced`와 `/yolo_result`
+  Camera overlay, `/map` OccupancyGrid, map→base Robot pose 및 실제 지도 위
+  person/fire/selected-target 표시를 지원한다. `/map`이 없으면 기존 SVG를 유지한다.
+- Wrapper stop은 기록된 start time과 command가 일치하는 owned process만 bounded
+  SIGINT→SIGTERM→최종 SIGKILL 대상으로 삼는다. Orphan Nav2를 남기지 않고 zombie는
+  active에서 제외하며 마지막에 Pump와 바퀴 정지를 물리 확인한다.
+- 발표용 단일 명령과 순서는 `docs/VLA_HARDWARE_E2E_HAPPY_PATH.md`만 authoritative로
+  사용한다. 다음 Hardware 검증은 실제 Camera/Map UI, override `0.35/0.40 m`의
+  fire-only terminal SUCCESS이며 PASS 후에만 기본값 동결을 검토한다.
 
 ## Authoritative Production Hardware Test Runtime
 
@@ -72,8 +96,9 @@ VLA production source/build/install은 팀 workspace와 분리한다.
 - Nav2: `uncc_example/launch/nav2_online.launch.py` (included by the entrypoint)
 - VLA: `ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<CURRENT_PC_IP>:8088/infer remote_qwen_timeout_sec:=10.0` plus `ros2 launch uncc_example vla_navigation_bridge.launch.py`. The last successful stationary suppression test used `192.168.100.124:8088`; confirm the current PC address instead of treating it as a fixed endpoint.
 - suppression bridge/action server: `ros2 launch uncc_example fire_extinguisher.launch.py`; starting it does not actuate Hardware, but an actual suppress goal still requires explicit operator approval
-- production thresholds: fire confidence `>= 0.40`, spray range `<= 0.80 m`
-  (`0.60`은 2026-08-27 이전 Hardware 기록의 historical 값)
+- current production defaults: fire confidence `>= 0.40`, spray range
+  `<= 0.30 m`, navigation stand-off `0.15 m`; 다음 새 노즐 시험만 wrapper override
+  stand-off `0.35 m`, spray range `0.40 m`를 사용한다. `0.80 m`는 historical 값이다.
 
 ### Suppression Hardware runtime contract
 
@@ -1138,7 +1163,7 @@ Floor ROI는 넓은 무광 비가연성 받침을 사용한 40~45 cm 배치에�
 미확정이다. 현재 authoritative 실행 순서는
 `docs/VLA_HARDWARE_E2E_HAPPY_PATH.md`만 따른다.
 
-## 2026-09-03 최초 물리 소화 성공 checkpoint
+## 2026-09-03 최초 물리 소화 성공 checkpoint (historical)
 
 Authoritative 기준은
 `integration/vla-robot-e2e@76251b3f16ceffc6f680b628a6a6f6ce399e2d8f`다.
@@ -1148,9 +1173,9 @@ base→fire 거리는 약 `0.198 m`였다. Robot stop은 `PASS`, suppression은 
 Servo/Pump 실제 작동은 `PASS`였다. 물줄기는 불꽃보다 살짝 뒤에 착탄했지만 실제
 화염 제거는 `PASS`다.
 
-Physical suppression과 software terminal은 분리해 판정한다. Fire verification은
-`FAIL`이며 fire final state는 `ACTIVE`, Mission terminal은 `RUNNING`이다. 직접 남은
-blocker는 `fire_status_service`가 소화 후 `관찰 구간 내 YOLO 감지 기록 없음`을
-성공으로 처리하지 못한 verification 경계다. 성공한 stand-off `0.15 m`와 spray
-range `0.30 m`는 동결하며 다음 작업에서 변경하지 않는다. 다음 최소 작업은 이
-verification 결과를 `EXTINGUISHED`와 Mission `COMPLETED`로 연결하는 수정이다.
+당시 Physical suppression과 software terminal을 분리해 판정했다. Fire verification은
+`FAIL`, fire final state는 `ACTIVE`, Mission terminal은 `RUNNING`이었다. 당시 blocker는
+`fire_status_service`가 `관찰 구간 내 YOLO 감지 기록 없음`을 성공으로 처리하지 못한
+verification 경계였다. 이는 후속 `a8859f4`에서 유효 empty detection frame을
+WorldModel의 기존 3-frame verification owner로 전달하도록 해결했으며 현재 blocker가
+아니다.
