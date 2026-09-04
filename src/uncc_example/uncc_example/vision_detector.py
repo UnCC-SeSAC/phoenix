@@ -9,6 +9,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401  PointStamped 변환 등록용
+from tf2_geometry_msgs import do_transform_point
 
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import String
@@ -59,12 +60,14 @@ class VisionDetector(Node):
         # 이 클래스들만 fire/person 감지로 취급
         self.declare_parameter("target_classes", ["fire", "person"])
 
-        self.declare_parameter("tf_timeout_sec", 1.0)
+        self.declare_parameter("tf_timeout_sec", 0.2)   # 1.0 -> 0.2
+        self.declare_parameter("tf_fallback_max_age_sec", 0.5) # 신규
 
         self.map_frame = self.get_parameter("map_frame").value
         self.depth_frame_id = self.get_parameter("depth_frame_id").value
         self.tf_timeout_sec = self.get_parameter("tf_timeout_sec").value
         self.target_classes = set(self.get_parameter("target_classes").value)
+        self.tf_fallback_max_age_sec = self.get_parameter("tf_fallback_max_age_sec").value
 
         self.latest_camera_info = None
         self.fx = None
@@ -76,7 +79,7 @@ class VisionDetector(Node):
         # TF (카메라 좌표 -> map 좌표 변환용)
         # -----------------------------
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
 
         # -----------------------------
         # Subscriptions
@@ -191,8 +194,47 @@ class VisionDetector(Node):
             )
 
         except TransformException as e:
-            self._event_logger.warn(f"TF transform failed: {e}")
+            return self._transform_with_latest_tf(point, e)
+
+    def _transform_with_latest_tf(self, point, first_error):
+        """detection 시각의 TF가 없을 때, TF가 밀린 정도가
+        tf_fallback_max_age_sec 이내면 최신 TF로 근사한다.
+        (로봇이 움직이는 중이므로 오차가 그 시간만큼 쌓인다 —
+        너무 밀린 detection 은 위치가 크게 틀리므로 버린다.)"""
+
+        try:
+            latest = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                point.header.frame_id,
+                Time(),  # 0 = 가장 최근 TF
+            )
+
+        except TransformException as e:
+            self._event_logger.warn(
+                f"TF unavailable (detection time: {first_error}, latest: {e})",
+                throttle_duration_sec=2.0,
+            )
             return None
+
+        gap_sec = abs(
+            Time.from_msg(point.header.stamp).nanoseconds
+            - Time.from_msg(latest.header.stamp).nanoseconds
+        ) / 1e9
+
+        if gap_sec > self.tf_fallback_max_age_sec:
+            self._event_logger.warn(
+                f"Detection dropped: TF is {gap_sec:.2f}s behind "
+                f"(limit {self.tf_fallback_max_age_sec}s)",
+                throttle_duration_sec=2.0,
+            )
+            return None
+
+        self._event_logger.warn(
+            f"Using latest TF ({gap_sec:.2f}s off) for detection",
+            throttle_duration_sec=2.0,
+        )
+
+        return do_transform_point(point, latest)
 
     def _publish_detections(self, results):
 
