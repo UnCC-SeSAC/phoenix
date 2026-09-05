@@ -216,21 +216,24 @@ class VisionDetector(Node):
             )
             return None
 
-        gap_sec = abs(
+        # gap 계산 — abs() 를 뺍니다
+        gap_sec = (
             Time.from_msg(point.header.stamp).nanoseconds
             - Time.from_msg(latest.header.stamp).nanoseconds
         ) / 1e9
 
-        if gap_sec > self.tf_fallback_max_age_sec:
+        # 폐기 로그 — 부호와 판정을 같이 찍습니다
+        if abs(gap_sec) > self.tf_fallback_max_age_sec:
             self._event_logger.warn(
-                f"Detection dropped: TF is {gap_sec:.2f}s behind "
-                f"(limit {self.tf_fallback_max_age_sec}s)",
+                f"Detection dropped: gap {gap_sec:+.2f}s "
+                f"({'TF stale' if gap_sec > 0 else 'detection stale'})",
                 throttle_duration_sec=2.0,
             )
             return None
 
+        # 성공 로그도 같은 형식으로
         self._event_logger.warn(
-            f"Using latest TF ({gap_sec:.2f}s off) for detection",
+            f"Using latest TF (gap {gap_sec:+.2f}s) for detection",
             throttle_duration_sec=2.0,
         )
 
