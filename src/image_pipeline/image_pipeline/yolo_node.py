@@ -58,7 +58,7 @@ from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 
 from image_pipeline.detection_msgs import set_bbox_center, set_hypothesis
-from image_pipeline.yolo import make_detector
+from image_pipeline.yolo import make_detector, parse_conf_by_class
 
 
 class YoloNode(Node):
@@ -100,12 +100,15 @@ class YoloNode(Node):
         self.max_age = float(p("max_input_age_sec").value)
         self.stats_period = float(p("stats_period_sec").value)
 
+        conf_by_class = parse_conf_by_class(str(p("conf_by_class").value))
+
         # 추론 본체. ROS를 모르는 모듈이라 tests/ 에서 같은 코드가 검증됩니다.
         self.detector = make_detector(
             model_path,
             backend=backend,
             imgsz=int(p("imgsz").value),
             conf=float(p("conf").value),
+            conf_by_class=conf_by_class,
             iou=float(p("iou").value),
             class_names=self.class_names,
             layout=str(p("layout").value),
@@ -163,6 +166,10 @@ class YoloNode(Node):
         self.declare_parameter("backend", "auto")
         self.declare_parameter("imgsz", 640)        # ★ 학습 때 값과 같아야 함
         self.declare_parameter("conf", 0.25)
+        # 클래스별 임계값. "클래스:값" 쉼표 구분 — 여기 적힌 클래스는 위 conf
+        # **대신** 이 값을 씁니다(전역보다 낮아도 그대로 적용). 매핑에 없는
+        # 클래스는 conf 를 씁니다. 예: "fire:0.75,person:0.5"
+        self.declare_parameter("conf_by_class", "")
         self.declare_parameter("iou", 0.45)
         self.declare_parameter("max_det", 300)
         # ★ 학습 때 순서 그대로. 순서가 틀리면 'fire'를 'person'으로 발행합니다.
@@ -191,6 +198,14 @@ class YoloNode(Node):
         for prm in params:
             if prm.name == "conf":
                 self.detector.conf = float(prm.value)
+            elif prm.name == "conf_by_class":
+                try:
+                    updated = parse_conf_by_class(str(prm.value))
+                except ValueError as e:
+                    # ★ 형식이 틀리면 거절합니다. 조용히 무시하면 param set 은
+                    #   성공했는데 임계값은 안 바뀐 상태가 됩니다.
+                    return SetParametersResult(successful=False, reason=str(e))
+                self.detector.conf_by_class = updated
             elif prm.name == "iou":
                 self.detector.iou = float(prm.value)
             elif prm.name == "max_det":

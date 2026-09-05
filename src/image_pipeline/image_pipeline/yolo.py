@@ -58,7 +58,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import cv2
 import numpy as np
@@ -307,10 +307,44 @@ def _rescale_if_normalized(boxes: np.ndarray, input_size,
     out[:, 1::2] *= h
     return out
 
+def parse_conf_by_class(text: str) -> dict:
+    """`"fire:0.75,person:0.5"` -> `{"fire": 0.75, "person": 0.5}`.
+
+    노드 파라미터는 dict를 못 받아서 문자열로 주고받습니다
+    (`detection3d.parse_region_by_class`와 같은 형식). 빈 문자열이면 빈 dict —
+    모든 클래스가 전역 `conf`를 씁니다.
+
+    ⚠ 클래스 이름은 **학습 라벨과 정확히** 같아야 합니다. `Fire`처럼 대소문자가
+      다르면 매핑이 조용히 안 걸리고 전역 `conf`가 쓰입니다.
+    """
+    out: dict = {}
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        class_id, sep, value = part.partition(":")
+        class_id, value = class_id.strip(), value.strip()
+        if not sep or not class_id or not value:
+            raise ValueError(
+                f"'클래스:임계값' 형식이어야 합니다 (받은 값: {part!r}). "
+                '예: "fire:0.75,person:0.5"')
+        try:
+            score = float(value)
+        except ValueError:
+            raise ValueError(
+                f"임계값이 숫자가 아닙니다 (클래스 {class_id!r}에 {value!r})"
+            ) from None
+        if not 0.0 <= score <= 1.0:
+            raise ValueError(
+                f"임계값은 0.0~1.0 (클래스 {class_id!r}에 {score})")
+        out[class_id] = score
+    return out
+
 
 def decode(raw, *, conf: float = 0.25, num_classes: int | None = None,
            layout: str = "auto", input_size=None,
-           normalized: str = "auto", class_names: Sequence[str] = ()
+           normalized: str = "auto", class_names: Sequence[str] = (),
+           conf_by_class: Mapping[str, float] | None = None
            ) -> tuple[list[Detection], str]:
     """원시 출력 -> `Detection` 목록 (**모델 입력 좌표계**, NMS 전).
 
@@ -351,7 +385,17 @@ def decode(raw, *, conf: float = 0.25, num_classes: int | None = None,
     if input_size is not None:
         boxes = _rescale_if_normalized(boxes, input_size, normalized)
 
-    keep = scores >= float(conf)
+    # 클래스별 임계값 벡터. 매핑에 없는 클래스는 전역 conf 그대로.
+    # ★ 스칼라 conf 로 한 번 거른 뒤 클래스별로 또 거르면, 전역보다 **낮은**
+    #   클래스 임계값이 영영 안 먹습니다 (person:0.5 인데 conf=0.75 면 0.5~0.75
+    #   구간이 이미 잘려나감). 그래서 한 번에 벡터로 비교합니다.
+    thresholds = np.full(scores.shape, float(conf), dtype=np.float64)
+    if conf_by_class:
+        for cid, name in enumerate(class_names):
+            if name in conf_by_class:
+                thresholds[classes == cid] = float(conf_by_class[name])
+
+    keep = scores >= thresholds
     boxes, scores, classes = boxes[keep], scores[keep], classes[keep]
 
     out: list[Detection] = []
@@ -798,10 +842,12 @@ class YoloDetector:
                  iou: float = 0.45, class_names: Sequence[str] = (),
                  layout: str = "auto", normalized: str = "auto",
                  agnostic: bool = False, max_det: int = 300,
-                 swap_rb: bool = True, warmup: bool = True):
+                 swap_rb: bool = True, warmup: bool = True,
+                 conf_by_class: Mapping[str, float] | None = None):
         self.backend = backend
         self.imgsz = int(imgsz)
         self.conf = float(conf)
+        self.conf_by_class = dict(conf_by_class or {})
         self.iou = float(iou)
         self.class_names = tuple(str(n) for n in class_names)
         self.layout = layout
@@ -857,7 +903,8 @@ class YoloDetector:
         dets, kind = decode(raw, conf=self.conf, num_classes=self.num_classes,
                             layout=self.layout, input_size=(self.imgsz, self.imgsz),
                             normalized=self.normalized,
-                            class_names=self.class_names)
+                            class_names=self.class_names,
+                            conf_by_class=self.conf_by_class)
         self.detected_layout = kind
 
         # ★ end2end 는 이미 NMS가 끝났습니다. 또 걸면 인접한 불씨가 합쳐집니다.

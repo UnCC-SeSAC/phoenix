@@ -172,6 +172,8 @@ def generate_launch_description():
                     'threads': LaunchConfiguration('threads'),
                     'conf': ParameterValue(
                         LaunchConfiguration('conf'), value_type=float),
+                    'conf_by_class': ParameterValue(
+                        LaunchConfiguration('conf_by_class'), value_type=str),
                     'input_topic': '/image_enhanced',
                     'detections_topic': '/yolo_result',
                 }],
@@ -404,6 +406,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'conf', default_value='0.75',
             description='이 confidence 미만 검출은 버림 (0.0~1.0)'),
+        DeclareLaunchArgument(
+            'conf_by_class', default_value='',
+            description='클래스별 confidence. "클래스:값" 쉼표 구분 — '
+                        '예: "fire:0.75,person:0.5". 여기 적힌 클래스는 conf '
+                        '대신 이 값을 쓰며 conf 보다 낮아도 그대로 적용된다. '
+                        '★ 클래스 이름은 class_names 와 대소문자까지 같아야 함'),
         DeclareLaunchArgument(
             'fire_min_score', default_value='0.0',
             description='이 점수 미만 화재 검출은 무시. 0.0=끔. '
