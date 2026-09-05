@@ -9,6 +9,7 @@ from launch.actions import (
     SetEnvironmentVariable,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -193,6 +194,29 @@ def generate_launch_description():
                     'depth_frame_id': 'ascamera_color_0',
                 }],
             ),
+            # 디버그용 — 박스와 confidence 가 구워진 영상을 /yolo/overlay 로.
+            # yolo_node 는 Detection2DArray 만 내므로 rqt_image_view 로는 박스를
+            # 볼 수 없다. 원격 PC 에서 /yolo/overlay/compressed 를 열면 된다.
+            #
+            # ★ image_topic 은 위 yolo_node 의 input_topic 과 **반드시 같아야**
+            #   한다. 박스 좌표가 YOLO 가 받은 프레임 기준이라 다르면 어긋난다.
+            # ★ 기본값이 yolo.launch.py 보다 보수적인 이유: 이 런치는 SLAM 과
+            #   Nav2 가 이미 파이 5 의 코어를 다 쓰고 있어서, 디버그용 JPEG
+            #   인코딩이 추론 예산을 갉아먹으면 안 된다. 필요하면 인자로 올릴 것.
+            Node(
+                package='image_pipeline',
+                executable='detection_overlay_node',
+                name='detection_overlay_node',
+                output='screen',
+                condition=IfCondition(LaunchConfiguration('overlay')),
+                parameters=[{
+                    'image_topic': '/image_enhanced',
+                    'detections_topic': '/yolo_result',
+                    'output_topic': '/yolo/overlay',
+                    'display_width': LaunchConfiguration('overlay_display_width'),
+                    'max_fps': LaunchConfiguration('overlay_max_fps'),
+                }],
+            ),
         ],
     )
 
@@ -359,6 +383,16 @@ def generate_launch_description():
                         '15Hz*3초=45프레임 기준 0.1 = 5프레임 이상 잡히면 안꺼짐. '
                         '두 오판의 비용이 비대칭이라(거짓 꺼짐=불을 두고 떠남, '
                         '거짓 안꺼짐=재시도 1회) 낮은 쪽에 붙여둔 값'),
+        DeclareLaunchArgument(
+            'overlay', default_value='true',
+            description='박스가 구워진 /yolo/overlay 영상을 낼지 (rqt 확인용). '
+                        'CPU 가 아까우면 false'),
+        DeclareLaunchArgument(
+            'overlay_display_width', default_value='480',
+            description='오버레이 전송 폭. 0이면 원본'),
+        DeclareLaunchArgument(
+            'overlay_max_fps', default_value='5.0',
+            description='오버레이 발행 상한. SLAM/Nav2 와 코어를 나눠 쓰므로 낮게'),
         hardware,
         camera,
         slam,

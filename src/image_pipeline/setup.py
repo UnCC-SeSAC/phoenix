@@ -29,6 +29,9 @@ setup(
             "fake_detection_node = image_pipeline.fake_detection_node:main",
             "yolo_node = image_pipeline.yolo_node:main",
             "detection_3d_node = image_pipeline.detection_3d_node:main",
+            "detection_overlay_node = image_pipeline.detection_overlay_node:main",
+            "grpc_image_server = image_pipeline.grpc_image_server:main",  # gRPC
+            "grpc_bbox_viewer = image_pipeline.grpc_bbox_viewer:main",
         ],
     },
 )
