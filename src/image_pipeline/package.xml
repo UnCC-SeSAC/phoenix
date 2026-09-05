@@ -14,6 +14,7 @@
   <!-- 태스크②: 2D/3D 검출 메시지. 4.x와 3.x의 필드 모양이 달라
        image_pipeline/detection_msgs.py 에서 흡수합니다. -->
   <exec_depend>vision_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>message_filters</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
