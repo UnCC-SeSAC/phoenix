@@ -90,11 +90,6 @@ struct FrontierExplorerCoreParams
   int min_frontier_size_cells{MIN_FRONTIER_SIZE};
   double frontier_candidate_min_goal_distance_m{0.0};
   double frontier_selection_min_distance{0.5};
-  // Extra distance pushed past the free-side frontier goal, into the adjacent
-  // unknown cell, so the robot drives deeper before Nav2/DWB stops it on a
-  // newly-discovered obstacle. 0.0 disables the push (goal stays on the
-  // known-free boundary, the historical behavior).
-  double frontier_goal_push_distance_m{0.0};
   bool escape_enabled{false};
   double frontier_visit_tolerance{0.30};
   bool goal_preemption_enabled{false};

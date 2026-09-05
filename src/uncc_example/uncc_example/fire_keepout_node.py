@@ -50,11 +50,8 @@ class FireKeepoutNode(Node):
         self.declare_parameter('circles_topic', '/fire_keepout_circles')
         self.declare_parameter('suppress_topic', '/fire_keepout_suppress')
 
-        # keepout_radius + robot inscribed_radius(~0.095m, footprint 기반)가
-        # global costmap inflation의 하드 바닥이 된다 — mission_executor의
-        # fire/person_approach_distance는 이 바닥보다 grid resolution(0.05m)
-        # 이상 커야 접근 목표 계산이 안정적으로 성공한다.
-        self.declare_parameter('fire_keepout_radius', 0.03)
+        # keepout + footprint(0.195m) <= xy_goal_tolerance(0.32m) 맞춰 축소.
+        self.declare_parameter('fire_keepout_radius', 0.05)
         self.declare_parameter('person_keepout_radius', 0.10)
 
         self.fire_keepout_radius = (

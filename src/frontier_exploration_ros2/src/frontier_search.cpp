@@ -517,53 +517,13 @@ std::optional<FrontierCandidate> build_frontier_candidate(
     return std::nullopt;
   }
 
-  std::pair<double, double> final_goal_point = *goal_point;
-  if (options.goal_push_distance_m > 0.0) {
-    // Push the goal from the known-free boundary a bit further, through the
-    // frontier's unknown centroid, so the robot commits to driving deeper
-    // before Nav2/DWB stops it on a newly-discovered obstacle. This is what
-    // lets exploration keep going in small rooms where a short-range sensor
-    // would otherwise call every boundary cell "done" the instant it's seen.
-    double dir_x = frontier_centroid.first - goal_point->first;
-    double dir_y = frontier_centroid.second - goal_point->second;
-    double dir_len = std::sqrt((dir_x * dir_x) + (dir_y * dir_y));
-    if (dir_len < 1e-6) {
-      // Degenerate direction (goal sits on the centroid); fall back to the
-      // robot-to-frontier heading instead.
-      dir_x = frontier_centroid.first - current_pose.position.x;
-      dir_y = frontier_centroid.second - current_pose.position.y;
-      dir_len = std::sqrt((dir_x * dir_x) + (dir_y * dir_y));
-    }
-
-    if (dir_len > 1e-6) {
-      const double scale = options.goal_push_distance_m / dir_len;
-      const std::pair<double, double> pushed_point{
-        frontier_centroid.first + (dir_x * scale),
-        frontier_centroid.second + (dir_y * scale),
-      };
-      int pushed_map_x = 0;
-      int pushed_map_y = 0;
-      const bool pushed_in_bounds = occupancy_map.worldToMapNoThrow(
-        pushed_point.first, pushed_point.second, pushed_map_x, pushed_map_y);
-      // Only reject the deeper point for a *known* wall (LethalObstacle).
-      // Unknown is exactly what we want to push into, so it must not be
-      // treated as blocking here the way global_cost_blocked() would.
-      const bool pushed_hits_known_wall = pushed_in_bounds &&
-        occupancy_map.getCost(pushed_map_x, pushed_map_y) ==
-        static_cast<int>(OccupancyGrid2d::CostValues::LethalObstacle);
-      if (pushed_in_bounds && !pushed_hits_known_wall) {
-        final_goal_point = pushed_point;
-      }
-    }
-  }
-
   return FrontierCandidate{
     frontier_centroid,
     center_point,
     center_cell,
     start_cell,
     start_world_point,
-    final_goal_point,
+    *goal_point,
     static_cast<int>(new_frontier.size()),
     visible_reveal_bounds,
     robot_center_distance_m,

@@ -51,7 +51,6 @@ struct FrontierSearchOptions
   int occ_threshold{OCC_THRESHOLD};
   int min_frontier_size_cells{MIN_FRONTIER_SIZE};
   double candidate_min_goal_distance_m{0.0};
-  double goal_push_distance_m{0.0};
 };
 
 // Scratch context for one search pass. Stores reusable caches keyed by map cell.
