@@ -187,19 +187,8 @@ function renderVisionBoxes(overlay){
   const layer=$('visionBoxes');layer.replaceChildren();
   const boxes=overlay.boxes||[];
   $('visionStat').textContent=`DETECT ${boxes.length}`;
-  for(const box of boxes){
-    const w=Number(box.w),h=Number(box.h),x=Number(box.cx)-w/2,y=Number(box.cy)-h/2;
-    if(!finite(x)||!finite(y)||!(w>0)||!(h>0))continue;
-    const element=document.createElement('div');
-    element.className='vbox';
-    element.style.color=String(box.class_name).startsWith('person')?'#4ade80':'#f06436';
-    element.style.left=`${x*100}%`;element.style.top=`${y*100}%`;
-    element.style.width=`${w*100}%`;element.style.height=`${h*100}%`;
-    const label=document.createElement('b');
-    label.textContent=`${dash(box.class_name)} ${finite(box.confidence)?Math.round(Number(box.confidence)*100)+'%':'-'}`;
-    element.append(label);
-    layer.append(element);
-  }
+  // Box overlay drawing disabled — camera stream stays clean, detection
+  // count above is still shown.
 }
 async function refreshVision(){
   try{
