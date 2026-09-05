@@ -22,7 +22,7 @@ def generate_launch_description():
                 {"depth_height": 480},
                 {"rgb_width": 640},
                 {"rgb_height": 480},
-                {"fps": 15},
+                {"fps": 10},
             ]
 
         ),
