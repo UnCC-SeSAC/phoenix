@@ -173,6 +173,7 @@ def generate_launch_description():
                 executable='detection_3d_node',
                 name='detection_3d_node',
                 output='screen',
+                arguments=['--ros-args', '--log-level', 'detection_3d_node:=debug'],
                 parameters=[{
                     'detections_topic': '/yolo_result',
                     'depth_topic': f'{ASCAMERA}/depth0/image_raw',
