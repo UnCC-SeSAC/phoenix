@@ -47,6 +47,7 @@ struct DebugAnalyzerConfig
   int min_frontier_size_cells{MIN_FRONTIER_SIZE};
   double frontier_candidate_min_goal_distance_m{0.0};
   double frontier_selection_min_distance{0.5};
+  double frontier_goal_push_distance_m{0.0};
   double frontier_visit_tolerance{0.30};
 
   // MRTSP and DP parameters are only used for analysis. They build the same

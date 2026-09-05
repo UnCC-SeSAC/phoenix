@@ -117,6 +117,7 @@ private:
     declare_parameter<int>("min_frontier_size_cells", MIN_FRONTIER_SIZE);
     declare_parameter<double>("frontier_candidate_min_goal_distance_m", 0.0);
     declare_parameter<double>("frontier_selection_min_distance", 0.5);
+    declare_parameter<double>("frontier_goal_push_distance_m", 0.0);
     declare_parameter<double>("frontier_visit_tolerance", 0.30);
 
     // RViz output parameters keep visual density adjustable without changing the
@@ -176,6 +177,8 @@ private:
       get_parameter("frontier_candidate_min_goal_distance_m").as_double();
     analyzer_config_.frontier_selection_min_distance =
       get_parameter("frontier_selection_min_distance").as_double();
+    analyzer_config_.frontier_goal_push_distance_m =
+      get_parameter("frontier_goal_push_distance_m").as_double();
     analyzer_config_.frontier_visit_tolerance =
       get_parameter("frontier_visit_tolerance").as_double();
 
