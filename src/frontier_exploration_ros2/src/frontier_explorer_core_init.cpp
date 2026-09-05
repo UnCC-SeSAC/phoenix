@@ -189,6 +189,7 @@ FrontierSearchOptions FrontierExplorerCore::frontier_search_options() const
   options.occ_threshold = params.occ_threshold;
   options.min_frontier_size_cells = params.min_frontier_size_cells;
   options.candidate_min_goal_distance_m = params.frontier_candidate_min_goal_distance_m;
+  options.goal_push_distance_m = params.frontier_goal_push_distance_m;
   return options;
 }
 

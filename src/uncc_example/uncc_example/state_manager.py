@@ -10,9 +10,12 @@ from rclpy.time import Time
 
 from tf2_ros import Buffer, TransformListener, TransformException
 
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
+
 from std_msgs.msg import String, UInt16
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import OccupancyGrid
 from interfaces.srv import SetString
 
 from .log_utils import make_event_logger
@@ -66,7 +69,7 @@ class StateManager(Node):
 
         # 불-사람이 이 거리 이내로 붙어 있으면 사람이 위험하다고 보고
         # 불부터 끄고, 멀면 사람부터 확인한다
-        self.declare_parameter('fire_person_proximity_threshold', 0.2)
+        self.declare_parameter('fire_person_proximity_threshold', 0.3)
 
         self.declare_parameter('state_check_period', 0.2)
 
@@ -125,6 +128,13 @@ class StateManager(Node):
         self._last_published_state = None
         self._last_published_target_id = None
 
+        # 카메라는 SLAM 이 아직 못 그린 영역도 멀리서 감지할 수 있어서,
+        # 감지된 좌표가 지금 global costmap 범위 밖일 수 있다 — 그 상태로
+        # active_target 으로 넘기면 nav2 가 "off the global costmap"으로
+        # 매번 실패한다. 범위 밖 후보는 여기서 걸러서 EXPLORING 이 계속
+        # 그쪽을 탐사하다 맵이 커지면 그때 선택되게 한다.
+        self._map_info = None  # (resolution, width, height, origin_x, origin_y)
+
         # -----------------------------
         # TF (로봇 현재 위치 확인용)
         # -----------------------------
@@ -140,6 +150,20 @@ class StateManager(Node):
             '/vision/detections',
             self.detection_callback,
             10,
+        )
+
+        map_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        self.create_subscription(
+            OccupancyGrid,
+            '/map',
+            self._map_callback,
+            map_qos,
         )
 
         # -----------------------------
@@ -198,6 +222,37 @@ class StateManager(Node):
             self.get_parameter('state_check_period').value,
             self.timer_callback,
         )
+
+    # =========================================================
+    # /map — global costmap 범위 밖 목적지를 걸러내기 위한 기준.
+    # =========================================================
+
+    def _map_callback(self, msg):
+
+        self._map_info = {
+            'resolution': msg.info.resolution,
+            'width': msg.info.width,
+            'height': msg.info.height,
+            'origin_x': msg.info.origin.position.x,
+            'origin_y': msg.info.origin.position.y,
+        }
+
+    def _is_within_map(self, entry):
+        """맵을 아직 못 받았으면(초기 구동 중) 보수적으로 범위 밖 취급 —
+        확실해질 때까지 active_target 으로 넘기지 않는다."""
+
+        if self._map_info is None:
+            return False
+
+        info = self._map_info
+        position = entry['pose'].pose.position
+
+        min_x = info['origin_x']
+        min_y = info['origin_y']
+        max_x = min_x + info['width'] * info['resolution']
+        max_y = min_y + info['height'] * info['resolution']
+
+        return min_x <= position.x <= max_x and min_y <= position.y <= max_y
 
     # =========================================================
     # Detections
@@ -609,6 +664,7 @@ class StateManager(Node):
                     entry for entry in cluster
                     if entry['type'] == 'fire'
                     and entry['status'] == 'pending'
+                    and self._is_within_map(entry)
                 ]
 
                 if pending_fires:
@@ -628,6 +684,12 @@ class StateManager(Node):
 
         해당 후보가 없으면(무리 없는 고립된 불/사람만 남으면) 로봇과
         가장 가까운 것을 고른다.
+
+        어느 단계든 지금 global costmap 범위 밖인 후보는 건너뛴다 —
+        카메라가 SLAM 이 아직 못 그린 곳도 감지할 수 있어서, 그런
+        좌표를 바로 목적지로 넘기면 nav2 planner 가 매번 실패한다.
+        범위 밖 후보는 그냥 두면 EXPLORING 이 계속 진행되다 맵이
+        커지는 대로 다음 틱에 자연히 선택된다.
         """
 
         if not self.target_queue:
@@ -635,7 +697,7 @@ class StateManager(Node):
 
         combo_ready = [
             entry for entry in self.target_queue
-            if self._is_combo_ready(entry)
+            if self._is_combo_ready(entry) and self._is_within_map(entry)
         ]
 
         if combo_ready:
@@ -643,7 +705,7 @@ class StateManager(Node):
 
         isolated = [
             entry for entry in self.target_queue
-            if entry['cluster'] is None
+            if entry['cluster'] is None and self._is_within_map(entry)
         ]
 
         if isolated:

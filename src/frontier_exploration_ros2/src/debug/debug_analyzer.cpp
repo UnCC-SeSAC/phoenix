@@ -40,6 +40,7 @@ FrontierSearchOptions make_search_options(const DebugAnalyzerConfig & config)
   options.occ_threshold = config.occ_threshold;
   options.min_frontier_size_cells = config.min_frontier_size_cells;
   options.candidate_min_goal_distance_m = config.frontier_candidate_min_goal_distance_m;
+  options.goal_push_distance_m = config.frontier_goal_push_distance_m;
   return options;
 }
 

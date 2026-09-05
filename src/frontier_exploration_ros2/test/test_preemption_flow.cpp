@@ -139,6 +139,108 @@ std::unique_ptr<FrontierExplorerCore> make_preemption_core(std::vector<std::stri
 }
 
 // Replacement and cancellation policy behavior.
+TEST(PreemptionFlowTests, OscillationRecoveryWaitsForCanceledResultBeforeEscape)
+{
+  auto core = make_preemption_core();
+  auto fake_handle = std::make_shared<FakeGoalHandle>();
+  int recovery_ready_calls = 0;
+
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [](const GoalDispatchRequest &) {};
+  core->callbacks.on_oscillation_recovery_ready = [&recovery_ready_calls]() {
+      recovery_ready_calls += 1;
+    };
+
+  const FrontierLike frontier = make_frontier(2.0, 2.0);
+  geometry_msgs::msg::PoseStamped goal_pose;
+  goal_pose.pose = make_pose(2.0, 2.0);
+  ASSERT_TRUE(core->send_pose_goal(
+      goal_pose, "frontier", frontier, FrontierSequence{frontier}, "test frontier"));
+  core->goal_response_callback(core->current_dispatch_id, fake_handle, true, "");
+
+  ASSERT_TRUE(core->request_oscillation_recovery());
+  EXPECT_TRUE(core->oscillation_recovery_in_progress);
+  EXPECT_EQ(fake_handle->cancel_calls, 1);
+  EXPECT_EQ(recovery_ready_calls, 0);
+
+  fake_handle->resolve_cancel(true, "");
+  EXPECT_EQ(recovery_ready_calls, 0);
+
+  core->get_result_callback(
+    core->current_dispatch_id,
+    action_msgs::msg::GoalStatus::STATUS_CANCELED,
+    0,
+    "");
+
+  EXPECT_EQ(recovery_ready_calls, 1);
+  EXPECT_TRUE(core->oscillation_recovery_in_progress);
+  EXPECT_FALSE(core->goal_in_progress);
+}
+
+TEST(PreemptionFlowTests, RejectedOscillationCancelRestoresNormalGoalState)
+{
+  auto core = make_preemption_core();
+  auto fake_handle = std::make_shared<FakeGoalHandle>();
+  core->goal_handle = fake_handle;
+
+  ASSERT_TRUE(core->request_oscillation_recovery());
+  fake_handle->resolve_cancel(false, "");
+
+  EXPECT_FALSE(core->oscillation_recovery_in_progress);
+  EXPECT_TRUE(core->goal_in_progress);
+  EXPECT_EQ(core->goal_state, GoalLifecycleState::ACTIVE);
+}
+
+TEST(PreemptionFlowTests, CompletedOscillationRecoveryRunsFreshFrontierSelection)
+{
+  auto core = make_preemption_core();
+  auto fake_handle = std::make_shared<FakeGoalHandle>();
+  int dispatch_calls = 0;
+  int frontier_search_calls = 0;
+
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&dispatch_calls](const GoalDispatchRequest &) {
+      dispatch_calls += 1;
+    };
+  core->callbacks.on_oscillation_recovery_ready = []() {};
+  core->callbacks.frontier_search = [&frontier_search_calls](
+    const geometry_msgs::msg::Pose &,
+    const OccupancyGrid2d &,
+    const OccupancyGrid2d &,
+    const std::optional<OccupancyGrid2d> &,
+    double,
+    bool)
+    {
+      frontier_search_calls += 1;
+      FrontierSearchResult result;
+      result.frontiers = {FrontierCandidate{{4.0, 4.0}, {4.0, 4.0}, 10}};
+      result.robot_map_cell = {0, 0};
+      return result;
+    };
+
+  const FrontierLike frontier = make_frontier(2.0, 2.0);
+  geometry_msgs::msg::PoseStamped goal_pose;
+  goal_pose.pose = make_pose(2.0, 2.0);
+  ASSERT_TRUE(core->send_pose_goal(
+      goal_pose, "frontier", frontier, FrontierSequence{frontier}, "test frontier"));
+  core->goal_response_callback(core->current_dispatch_id, fake_handle, true, "");
+  ASSERT_TRUE(core->request_oscillation_recovery());
+  fake_handle->resolve_cancel(true, "");
+  core->get_result_callback(
+    core->current_dispatch_id,
+    action_msgs::msg::GoalStatus::STATUS_CANCELED,
+    0,
+    "");
+
+  ASSERT_TRUE(core->oscillation_recovery_in_progress);
+  core->complete_oscillation_recovery(true);
+
+  EXPECT_FALSE(core->oscillation_recovery_in_progress);
+  EXPECT_EQ(frontier_search_calls, 1);
+  EXPECT_EQ(dispatch_calls, 2);
+  EXPECT_TRUE(core->goal_in_progress);
+}
+
 TEST(PreemptionFlowTests, ReselectionReplacementDispatchesWithoutCancel)
 {
   std::vector<std::string> info_logs;

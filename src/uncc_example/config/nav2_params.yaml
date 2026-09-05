@@ -24,7 +24,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 3.0
 
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
@@ -70,7 +70,7 @@ controller_server:
       angular_granularity: 0.025
 
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.32
       trans_stopped_velocity: 0.20
 
       short_circuit_trajectory_evaluation: True
@@ -196,7 +196,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0 # 장애물에서 멀어질수록 위험 비용이 얼마나 빠르게 감소할지 결정
-        inflation_radius: 0.20 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
+        inflation_radius: 0.15 # 장애물 주변에 추가로 위험 영역을 확장할 거리 (m)
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"
         enabled: True

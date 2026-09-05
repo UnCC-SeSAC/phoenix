@@ -119,6 +119,7 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("min_frontier_size_cells", 5);
   this->declare_parameter<double>("frontier_candidate_min_goal_distance_m", 0.0);
   this->declare_parameter<double>("frontier_selection_min_distance", 0.5);
+  this->declare_parameter<double>("frontier_goal_push_distance_m", 0.0);
   this->declare_parameter<bool>("escape_enabled", false);
   this->declare_parameter<double>("frontier_visit_tolerance", 0.30);
   this->declare_parameter<bool>("goal_preemption_enabled", false);
@@ -145,6 +146,16 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("frontier_suppression_startup_grace_period_s", 15.0);
   this->declare_parameter<int>("frontier_suppression_max_attempt_records", 256);
   this->declare_parameter<int>("frontier_suppression_max_regions", 64);
+  this->declare_parameter<bool>("oscillation_recovery_enabled", true);
+  this->declare_parameter<std::string>("oscillation_cmd_vel_topic", "cmd_vel_nav");
+  this->declare_parameter<std::string>("oscillation_drive_action_name", "drive_on_heading");
+  this->declare_parameter<int>("oscillation_reversal_count", 4);
+  this->declare_parameter<double>("oscillation_angular_threshold", 0.10);
+  this->declare_parameter<double>("oscillation_max_linear_speed", 0.03);
+  this->declare_parameter<double>("oscillation_window_s", 6.0);
+  this->declare_parameter<double>("oscillation_forward_distance_m", 0.20);
+  this->declare_parameter<double>("oscillation_forward_speed_mps", 0.08);
+  this->declare_parameter<double>("oscillation_time_allowance_s", 5.0);
   this->declare_parameter<bool>("completion_event_enabled", false);
   this->declare_parameter<std::string>("completion_event_topic", "exploration_complete");
 
@@ -193,6 +204,8 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
     "frontier_candidate_min_goal_distance_m").as_double();
   params_.frontier_selection_min_distance = this->get_parameter(
     "frontier_selection_min_distance").as_double();
+  params_.frontier_goal_push_distance_m = this->get_parameter(
+    "frontier_goal_push_distance_m").as_double();
   params_.escape_enabled = this->get_parameter("escape_enabled").as_bool();
   params_.frontier_visit_tolerance = this->get_parameter("frontier_visit_tolerance").as_double();
   params_.goal_preemption_enabled = this->get_parameter(
@@ -236,6 +249,34 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
     "frontier_suppression_max_attempt_records").as_int();
   params_.frontier_suppression_max_regions = this->get_parameter(
     "frontier_suppression_max_regions").as_int();
+  oscillation_recovery_config_.enabled = this->get_parameter(
+    "oscillation_recovery_enabled").as_bool();
+  oscillation_recovery_config_.cmd_vel_topic = this->get_parameter(
+    "oscillation_cmd_vel_topic").as_string();
+  oscillation_recovery_config_.drive_action_name = this->get_parameter(
+    "oscillation_drive_action_name").as_string();
+  oscillation_recovery_config_.reversal_count = std::max(
+    1, static_cast<int>(this->get_parameter("oscillation_reversal_count").as_int()));
+  oscillation_recovery_config_.angular_threshold = std::max(
+    0.0, this->get_parameter("oscillation_angular_threshold").as_double());
+  oscillation_recovery_config_.max_linear_speed = std::max(
+    0.0, this->get_parameter("oscillation_max_linear_speed").as_double());
+  oscillation_recovery_config_.window_s = std::max(
+    0.1, this->get_parameter("oscillation_window_s").as_double());
+  oscillation_recovery_config_.forward_distance_m = std::max(
+    0.0, this->get_parameter("oscillation_forward_distance_m").as_double());
+  oscillation_recovery_config_.forward_speed_mps = std::max(
+    0.01, this->get_parameter("oscillation_forward_speed_mps").as_double());
+  oscillation_recovery_config_.time_allowance_s = std::max(
+    0.1, this->get_parameter("oscillation_time_allowance_s").as_double());
+  if (
+    oscillation_recovery_config_.enabled &&
+    (oscillation_recovery_config_.cmd_vel_topic.empty() ||
+    oscillation_recovery_config_.drive_action_name.empty()))
+  {
+    throw std::runtime_error(
+            "oscillation recovery topic/action names must not be empty when enabled");
+  }
   completion_event_config_.enabled = this->get_parameter("completion_event_enabled").as_bool();
   completion_event_config_.topic = this->get_parameter("completion_event_topic").as_string();
   if (completion_event_config_.enabled && completion_event_config_.topic.empty()) {
@@ -267,6 +308,11 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   navigate_to_pose_client_ = rclcpp_action::create_client<NavigateToPose>(
     this,
     params_.navigate_to_pose_action_name);
+  if (oscillation_recovery_config_.enabled) {
+    drive_on_heading_client_ = rclcpp_action::create_client<DriveOnHeading>(
+      this,
+      oscillation_recovery_config_.drive_action_name);
+  }
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   if (completion_event_config_.enabled) {
@@ -326,6 +372,9 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
     };
   callbacks.on_exploration_complete = [this]() {
       this->publishCompletionEvent();
+    };
+  callbacks.on_oscillation_recovery_ready = [this]() {
+      this->startOscillationRecoveryDrive();
     };
   callbacks.debug_outputs_enabled = [this]() {
       return this->debugOutputsEnabled();
@@ -429,10 +478,21 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
       params_.frontier_suppression_max_attempt_records,
       params_.frontier_suppression_max_regions);
   }
+  RCLCPP_INFO(
+    this->get_logger(),
+    "Oscillation recovery: enabled=%s, cmd_vel='%s', reversals=%d/%.1fs, forward=%.2fm at %.2fm/s via '%s'",
+    oscillation_recovery_config_.enabled ? "true" : "false",
+    oscillation_recovery_config_.cmd_vel_topic.c_str(),
+    oscillation_recovery_config_.reversal_count,
+    oscillation_recovery_config_.window_s,
+    oscillation_recovery_config_.forward_distance_m,
+    oscillation_recovery_config_.forward_speed_mps,
+    oscillation_recovery_config_.drive_action_name.c_str());
 }
 
 FrontierExplorerNode::~FrontierExplorerNode()
 {
+  cancelOscillationRecoveryDrive();
   if (core_) {
     core_->request_shutdown();
   }
@@ -575,6 +635,13 @@ void FrontierExplorerNode::startExplorationRuntime()
     params_.local_costmap_topic,
     topic_qos_profiles_.make_local_costmap_qos(),
     std::bind(&FrontierExplorerNode::localCostmapCallback, this, std::placeholders::_1));
+  if (oscillation_recovery_config_.enabled) {
+    resetOscillationDetector();
+    cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+      oscillation_recovery_config_.cmd_vel_topic,
+      rclcpp::QoS(rclcpp::KeepLast(20)).best_effort(),
+      std::bind(&FrontierExplorerNode::cmdVelCallback, this, std::placeholders::_1));
+  }
   if (params_.map_processing_rate_hz > 0.0) {
     if (effective_map_processing_rate_hz_.has_value()) {
       ensureMapProcessingTimer();
@@ -626,6 +693,8 @@ void FrontierExplorerNode::enterColdIdle()
   map_sub_.reset();
   costmap_sub_.reset();
   local_costmap_sub_.reset();
+  cmd_vel_sub_.reset();
+  resetOscillationDetector();
   map_autodetect_timer_.reset();
   map_processing_timer_.reset();
   suppression_watchdog_timer_.reset();
@@ -728,6 +797,7 @@ void FrontierExplorerNode::requestStopExplorationRuntime(
 {
   ensureControlTimerCanceled();
   pending_quit_after_stop_ = quit_after_stop;
+  cancelOscillationRecoveryDrive();
   core_->stop_exploration_session(reason);
   publishFrontierMarkers({});
   enterColdIdle();
@@ -1258,6 +1328,195 @@ void FrontierExplorerNode::publishOptimizedMap(const nav_msgs::msg::OccupancyGri
     return;
   }
   optimized_map_pub_->publish(map_msg);
+}
+
+void FrontierExplorerNode::resetOscillationDetector()
+{
+  oscillation_observed_dispatch_id_ = 0;
+  last_angular_sign_ = 0;
+  last_angular_command_at_.reset();
+  angular_reversal_times_.clear();
+}
+
+void FrontierExplorerNode::cmdVelCallback(const geometry_msgs::msg::Twist::ConstSharedPtr msg)
+{
+  if (
+    !msg || !core_ || runtime_state_ != RuntimeState::RUNNING ||
+    !core_->active_frontier_goal_in_progress() ||
+    core_->goal_state != GoalLifecycleState::ACTIVE ||
+    core_->oscillation_recovery_in_progress)
+  {
+    resetOscillationDetector();
+    return;
+  }
+
+  if (oscillation_observed_dispatch_id_ != core_->current_dispatch_id) {
+    resetOscillationDetector();
+    oscillation_observed_dispatch_id_ = core_->current_dispatch_id;
+  }
+
+  const double linear_speed = std::hypot(msg->linear.x, msg->linear.y);
+  if (linear_speed > oscillation_recovery_config_.max_linear_speed) {
+    resetOscillationDetector();
+    oscillation_observed_dispatch_id_ = core_->current_dispatch_id;
+    return;
+  }
+
+  if (std::abs(msg->angular.z) < oscillation_recovery_config_.angular_threshold) {
+    // Do not treat the zero crossing between opposite commands as another command.
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  const auto window = std::chrono::duration<double>(oscillation_recovery_config_.window_s);
+  if (last_angular_command_at_.has_value() && now - *last_angular_command_at_ > window) {
+    last_angular_sign_ = 0;
+    angular_reversal_times_.clear();
+  }
+  last_angular_command_at_ = now;
+
+  while (!angular_reversal_times_.empty() && now - angular_reversal_times_.front() > window) {
+    angular_reversal_times_.pop_front();
+  }
+
+  const int sign = msg->angular.z > 0.0 ? 1 : -1;
+  if (last_angular_sign_ == 0) {
+    last_angular_sign_ = sign;
+    return;
+  }
+  if (sign == last_angular_sign_) {
+    return;
+  }
+
+  last_angular_sign_ = sign;
+  angular_reversal_times_.push_back(now);
+  if (
+    static_cast<int>(angular_reversal_times_.size()) <
+    oscillation_recovery_config_.reversal_count)
+  {
+    return;
+  }
+
+  const int dispatch_id = core_->current_dispatch_id;
+  resetOscillationDetector();
+  if (core_->request_oscillation_recovery()) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Triggered oscillation recovery after %d angular sign reversals (dispatch_id=%d)",
+      oscillation_recovery_config_.reversal_count,
+      dispatch_id);
+  }
+}
+
+void FrontierExplorerNode::startOscillationRecoveryDrive()
+{
+  resetOscillationDetector();
+  const uint64_t generation = ++recovery_generation_;
+
+  if (
+    runtime_state_ != RuntimeState::RUNNING || !core_ ||
+    !core_->oscillation_recovery_in_progress)
+  {
+    return;
+  }
+
+  if (oscillation_recovery_config_.forward_distance_m <= 0.0) {
+    finishOscillationRecoveryDrive(generation, false);
+    return;
+  }
+
+  if (
+    !drive_on_heading_client_ ||
+    !drive_on_heading_client_->wait_for_action_server(std::chrono::milliseconds(250)))
+  {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "DriveOnHeading server '%s' is unavailable; skipping forward motion",
+      oscillation_recovery_config_.drive_action_name.c_str());
+    finishOscillationRecoveryDrive(generation, false);
+    return;
+  }
+
+  DriveOnHeading::Goal goal;
+  goal.target.x = oscillation_recovery_config_.forward_distance_m;
+  goal.speed = oscillation_recovery_config_.forward_speed_mps;
+  goal.time_allowance = rclcpp::Duration::from_seconds(
+    oscillation_recovery_config_.time_allowance_s);
+
+  rclcpp_action::Client<DriveOnHeading>::SendGoalOptions options;
+  options.goal_response_callback = [this, generation](
+    std::shared_ptr<DriveGoalHandle> goal_handle)
+    {
+      if (generation != recovery_generation_) {
+        if (goal_handle) {
+          try {
+            drive_on_heading_client_->async_cancel_goal(goal_handle);
+          } catch (const std::exception &) {
+            // The owning exploration session has already stopped.
+          }
+        }
+        return;
+      }
+      if (!goal_handle) {
+        RCLCPP_WARN(this->get_logger(), "Oscillation recovery DriveOnHeading goal was rejected");
+        finishOscillationRecoveryDrive(generation, false);
+        return;
+      }
+      recovery_drive_goal_handle_ = goal_handle;
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Oscillation recovery: collision-checked forward drive started (%.2fm)",
+        oscillation_recovery_config_.forward_distance_m);
+    };
+  options.result_callback = [this, generation](const DriveGoalHandle::WrappedResult & result) {
+      if (generation != recovery_generation_) {
+        return;
+      }
+      recovery_drive_goal_handle_.reset();
+      const bool advanced = result.code == rclcpp_action::ResultCode::SUCCEEDED;
+      if (!advanced) {
+        RCLCPP_WARN(
+          this->get_logger(),
+          "Oscillation recovery forward drive stopped without success (result=%d); no raw velocity fallback will be used",
+          static_cast<int>(result.code));
+      }
+      finishOscillationRecoveryDrive(generation, advanced);
+    };
+
+  try {
+    drive_on_heading_client_->async_send_goal(goal, options);
+  } catch (const std::exception & exc) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Failed to send oscillation recovery DriveOnHeading goal: %s",
+      exc.what());
+    finishOscillationRecoveryDrive(generation, false);
+  }
+}
+
+void FrontierExplorerNode::finishOscillationRecoveryDrive(uint64_t generation, bool advanced)
+{
+  if (generation != recovery_generation_) {
+    return;
+  }
+  recovery_drive_goal_handle_.reset();
+  if (core_) {
+    core_->complete_oscillation_recovery(advanced);
+  }
+}
+
+void FrontierExplorerNode::cancelOscillationRecoveryDrive()
+{
+  resetOscillationDetector();
+  ++recovery_generation_;
+  if (recovery_drive_goal_handle_ && drive_on_heading_client_) {
+    try {
+      drive_on_heading_client_->async_cancel_goal(recovery_drive_goal_handle_);
+    } catch (const std::exception &) {
+      // Shutdown/stop remains best-effort if the behavior server is already gone.
+    }
+  }
+  recovery_drive_goal_handle_.reset();
 }
 
 bool FrontierExplorerNode::frontierMapOptimizationEnabled() const

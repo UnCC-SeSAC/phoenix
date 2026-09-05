@@ -17,14 +17,6 @@ from .log_utils import make_event_logger
 # 식별자가 된다 — 위치 변경 추적/갱신 로직이 따로 필요 없다.
 _COORD_PRECISION = 2
 
-# state_manager 의 7분류 중 아직 처리 전(진압/접근 시도 전)인 상태.
-# 감지 직후 이 상태로 바로 등록해버리면, depth/TF 지연으로 튄 좌표가
-# 진짜 새 화재처럼 여러 개 등록되는 문제가 있어 — 진압이 끝나거나
-# (성공/실패 무관) 사람에게 실제로 도착한(확인/도달불가 무관) 뒤에만
-# keepout 을 등록한다.
-_PENDING_CATEGORIES = frozenset({'fire_unvisited', 'person_unconfirmed'})
-
-
 class FireKeepoutNode(Node):
     """
     /mission/found_targets(state_manager 가 발행하는 fire/person 발견
@@ -38,9 +30,9 @@ class FireKeepoutNode(Node):
     - 한 번 등록된 대상은 상태(진압 완료 등)가 바뀌어도 계속 keepout
       으로 유지한다 — 화재 받침대/컵 같은 실제 물체가 꺼진 뒤에도
       바닥에 남아있고 LiDAR 는 여전히 못 보기 때문.
-    - 감지된 즉시(fire_unvisited/person_unconfirmed 상태)가 아니라,
-      진압/접근이 끝난 뒤에만 등록한다 — depth/TF 지연으로 좌표가
-      튀면 감지 단계에서 같은 대상이 여러 개로 등록될 수 있어서다.
+    - 감지 즉시(fire_unvisited/person_unconfirmed 단계부터) 등록한다 —
+      방문/확인이 끝난 뒤에 등록하면, 그 시점엔 로봇이 이미 바로 옆에
+      서 있어서 자기가 만든 keepout 안에 갇히는 문제가 있었다.
     """
 
     def __init__(self):
@@ -55,15 +47,12 @@ class FireKeepoutNode(Node):
         self.declare_parameter('targets_topic', '/mission/found_targets')
         self.declare_parameter('mask_topic', '/fire_keepout_mask')
         self.declare_parameter('filter_info_topic', '/fire_keepout_mask_info')
+        self.declare_parameter('circles_topic', '/fire_keepout_circles')
+        self.declare_parameter('suppress_topic', '/fire_keepout_suppress')
 
-        # 실측 반경(fire 0.05m / person 0.15m) + 위치·depth 오차 여유.
-        # xy_goal_tolerance(nav2_controller_dwb.yaml, 0.32m) 와 로봇
-        # footprint(대각선 최대 약 0.195m) 기준으로, keepout + 0.195m 가
-        # 0.32m 를 넘으면 대각선 접근 시 "No valid trajectories" 로
-        # 실패할 수 있다 — fire 는 여유 있음(0.10+0.195=0.295<0.32),
-        # person 은 여전히 빠듯함(0.20+0.195=0.395>0.32).
-        self.declare_parameter('fire_keepout_radius', 0.10)
-        self.declare_parameter('person_keepout_radius', 0.20)
+        # keepout + footprint(0.195m) <= xy_goal_tolerance(0.32m) 맞춰 축소.
+        self.declare_parameter('fire_keepout_radius', 0.05)
+        self.declare_parameter('person_keepout_radius', 0.10)
 
         self.fire_keepout_radius = (
             self.get_parameter('fire_keepout_radius').value
@@ -78,6 +67,10 @@ class FireKeepoutNode(Node):
         self._map_info = None  # (resolution, width, height, origin_x, origin_y)
         # key -> radius. key = (kind, round(x, _COORD_PRECISION), round(y, ...))
         self._tracked = {}
+        # mission_executor 가 keepout 이탈(Spin/DriveOnHeading) 중에만
+        # 잠깐 mask 에서 빼달라고 요청한 대상들 — _tracked 에서 지우는 게
+        # 아니라 mask/circles 발행에서만 제외한다.
+        self._suppressed = set()
 
         # -----------------------------
         # QoS
@@ -108,6 +101,13 @@ class FireKeepoutNode(Node):
             10,
         )
 
+        self.create_subscription(
+            String,
+            self.get_parameter('suppress_topic').value,
+            self._suppress_callback,
+            10,
+        )
+
         # -----------------------------
         # Publishers
         # -----------------------------
@@ -120,6 +120,14 @@ class FireKeepoutNode(Node):
         self.filter_info_pub = self.create_publisher(
             CostmapFilterInfo,
             self.get_parameter('filter_info_topic').value,
+            transient_local_qos,
+        )
+
+        # mission_executor 가 "지금 로봇이 어떤 keepout 원과 겹쳤는지"
+        # 판단할 때 쓰는 원본 좌표/반경 목록 (mask 는 격자라 역산이 번거로움).
+        self.circles_pub = self.create_publisher(
+            String,
+            self.get_parameter('circles_topic').value,
             transient_local_qos,
         )
 
@@ -199,14 +207,44 @@ class FireKeepoutNode(Node):
         if changed and self._map_info is not None:
             self._publish_mask()
 
+    # =========================================================
+    # /fire_keepout_suppress — mission_executor 가 keepout 이탈
+    # (Spin/DriveOnHeading) 중에만 특정 원을 mask 에서 빼달라고 요청.
+    # Spin 자체가 로컬 costmap 기준으로 스윕 충돌검사를 하기 때문에,
+    # 로봇 발판이 이미 걸친 keepout 을 그대로 두면 회전조차 못 한다.
+    # =========================================================
+
+    def _suppress_callback(self, msg):
+
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f'Invalid fire_keepout_suppress JSON: {e}')
+            return
+
+        x = payload.get('x')
+        y = payload.get('y')
+
+        key = next(
+            (k for k in self._tracked if k[1] == x and k[2] == y),
+            None,
+        )
+
+        if key is None:
+            return
+
+        if payload.get('suppress', True):
+            self._suppressed.add(key)
+        else:
+            self._suppressed.discard(key)
+
+        if self._map_info is not None:
+            self._publish_mask()
+
     @staticmethod
     def _keepout_kind(category):
         """state_manager 가 붙이는 7분류(fire_unvisited 등)로 fire/person
-        을 가른다. 아직 처리 전(_PENDING_CATEGORIES)이면 keepout 등록
-        대상이 아니다 — 진압/접근이 끝난 뒤에만 등록한다."""
-
-        if category in _PENDING_CATEGORIES:
-            return None
+        을 가른다."""
 
         if category.startswith('fire_'):
             return 'fire'
@@ -232,6 +270,9 @@ class FireKeepoutNode(Node):
         grid = [0] * (width * height)
 
         for (kind, x, y), radius in self._tracked.items():
+
+            if (kind, x, y) in self._suppressed:
+                continue
 
             center_col = int((x - origin_x) / resolution)
             center_row = int((y - origin_y) / resolution)
@@ -275,6 +316,14 @@ class FireKeepoutNode(Node):
         filter_info_msg.multiplier = 1.0
 
         self.filter_info_pub.publish(filter_info_msg)
+
+        circles_msg = String()
+        circles_msg.data = json.dumps([
+            {'x': x, 'y': y, 'radius': radius}
+            for (kind, x, y), radius in self._tracked.items()
+            if (kind, x, y) not in self._suppressed
+        ])
+        self.circles_pub.publish(circles_msg)
 
 
 def main(args=None):

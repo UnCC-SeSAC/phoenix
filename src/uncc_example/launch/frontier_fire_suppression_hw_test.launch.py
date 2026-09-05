@@ -9,6 +9,7 @@ from launch.actions import (
     SetEnvironmentVariable,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -64,6 +65,13 @@ def generate_launch_description():
             class_names:="['fire','person']"
     (.hef 후처리용 onnx/config json은 같은 폴더에서 자동으로 찾습니다 —
      config_onnx_best_sim.json / best_sim_postprocess.onnx 라는 이름이어야 함)
+
+    웹 UI는 rule_based_ui_adapter + firefighter_ui 가 자동으로 같이 뜬다.
+    기본은 http://<Pi IP>:8080 로 다른 PC에서 바로 접속 가능
+    (ui_allow_remote=true 기본값 — 이 Pi에서만 열려면
+    ui_allow_remote:=false, ui_host:=127.0.0.1).
+    라이브 카메라 영상 없이 미션 상태/지도만 가볍게 보려면
+    start_ui_vision:=false.
 
     확인할 것:
         ros2 topic echo /mission/state
@@ -317,6 +325,70 @@ def generate_launch_description():
         ],
     )
 
+    # =========================================
+    # UI (자동 연결)
+    # rule_based_ui_adapter 가 /mission/state, /mission/current_target,
+    # /mission/found_targets 를 /rule_based/status 로 변환해 발행하고,
+    # firefighter_ui(HTTP 서버)가 그걸 구독해 웹 UI로 서빙한다.
+    # 기본이 ui_host=0.0.0.0 / ui_allow_remote=true 라서 다른 PC에서 바로
+    # http://<Pi IP>:8080 으로 접속 가능하다.
+    # ★ ui_allow_remote=true 는 LAN 어디서든 START/STOP 미션 제어까지 열린다
+    #   — 신뢰 안 되는 네트워크라면 ui_allow_remote:=false, ui_host:=127.0.0.1
+    #   로 launch 인자를 덮어쓸 것.
+    # start_ui_vision:=false 로 끄면 ui_stream_node(세 노드 중 CPU를 가장 많이
+    # 쓰는, 8fps JPEG 인코딩 노드)를 아예 안 띄우고 firefighter_ui 영상
+    # 구독도 끈다 — 미션 상태/타겟/배터리/지도는 그대로 보이고 라이브
+    # 카메라 영상만 빠진다.
+    # state_manager(mission_stack, t=11) / vision(t=13) 다음에 뜨도록 배치.
+    # =========================================
+
+    ui = TimerAction(
+        period=14.0,
+        actions=[
+            Node(
+                package='uncc_example',
+                executable='rule_based_ui_adapter',
+                name='rule_based_ui_adapter',
+                output='screen',
+            ),
+            Node(
+                package='image_pipeline',
+                executable='ui_stream_node',
+                name='ui_stream_node',
+                output='screen',
+                condition=IfCondition(LaunchConfiguration('start_ui_vision')),
+                parameters=[{
+                    'input_topic': '/image_enhanced',
+                    'detections_topic': '/yolo_result',
+                    'class_names': LaunchConfiguration('class_names'),
+                }],
+            ),
+            Node(
+                package='fire_vla_core',
+                executable='firefighter_ui',
+                name='firefighter_ui',
+                output='screen',
+                parameters=[{
+                    'ui_host': LaunchConfiguration('ui_host'),
+                    'ui_port': ParameterValue(
+                        LaunchConfiguration('ui_port'), value_type=int),
+                    'ui_allow_remote': ParameterValue(
+                        LaunchConfiguration('ui_allow_remote'),
+                        value_type=bool),
+                    'ui_vision_enabled': ParameterValue(
+                        LaunchConfiguration('start_ui_vision'),
+                        value_type=bool),
+                    'rule_based_status_topic': '/rule_based/status',
+                    'rule_based_mission_topic': '/rule_based/mission',
+                    # 이 launch는 vla_orchestrator를 아예 안 띄운다 —
+                    # 접속하자마자 VLA 화면("상태 대기 중")이 아니라
+                    # Rule-based 화면부터 뜨게 한다.
+                    'ui_default_mode': 'RULE_BASED',
+                }],
+            ),
+        ],
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'model_path', default_value='',
@@ -348,6 +420,19 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'fire_extinguished_ratio', default_value='0.3',
             description='관찰 구간 내 화재 프레임 비율이 이 값 미만이면 꺼짐 판정'),
+        DeclareLaunchArgument(
+            'start_ui_vision', default_value='true',
+            description='false면 ui_stream_node(JPEG 인코딩)를 끄고 '
+                        'firefighter_ui 영상 구독도 끈다 — 미션 상태/지도는 '
+                        '그대로, 라이브 카메라만 빠져서 가벼워짐'),
+        DeclareLaunchArgument(
+            'ui_host', default_value='0.0.0.0',
+            description='0.0.0.0=LAN 어디서든 접속 가능. 이 Pi에서만 보려면 '
+                        '127.0.0.1로 바꾸고 ui_allow_remote도 false로'),
+        DeclareLaunchArgument('ui_port', default_value='8080'),
+        DeclareLaunchArgument(
+            'ui_allow_remote', default_value='true',
+            description='★ true면 START/STOP 미션 제어까지 LAN에 열림'),
         hardware,
         camera,
         slam,
@@ -356,4 +441,5 @@ def generate_launch_description():
         frontier,
         frontier_state_controller,
         mission_stack,
+        ui,
     ])

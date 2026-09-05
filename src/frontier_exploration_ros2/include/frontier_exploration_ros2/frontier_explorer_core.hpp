@@ -90,6 +90,11 @@ struct FrontierExplorerCoreParams
   int min_frontier_size_cells{MIN_FRONTIER_SIZE};
   double frontier_candidate_min_goal_distance_m{0.0};
   double frontier_selection_min_distance{0.5};
+  // Extra distance pushed past the free-side frontier goal, into the adjacent
+  // unknown cell, so the robot drives deeper before Nav2/DWB stops it on a
+  // newly-discovered obstacle. 0.0 disables the push (goal stays on the
+  // known-free boundary, the historical behavior).
+  double frontier_goal_push_distance_m{0.0};
   bool escape_enabled{false};
   double frontier_visit_tolerance{0.30};
   bool goal_preemption_enabled{false};
@@ -137,6 +142,9 @@ struct FrontierExplorerCoreCallbacks
   std::function<void(const nav_msgs::msg::OccupancyGrid &)> publish_optimized_map;
   // Completion hook lets the ROS-facing node trigger optional post-completion side effects.
   std::function<void()> on_exploration_complete;
+  // Invoked only after an oscillating frontier goal has reached terminal CANCELED state.
+  // The node can then run a collision-checked escape action without racing NavigateToPose.
+  std::function<void()> on_oscillation_recovery_ready;
   std::function<bool()> debug_outputs_enabled;
   std::function<void(const std::string &)> log_debug;
   std::function<void(const std::string &)> log_info;
@@ -259,6 +267,8 @@ public:
     const std::string & goal_update_log_prefix = "Preempting active frontier goal");
 
   void request_active_goal_cancel(const std::string & reason);
+  bool request_oscillation_recovery();
+  void complete_oscillation_recovery(bool advanced);
   void issue_active_goal_cancel();
   void cancel_response_callback(
     int dispatch_id,
@@ -437,6 +447,7 @@ public:
   // Preemption/cancel pipeline and pending replacement goal state.
   bool cancel_request_in_progress{false};
   std::optional<std::string> pending_cancel_reason;
+  bool oscillation_recovery_in_progress{false};
   FrontierSequence pending_frontier_sequence;
   std::string pending_frontier_selection_mode;
   std::string pending_frontier_dispatch_context;

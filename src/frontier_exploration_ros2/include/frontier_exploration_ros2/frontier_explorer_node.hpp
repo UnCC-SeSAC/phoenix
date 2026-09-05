@@ -17,6 +17,8 @@ limitations under the License.
 #pragma once
 
 #include <chrono>
+#include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,6 +26,8 @@ limitations under the License.
 #include <vector>
 
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav2_msgs/action/drive_on_heading.hpp>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -54,6 +58,22 @@ public:
 private:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using NavigateGoalHandle = rclcpp_action::ClientGoalHandle<NavigateToPose>;
+  using DriveOnHeading = nav2_msgs::action::DriveOnHeading;
+  using DriveGoalHandle = rclcpp_action::ClientGoalHandle<DriveOnHeading>;
+
+  struct OscillationRecoveryConfig
+  {
+    bool enabled{true};
+    std::string cmd_vel_topic{"cmd_vel_nav"};
+    std::string drive_action_name{"drive_on_heading"};
+    int reversal_count{4};
+    double angular_threshold{0.10};
+    double max_linear_speed{0.03};
+    double window_s{6.0};
+    double forward_distance_m{0.20};
+    double forward_speed_mps{0.08};
+    double time_allowance_s{5.0};
+  };
 
   void occupancyGridCallback(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
   void costmapCallback(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
@@ -71,6 +91,11 @@ private:
   bool maybeFinalizeMapProcessingRateEstimate();
 
   void dispatchGoalRequest(const GoalDispatchRequest & request);
+  void cmdVelCallback(const geometry_msgs::msg::Twist::ConstSharedPtr msg);
+  void resetOscillationDetector();
+  void startOscillationRecoveryDrive();
+  void finishOscillationRecoveryDrive(uint64_t generation, bool advanced);
+  void cancelOscillationRecoveryDrive();
   void createMapSubscription(rclcpp::DurabilityPolicy map_durability);
   void mapAutodetectTimeoutCallback();
   void logMapAutodetectStart(rclcpp::DurabilityPolicy selected_durability);
@@ -134,6 +159,8 @@ private:
 
   // ROS interfaces.
   rclcpp_action::Client<NavigateToPose>::SharedPtr navigate_to_pose_client_;
+  rclcpp_action::Client<DriveOnHeading>::SharedPtr drive_on_heading_client_;
+  DriveGoalHandle::SharedPtr recovery_drive_goal_handle_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Service<srv::ControlExploration>::SharedPtr control_service_;
@@ -146,6 +173,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::TimerBase::SharedPtr map_autodetect_timer_;
   rclcpp::TimerBase::SharedPtr map_processing_timer_;
   rclcpp::TimerBase::SharedPtr suppression_watchdog_timer_;
@@ -171,6 +199,13 @@ private:
   std::optional<double> effective_map_processing_rate_hz_;
   std::optional<std::chrono::steady_clock::time_point> last_map_arrival_at_;
   std::vector<double> startup_map_interval_samples_s_;
+
+  OscillationRecoveryConfig oscillation_recovery_config_;
+  int oscillation_observed_dispatch_id_{0};
+  int last_angular_sign_{0};
+  std::optional<std::chrono::steady_clock::time_point> last_angular_command_at_;
+  std::deque<std::chrono::steady_clock::time_point> angular_reversal_times_;
+  uint64_t recovery_generation_{0};
 
   // Completion can be observed multiple times while the frontier set stays empty.
   bool completion_event_published_{false};

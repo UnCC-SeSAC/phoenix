@@ -110,6 +110,20 @@ frontier_explorer:
     # Use if you are having issues with SLAM or Nav2.
     frontier_suppression_enabled: false
 
+    # Recover from repeated in-place left/right controller oscillation.
+    # Count only near-zero-linear controller output, cancel the active frontier goal,
+    # then use Nav2 DriveOnHeading so the local costmap/footprint validates forward motion.
+    oscillation_recovery_enabled: true
+    oscillation_cmd_vel_topic: /cmd_vel_nav
+    oscillation_drive_action_name: drive_on_heading
+    oscillation_reversal_count: 4
+    oscillation_angular_threshold: 0.10
+    oscillation_max_linear_speed: 0.03
+    oscillation_window_s: 6.0
+    oscillation_forward_distance_m: 0.20
+    oscillation_forward_speed_mps: 0.08
+    oscillation_time_allowance_s: 5.0
+
     # Behavior when frontiers exist but all of them are temporarily suppressed: stay or return_to_start. 
     # Requires `frontier_suppression_enabled: true`
     all_frontiers_suppressed_behavior: return_to_start
@@ -157,6 +171,14 @@ frontier_explorer:
     # Used for dispatch not filterization.
     # Recommended value: 2.5x size of robot's radius
     frontier_selection_min_distance: 0.8
+
+    # Extra distance pushed past the free-side frontier goal, into the
+    # adjacent unknown cell, before it's sent to Nav2. 0.0 keeps the goal
+    # right on the known/unknown boundary (historical behavior). A positive
+    # value makes the robot commit to driving deeper into unknown space;
+    # Nav2/DWB still stops it on a newly-discovered wall via the local
+    # costmap, so this is safe as long as it isn't set absurdly large.
+    frontier_goal_push_distance_m: 0.1
 
     # Distance used to treat a frontier region as recently visited.
     # Use if you are having navigation loops.
@@ -254,4 +276,3 @@ frontier_explorer:
 
     # Maximum number of active suppressed regions kept in memory.
     frontier_suppression_max_regions: 64
-
