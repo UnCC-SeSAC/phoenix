@@ -174,7 +174,8 @@ class Detection3DNode(Node):
         self._n_frames_total = self._n_pub_total = 0
         self._n_det_total = self._n_depth_total = 0
         self._n_unknown = self._n_fallback = 0
-        self._reasons: dict = {}
+        self._reasons: dict = {}          # stats 주기마다 리셋 (로그용)
+        self._reason_totals: dict = {}    # 누적 (하트비트 counters용)
         self._t_proc: list = []
         self._last_report = time.monotonic()
 
@@ -427,7 +428,7 @@ class Detection3DNode(Node):
             self._n_pub_total += 1
 
         for reason, n in result.reason_counts().items():
-            self._reasons[reason] = self._reasons.get(reason, 0) + n
+            self._add_reason(reason, n)
         self._t_proc.append((time.perf_counter() - t0) * 1000.0)
         self._report_if_due()
 
@@ -485,14 +486,30 @@ class Detection3DNode(Node):
                       "unknown_depth": self._n_unknown,
                       "fallback_depth": self._n_fallback,
                       "detections_in": self._n_det_total,
-                      "depth_in": self._n_depth_total}))
+                      "depth_in": self._n_depth_total,
+                      # ★ `unknown_depth`는 "몇 건"만 말합니다. 대응(띠 위치를
+                      #   옮길지, z_max를 넓힐지)을 고르려면 **왜**가 필요합니다.
+                      #   접두사로 평평하게 폅니다 — counters는 int 맵이라
+                      #   중첩 dict를 넣으면 build_heartbeat가 터집니다.
+                      **{f"reason_{k}": v
+                         for k, v in sorted(self._reason_totals.items())}}))
         self.status_pub.publish(msg)
 
     # ------------------------------------------------------------------ stats
 
     def _note(self, reason: str):
-        self._reasons[reason] = self._reasons.get(reason, 0) + 1
+        self._add_reason(reason, 1)
         self._report_if_due()
+
+    def _add_reason(self, reason: str, n: int = 1):
+        """사유를 **두 벌** 집계합니다.
+
+        `_reasons`는 stats 주기마다 비워 "최근 5초에 무슨 일이 있었나"를,
+        `_reason_totals`는 하트비트가 실어 보낼 **누적**을 담습니다. 하나로
+        합치면 로그가 비우는 순간 status의 counters도 0으로 돌아갑니다.
+        """
+        self._reasons[reason] = self._reasons.get(reason, 0) + n
+        self._reason_totals[reason] = self._reason_totals.get(reason, 0) + n
 
     def _report_if_due(self):
         now = time.monotonic()

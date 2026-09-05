@@ -137,6 +137,97 @@ class TestDropInsteadOfInvent:
         assert res.dropped[0].reason == "box_outside_image"
 
 
+class TestPixelPathKeepsTheReason:
+    """★ JSON 경로에서 **불명의 사유가 살아남는가** (2026-09-05).
+
+    계약이 "불명도 실어 보낸다"로 바뀌면서 `convert_frame_pixels`는 실패한
+    검출을 버리지 않게 됐고, 버리지 않으니 `dropped`에도 안 남아 **사유가
+    통째로 사라져 있었습니다.** `sample.reason`은 `detection_entry`에서
+    `"unknown"` 한 단어로 접히므로 여기서 안 남기면 복구할 방법이 없습니다.
+
+    증상: 노드 로그의 "제외:" 절이 영원히 안 뜹니다. `min_score` 기본이 0.0이라
+    `low_score`도 발생할 수 없어 `_reasons`가 빈 dict로 남기 때문입니다.
+    그래서 현장에서 `no_valid_pixels`(띠가 통째로 무효 — 띠를 옮겨야 함)와
+    `low_valid_ratio`(픽셀은 있는데 비율 미달 — 임계값 문제)를 못 가립니다.
+    """
+
+    def test_불명이어도_발행은_계속한다(self):
+        """★ 이게 `convert_frame`과의 차이입니다. 진단을 추가하면서 이걸
+        깨뜨리면(=`continue`를 넣으면) 메인은 불의 존재조차 모르게 됩니다."""
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert len(res.entries) == 1
+        assert res.entries[0]["depth"] is None
+        assert res.entries[0]["depth_status"] == "unknown"
+
+    def test_불명의_사유가_dropped에_남는다(self):
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert [d.reason for d in res.dropped] == ["no_valid_pixels"]
+
+    def test_entries와_dropped는_배타적이지_않다(self):
+        """`convert_frame`에서는 배타적이었습니다. 여기서는 같은 검출이
+        양쪽에 나타납니다 — dropped가 "폐기"가 아니라 **진단**이라서입니다."""
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert len(res.entries) == 1 and len(res.dropped) == 1
+        assert res.entries[0]["class_name"] == res.dropped[0].class_id
+
+    def test_reason_counts가_노드_로그를_채운다(self):
+        """노드는 이 dict를 그대로 `_reasons`에 누적해 "제외:"로 찍습니다."""
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9),
+                                    (sc.box_color, "fire", 0.8)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert res.reason_counts() == {"no_valid_pixels": 2}
+
+    def test_거리를_구했으면_사유가_없다(self):
+        """성공한 프레임까지 진단에 쌓이면 로그가 무의미해집니다."""
+        sc = dummy_scene()
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert res.entries[0]["depth"] is not None
+        assert res.dropped == []
+
+    def test_low_score는_여전히_발행되지_않는다(self):
+        """점수 미달은 **진짜 폐기**입니다 — entries에 없어야 합니다."""
+        sc = dummy_scene()
+        p = SamplingParams(min_score=0.5)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.2)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth,
+                                   params=p)
+
+        assert res.entries == []
+        assert [d.reason for d in res.dropped] == ["low_score"]
+
+    def test_사유가_구분된다(self):
+        """대응이 갈리는 두 사유가 실제로 다르게 잡히는지.
+
+        `no_valid_pixels`는 띠를 옮겨야 하고, `low_valid_ratio`는 임계값
+        문제입니다. 둘을 못 가리면 5-1 대응을 고를 수 없습니다.
+        """
+        sc = dummy_scene()
+        far_out = (5000.0, 5000.0, 5100.0, 5100.0)
+        # 유효 픽셀은 있지만 비율이 절대 못 미치는 임계값
+        p = SamplingParams(min_valid_ratio=1.01)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth,
+                                   params=p)
+        assert [d.reason for d in res.dropped] == ["low_valid_ratio"]
+
+        res = convert_frame_pixels([(far_out, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+        assert [d.reason for d in res.dropped] == ["box_outside_image"]
+
+
 class TestFallbackPolicy:
     """지시서 5-1 폴백 — 켜면 값이 나오지만 **대상 거리가 아닙니다.**"""
 

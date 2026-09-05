@@ -284,10 +284,16 @@ class PixelFrameResult:
     - 거리 불명을 **버리지 않고** `depth: null` + `depth_status: "unknown"`으로
       실어 보냅니다. "불은 보이는데 거리를 못 쟀다"는 메인에게 유용한 정보이고,
       빼버리면 메인은 그 검출의 존재조차 모릅니다.
-    - 그래서 `dropped`에는 `low_score`만 남습니다.
+    - 그래서 `dropped`는 **"발행하지 않은 것"이 아니라 "진단"**입니다.
+      `convert_frame`에서는 둘이 배타적이었지만(불명 = 발행 안 함) 여기서는
+      아닙니다: 거리 불명인 검출은 `entries`에 실려 나가면서 `dropped`에도
+      사유가 남습니다. ★ 사유를 여기 안 남기면 `sample.reason`이
+      `detection_entry`에서 `"unknown"` 한 단어로 접히면서 영영 사라지고,
+      현장에서 `no_valid_pixels`(띠가 통째로 무효)와 `low_valid_ratio`
+      (픽셀은 있는데 비율 미달)를 가릴 방법이 없어집니다.
     """
     entries: list        # detection_json 항목 dict
-    dropped: list        # Dropped (진단용)
+    dropped: list        # Dropped (진단용). entries와 **배타적이지 않습니다**
 
     def reason_counts(self) -> dict:
         out: dict = {}
@@ -339,6 +345,14 @@ def convert_frame_pixels(boxes, depth, k_color, k_depth, k_out=None,
         box_d = project_box(box, k_color, k_depth)
         sample, _region, _is_fallback = _sample_with_fallback(
             depth, box_d, p, encoding, depth_scale, class_id)
+
+        if sample.distance is None:
+            # ★ `continue`가 **없는** 것이 `convert_frame`과의 차이입니다.
+            #   불명도 발행하는 게 계약이므로 아래로 계속 내려가 entry가 되고,
+            #   여기서는 사유만 진단에 남깁니다. 이 두 줄이 없으면 노드의
+            #   `_reasons`가 영원히 비어 로그의 "제외:" 절이 통째로 사라집니다
+            #   (`min_score` 기본 0.0이라 `low_score`도 발생 불가능).
+            dropped.append(Dropped(class_id, score, sample.reason))
 
         u, v = box_center(box)
         if k_out is not None:

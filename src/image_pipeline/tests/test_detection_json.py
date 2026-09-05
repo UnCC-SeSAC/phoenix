@@ -366,6 +366,45 @@ class TestHeartbeatPayload:
         assert isinstance(hb["counters"]["published"], int)
 
 
+class TestUnknownReasonCounters:
+    """★ 노드가 `unknown_depth`의 **사유**를 status로 실어 보냅니다 (2026-09-05).
+
+    `unknown_depth`는 "몇 건"만 말합니다. 대응이 갈리므로 **왜**가 필요합니다:
+
+      no_valid_pixels   띠가 통째로 무효 -> 띠 위치(`band_offset`)를 옮겨야 함
+      low_valid_ratio   픽셀은 있는데 비율 미달 -> `min_valid_ratio` 문제
+      box_outside_image 띠가 화면 밖 -> 화각/카메라 각도 문제
+
+    노드는 `reason_` 접두사로 **평평하게** 실어 보냅니다. 아래 테스트가
+    그 선택의 이유(중첩 dict는 애초에 담기지 않음)를 못 박습니다.
+    """
+
+    def test_사유별_카운터가_실린다(self):
+        hb = build_heartbeat(1, 0, STATE_OK,
+                             counters={"unknown_depth": 150,
+                                       "reason_no_valid_pixels": 142,
+                                       "reason_low_valid_ratio": 8})
+        back = json.loads(to_json(hb))
+        assert back["counters"]["reason_no_valid_pixels"] == 142
+        # 합이 unknown_depth와 맞아야 받는 쪽이 누락을 알아챌 수 있습니다
+        assert (back["counters"]["reason_no_valid_pixels"]
+                + back["counters"]["reason_low_valid_ratio"]
+                == back["counters"]["unknown_depth"])
+
+    def test_중첩_dict는_담기지_않는다(self):
+        """★ 노드가 평평하게 펴는 이유. 중첩을 넣으면 하트비트 타이머가
+        매번 터져 status가 통째로 끊깁니다 — 조용히 틀리는 게 아니라
+        시끄럽게 죽지만, 죽는 위치가 진단 코드라 더 나쁩니다."""
+        with pytest.raises(TypeError):
+            build_heartbeat(1, 0, STATE_OK,
+                            counters={"reasons": {"no_valid_pixels": 3}})
+
+    def test_사유가_없으면_키도_없다(self):
+        """정상 동작 중에는 카운터가 늘지 않아야 합니다."""
+        hb = build_heartbeat(1, 0, STATE_OK, counters={"unknown_depth": 0})
+        assert [k for k in hb["counters"] if k.startswith("reason_")] == []
+
+
 class TestStampAge:
     def test_age_across_second_boundary(self):
         age = stamp_age_sec((11, 100000000), (10, 900000000))
