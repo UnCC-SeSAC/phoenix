@@ -69,8 +69,8 @@ class MissionExecutor(Node):
         # 사람/불 중심은 keepout lethal cell 이므로 그 바깥의 접근점을
         # Nav2 목표로 사용한다.
         self.declare_parameter("person_approach_distance", 0.50)
-        self.declare_parameter("fire_approach_distance", 0.35)
-        self.declare_parameter("approach_clearance_radius", 0.20)
+        self.declare_parameter("fire_approach_distance", 0.25)
+        self.declare_parameter("approach_clearance_radius", 0.15)
         self.declare_parameter("costmap_occupied_threshold", 90)
 
         # 사람/불 NavigateToPose 전용 회전 진동 recovery. frontier goal의
