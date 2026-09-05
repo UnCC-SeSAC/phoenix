@@ -33,10 +33,8 @@ from interfaces.srv import SetString
 from .state_manager import StateManager
 from .log_utils import make_event_logger
 from .mission_navigation_safety import (
-    approach_candidates,
     forward_corridor_is_clear,
     front_scan_is_clear,
-    occupancy_disk_is_clear,
 )
 
 from frontier_exploration_ros2.srv import ControlExploration
@@ -66,11 +64,9 @@ class MissionExecutor(Node):
         # 포기하고 재시도한다 — fire_keepout_node 가 안 떠 있는 경우 대비.
         self.declare_parameter("keepout_suppress_confirm_timeout", 2.0)
 
-        # 사람/불 중심은 keepout lethal cell 이므로 그 바깥의 접근점을
-        # Nav2 목표로 사용한다.
-        self.declare_parameter("person_approach_distance", 0.25)
-        self.declare_parameter("fire_approach_distance", 0.15)
-        self.declare_parameter("approach_clearance_radius", 0.02)
+        # 사람/불 좌표를 그대로 Nav2 목표로 보낸다 — keepout(lethal) +
+        # costmap inflation이 로봇을 물리적으로 막아 세우므로 실제 정지
+        # 거리는 그 경계에서 자연스럽게 결정된다.
         self.declare_parameter("costmap_occupied_threshold", 90)
 
         # 사람/불 NavigateToPose 전용 회전 진동 recovery. frontier goal의
@@ -94,9 +90,6 @@ class MissionExecutor(Node):
         self.declare_parameter(
             "mission_recovery_local_costmap_topic", "/local_costmap/costmap"
         )
-        self.declare_parameter(
-            "mission_approach_global_costmap_topic", "/global_costmap/costmap"
-        )
 
         self.map_frame = self.get_parameter("map_frame").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -112,15 +105,6 @@ class MissionExecutor(Node):
         self.keepout_suppress_confirm_timeout = (
             self.get_parameter("keepout_suppress_confirm_timeout").value
         )
-        self.person_approach_distance = self.get_parameter(
-            "person_approach_distance"
-        ).value
-        self.fire_approach_distance = self.get_parameter(
-            "fire_approach_distance"
-        ).value
-        self.approach_clearance_radius = self.get_parameter(
-            "approach_clearance_radius"
-        ).value
         self.costmap_occupied_threshold = self.get_parameter(
             "costmap_occupied_threshold"
         ).value
@@ -237,7 +221,6 @@ class MissionExecutor(Node):
         self._latest_scan_at_ns = None
         self._latest_local_costmap = None
         self._latest_local_costmap_at_ns = None
-        self._latest_global_costmap = None
 
         # -----------------------------
         # 진압 동작 (fire_suppression_node)
@@ -305,12 +288,6 @@ class MissionExecutor(Node):
             OccupancyGrid,
             self.get_parameter("mission_recovery_local_costmap_topic").value,
             self._mission_local_costmap_callback,
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            OccupancyGrid,
-            self.get_parameter("mission_approach_global_costmap_topic").value,
-            self._mission_global_costmap_callback,
             qos_profile_sensor_data,
         )
 
@@ -405,9 +382,6 @@ class MissionExecutor(Node):
     def _mission_local_costmap_callback(self, msg):
         self._latest_local_costmap = msg
         self._latest_local_costmap_at_ns = self.get_clock().now().nanoseconds
-
-    def _mission_global_costmap_callback(self, msg):
-        self._latest_global_costmap = msg
 
     def _keepout_circles_callback(self, msg):
 
@@ -629,41 +603,11 @@ class MissionExecutor(Node):
     # Nav2 목적지 전달 (fire/person 접근)
     # =========================================================
 
-    def _approach_distance_for_state(self):
-        if self.state == StateManager.PERSON_DETECTED:
-            return self.person_approach_distance
-        return self.fire_approach_distance
-
-    def _outside_all_keepouts(self, x, y):
-        for keepout_x, keepout_y, radius in self._keepout_circles:
-            if math.hypot(x - keepout_x, y - keepout_y) < (
-                radius + self.approach_clearance_radius
-            ):
-                return False
-        return True
-
-    def _global_costmap_point_is_clear(self, x, y):
-        grid = self._latest_global_costmap
-        if grid is None:
-            # keepout circles는 별도로 검사한다. costmap 첫 수신 전에도
-            # mission 전체를 멈추지는 않고 Nav2의 planner 검사를 맡긴다.
-            return True
-
-        return occupancy_disk_is_clear(
-            grid.data,
-            grid.info.width,
-            grid.info.height,
-            grid.info.resolution,
-            grid.info.origin.position.x,
-            grid.info.origin.position.y,
-            x,
-            y,
-            self.approach_clearance_radius,
-            self.costmap_occupied_threshold,
-            True,
-        )
-
     def _make_approach_goal(self, target):
+        """사람/불 좌표를 그대로 Nav2 목표로 보낸다. keepout(lethal) +
+        costmap inflation이 로봇을 물리적으로 막아 세우므로, 실제
+        정지 거리는 그 경계에서 자연스럽게 결정된다 (더 이상 접근
+        거리를 직접 계산하지 않음)."""
         pose = self._robot_pose_yaw()
         if pose is None:
             self.get_logger().warn(
@@ -675,42 +619,13 @@ class MissionExecutor(Node):
         robot_x, robot_y, _ = pose
         target_x = target.pose.position.x
         target_y = target.pose.position.y
-        distance = self._approach_distance_for_state()
-
-        target_circle = self._find_keepout_circle(target_x, target_y)
-        if target_circle is not None:
-            distance = max(
-                distance,
-                target_circle[2] + self.approach_clearance_radius + 0.05,
-            )
-
-        selected = None
-        for candidate_x, candidate_y in approach_candidates(
-            robot_x, robot_y, target_x, target_y, distance
-        ):
-            if not self._outside_all_keepouts(candidate_x, candidate_y):
-                continue
-            if not self._global_costmap_point_is_clear(candidate_x, candidate_y):
-                continue
-            selected = (candidate_x, candidate_y)
-            break
-
-        if selected is None:
-            self.get_logger().warn(
-                f"사람/불 ({target_x:.2f}, {target_y:.2f}) 주변에서 "
-                "keepout 바깥의 안전한 접근 목표를 찾지 못함",
-                throttle_duration_sec=2.0,
-            )
-            return None
-
-        candidate_x, candidate_y = selected
-        face_yaw = math.atan2(target_y - candidate_y, target_x - candidate_x)
+        face_yaw = math.atan2(target_y - robot_y, target_x - robot_x)
 
         goal = PoseStamped()
         goal.header.frame_id = target.header.frame_id or self.map_frame
         goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = candidate_x
-        goal.pose.position.y = candidate_y
+        goal.pose.position.x = target_x
+        goal.pose.position.y = target_y
         goal.pose.position.z = target.pose.position.z
         goal.pose.orientation.z = math.sin(face_yaw * 0.5)
         goal.pose.orientation.w = math.cos(face_yaw * 0.5)
