@@ -182,6 +182,23 @@ def generate_launch_description():
                     'color_info_topic': '/image_enhanced/camera_info',
                     'rgb0_info_topic': f'{ASCAMERA}/rgb0/camera_info',
                     'output_topic': '/fire/detections',
+                    # ★ 한 점 모드 (2026-09-06). fire 는 박스 아랫변 중간에서
+                    #   1px 아래 픽셀 **하나**의 뎁스를 그대로 씁니다.
+                    #   띠(band_offset/band_ratio)·유효비율·z범위·폴백을 전부
+                    #   건너뜁니다 — 그 픽셀이 0(스테레오 구멍)일 때만 null.
+                    #
+                    #   왜: 예전 띠 방식(band_offset=3.5)은 띠 위치를 **박스
+                    #   높이의 배수**로 잡는데, 데이터셋이 캔들 받침대까지
+                    #   검출하도록 바뀌면서 박스가 커져 띠가 화면 밖으로
+                    #   나갔습니다(reason=box_outside_image). 받침대가 박스에
+                    #   들어온 지금은 박스 아랫변이 곧 접지점이라 한 점으로
+                    #   충분합니다.
+                    #
+                    #   노드 기본값과 같지만 **명시해 둡니다** — 실주행 런치가
+                    #   노드 기본값 변경에 조용히 끌려가면 안 됩니다.
+                    'point_below': True,
+                    'point_gap': 1.0,      # 화염 IR 영향이 보이면 3~5로
+                    'region_by_class': 'fire:below,person:bottom',
                 }],
             ),
             Node(

@@ -37,6 +37,8 @@ from image_pipeline.depth import (  # noqa: E402
     backproject,
     box_center,
     box_from_center,
+    point_below_box,
+    sample_point,
     clip_box,
     depth_unit_sanity,
     fill_holes,
@@ -1179,3 +1181,49 @@ class TestParseCascade:
         """★ 콜백 안에서 터지면 '검출이 조용히 사라지는' 형태로 보입니다."""
         with pytest.raises(ValueError):
             parse_cascade(bad)
+
+
+class TestSamplePoint:
+    """한 점 모드 — 영역·통계·문턱을 전부 건너뜁니다.
+
+    이 모드의 존재 이유는 실기에서 `below` 띠가 계속 null을 냈기 때문입니다
+    (2026-09-06). 그래서 여기 테스트는 "값이 맞는가"보다 **"문턱이 정말 다
+    빠졌는가"**를 봅니다 — 하나라도 남아 있으면 도입한 의미가 없습니다.
+    """
+
+    def test_point_is_middle_just_below_the_box(self):
+        assert point_below_box((300.0, 200.0, 340.0, 260.0), gap=1.0) == (320.0, 261.0)
+
+    def test_returns_that_exact_pixel(self):
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        depth[261, 320] = 1234
+        assert sample_point(depth, 320, 261).distance == pytest.approx(1.234)
+
+    def test_min_valid_ratio_does_not_apply(self):
+        """주변이 전부 구멍이어도 그 한 칸이 살아 있으면 값이 나옵니다."""
+        depth = np.zeros((480, 640), dtype=np.uint16)
+        depth[261, 320] = 1800
+        s = sample_point(depth, 320, 261)
+        assert s.distance == pytest.approx(1.8) and s.reason == "ok"
+
+    def test_z_range_does_not_apply(self):
+        """★ 스펙(0.2~4.0m) 밖도 그대로 냅니다 — '조건 없이'가 요구사항입니다."""
+        depth = np.full((480, 640), 7000, dtype=np.uint16)
+        assert sample_point(depth, 320, 261).distance == pytest.approx(7.0)
+
+    def test_zero_pixel_is_none_not_zero(self):
+        """★ 이것만은 못 뺍니다. depth 0은 0m가 아니라 **측정 실패**입니다 —
+        0.0으로 내보내면 메인이 로봇 발밑을 화재 지점으로 계산합니다."""
+        depth = np.zeros((480, 640), dtype=np.uint16)
+        s = sample_point(depth, 320, 261)
+        assert s.distance is None and s.reason == "no_valid_pixels"
+
+    def test_point_off_image_is_none(self):
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        assert sample_point(depth, 320, 480).distance is None
+
+    def test_region_is_below_so_status_stays_surrogate(self):
+        """★ 대상이 아니라 **바닥**을 잰 값입니다. 표식이 사라지면 메인과
+        물총이 대상 거리로 착각합니다."""
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        assert sample_point(depth, 320, 261).region == "below"
