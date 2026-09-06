@@ -165,6 +165,7 @@
       <span id="phmAge" class="meta">-</span>
     </h2>
     <div class="phm-grid" id="phmAxes"></div>
+    <p id="phmIsolation" class="phm-note" hidden></p>
     <p id="phmBlocked" class="phm-note" hidden></p>
     <p id="phmLimit" class="phm-note" hidden></p>
     <div class="phm-host">
@@ -436,6 +437,12 @@ configureMode();
 //      안 잡는 고장(슬립)까지 없다고 말하는 셈입니다.
 //   3) stale / 축별 fresh 를 흐리게 표시합니다. 끊긴 값이 정상으로 보이면 안 됩니다.
 const PHM_HEALTH={OK:['ok','NOMINAL'],ALARM:['bad','ALARM'],UNKNOWN:['muted','UNKNOWN']};
+// 절대형(측정이 0 에 붙음)과 상대형(지령만큼 못 따라감)이 둘 다 뜨면 들림,
+// 상대형만 뜨면 견인력 상실입니다. 실측으로 확인된 구분입니다.
+const LIMIT_HINT={
+  '들림 계열':'바퀴가 떠 있거나 거치대 위입니다. 기구·거치를 보세요.',
+  '견인력 상실 계열':'지령만큼 안 나갑니다. 노면·타이어·적재를 보세요.',
+};
 
 function phmAxisCard(axis){
   const alarm=Boolean(axis.alarm), stale=axis.fresh===false;
@@ -497,6 +504,14 @@ function renderPhm(data){
     empty.textContent='축 데이터 없음';
     host.append(empty);
   }
+
+  // 절대형과 상대형이 서로 다른 고장을 가립니다. 어느 쪽이 떴는지가 곧 원인 힌트라
+  // 로봇이 판단해서 보내고(isolation_hint) 화면은 그대로 씁니다.
+  const iso=$('phmIsolation');
+  iso.hidden=!data.isolation_hint;
+  iso.textContent=data.isolation_hint
+    ? `추정 원인: ${data.isolation_hint} — ${LIMIT_HINT[data.isolation_hint]||''}`
+    : '';
 
   const blocked=$('phmBlocked');
   blocked.hidden=!data.blocked_reason;

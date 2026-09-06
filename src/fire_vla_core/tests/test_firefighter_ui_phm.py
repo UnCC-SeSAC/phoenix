@@ -34,7 +34,8 @@ def sample_payload(health="OK", alarms=None):
         "timestamp": "2026-09-04T12:00:00",
         "health": health,
         "alarms": alarms or [],
-        "not_detected": ["SLIP"],
+        "not_detected": [],
+        "isolation_hint": None,
         "axes": {
             "yaw": {"axis": "yaw", "residual": 0.08, "threshold": 0.35,
                     "ratio": 0.0, "alarm": False, "events": 0,
@@ -108,8 +109,6 @@ def test_alarm_payload_survives_round_trip(phm_server):
     data = get_phm(server)
     assert data["health"] == "ALARM"
     assert data["alarms"] == alarms
-    # 이 검출기가 못 잡는 것을 화면이 알아야 'ALL CLEAR' 라고 안 씁니다.
-    assert data["not_detected"] == ["SLIP"]
 
 
 def test_stale_status_is_not_reported_as_ok(phm_server):
@@ -160,7 +159,7 @@ def test_index_html_serves_phm_panel(phm_server):
     page = body.decode("utf-8")
     assert "Robot Health (PHM)" in page
     for element_id in ("phmHealth", "phmAge", "phmAxes", "phmBlocked",
-                       "phmLimit", "phmHostGrid", "phmFlags"):
+                       "phmLimit", "phmHostGrid", "phmFlags", "phmIsolation"):
         assert f'id="{element_id}"' in page, f"{element_id} 가 없습니다"
     # 모드 전환과 무관한 상시 패널이어야 합니다 — /api/status 가 아니라 /api/phm.
     assert "fetch('/api/phm'" in page
@@ -213,3 +212,20 @@ def test_host_metrics_survive_round_trip(phm_server):
     for key in ("cpu_used_pct", "loadavg_1m", "thermal_c", "cpu_mhz",
                 "freq_ratio", "mem_used_pct", "mem_avail_mb"):
         assert key in host, f"{key} 가 빠졌습니다"
+
+
+def test_isolation_hint_round_trip(phm_server):
+    """절대형/상대형 중 어느 쪽이 떴는지가 곧 원인 힌트입니다.
+
+    판단은 로봇(phm_monitor)이 하고 UI 는 실어 나르기만 합니다 — 규칙이 바뀌어도
+    UI 코드는 안 바뀝니다.
+    """
+    server, phm = phm_server
+    payload = sample_payload(health="ALARM", alarms=[
+        {"name": "TRACKING_DEFICIT", "axis": "fwd_rel",
+         "residual": 0.42, "threshold": 0.15}])
+    payload["isolation_hint"] = "견인력 상실 계열"
+    phm.update(payload)
+    data = get_phm(server)
+    assert data["isolation_hint"] == "견인력 상실 계열"
+    assert data["alarms"][0]["name"] == "TRACKING_DEFICIT"

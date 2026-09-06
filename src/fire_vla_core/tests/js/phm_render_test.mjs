@@ -64,7 +64,7 @@ const check = (name, cond, detail='') => {
 const base = (over={}) => ({
   schema_version:1, mode:'PHM', health:'OK', alarms:[], not_detected:['SLIP'],
   available:true, stale:false, age_sec:0.4, battery_mv:7826, battery_low_mv:7000,
-  host_warnings:[],
+  host_warnings:[], isolation_hint:null, not_detected:[],
   host:{cpu_used_pct:14.0, thermal_c:{'thermal_zone0:cpu-thermal':52.6},
         loadavg_1m:0.82, cpu_mhz:1500, cpu_mhz_max:1800, freq_ratio:0.83,
         mem_used_pct:41.0, mem_avail_mb:2380},
@@ -82,7 +82,8 @@ renderPhm(base());
 check('health 배지 NOMINAL', els.phmHealth.textContent==='NOMINAL', els.phmHealth.textContent);
 check('배지 색 ok', els.phmHealth.className.includes('ok'), els.phmHealth.className);
 check('축 카드 2개', els.phmAxes.childElementCount===2);
-check('★ 경보 없어도 not_detected 노출', !els.phmLimit.hidden && els.phmLimit.textContent.includes('SLIP'));
+check('not_detected 비면 숨김', els.phmLimit.hidden);
+check('경보 없으면 원인 힌트도 숨김', els.phmIsolation.hidden);
 const stats = () => els.phmHostGrid.children.map(c => c.textContent);
 check('파이 상태 카드 6개', els.phmHostGrid.childElementCount===6, els.phmHostGrid.childElementCount);
 check('배터리 V 변환', stats().some(t=>t.includes('7.83 V')), stats()[0]);
@@ -102,6 +103,26 @@ const fwdCard = els.phmAxes.children.find(c=>c.textContent.includes('전진속�
 check('경보 축 카드에 alarm 클래스', fwdCard && fwdCard.className.includes('alarm'), fwdCard && fwdCard.className);
 const yawCard = els.phmAxes.children.find(c=>c.textContent.includes('요레이트'));
 check('정상 축은 alarm 아님', yawCard && !yawCard.className.includes('alarm'));
+
+console.log('[2c] 고장 구분 힌트 — 절대형+상대형 조합');
+renderPhm(base({health:'ALARM', isolation_hint:'견인력 상실 계열',
+  alarms:[{name:'TRACKING_DEFICIT',axis:'fwd_rel',residual:0.42,threshold:0.15}],
+  axes:{...base().axes,
+    fwd_rel:{residual:0.42, threshold:0.15, ratio:0.35, alarm:true, evaluated:46,
+             fresh:true, age_sec:0.1, unit:'ratio', label:'전진속도 (추종률)',
+             meas:'rf2o', relative:true}}}));
+check('★ 상대형만 뜨면 견인력 상실', !els.phmIsolation.hidden
+      && els.phmIsolation.textContent.includes('견인력 상실'));
+check('조치 안내 포함', els.phmIsolation.textContent.includes('노면'));
+check('축 카드 3개', els.phmAxes.childElementCount===3, els.phmAxes.childElementCount);
+const relCard = els.phmAxes.children.find(c=>c.textContent.includes('추종률'));
+check('상대형 축이 alarm', relCard?.className.includes('alarm'));
+
+renderPhm(base({health:'ALARM', isolation_hint:'들림 계열',
+  alarms:[{name:'LIFT_SUSPECTED',axis:'fwd',residual:0.19,threshold:0.15},
+          {name:'TRACKING_DEFICIT',axis:'fwd_rel',residual:1.0,threshold:0.15}]}));
+check('★ 둘 다 뜨면 들림', els.phmIsolation.textContent.includes('들림 계열'));
+check('들림 조치 안내', els.phmIsolation.textContent.includes('거치'));
 
 console.log('[2b] 파이 경고 — 배터리/저전압');
 renderPhmHost_case();
@@ -143,6 +164,7 @@ check('축 없음 안내', els.phmAxes.textContent.includes('축 데이터 없�
 check('파이 상태는 값 없이도 카드를 그림', els.phmHostGrid.childElementCount===6);
 check('age 표시 안 함', els.phmAge.textContent==='-', els.phmAge.textContent);
 check('not_detected 없으면 숨김', els.phmLimit.hidden);
+check('힌트 없으면 숨김', els.phmIsolation.hidden);
 
 console.log(failed ? `\n실패 ${failed}건` : '\n전부 통과');
 process.exit(failed ? 1 : 0);

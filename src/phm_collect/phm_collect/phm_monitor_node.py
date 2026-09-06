@@ -59,8 +59,7 @@ try:
 except ImportError:                      # 파이가 아닌 곳에서 돌릴 때
     hostm = None
 
-SCHEMA_VERSION = 1
-ALARM_NAME = "LIFT_SUSPECTED"            # 18.4 — 슬립은 이 검출기로 안 잡힙니다
+SCHEMA_VERSION = 2               # 26절: 상대형 검출기 추가로 axes 키가 늘었습니다
 
 
 def _sensor_qos(depth=50):
@@ -93,7 +92,15 @@ class PhmMonitor(Node):
         # 지령 보관은 축끼리 **공유**합니다. 축마다 따로 두면 같은 지령을 두 벌
         # 저장하게 되고, 클램프가 한쪽에만 걸리는 사고가 납니다.
         self.hold = core.CmdHold()
+        # 검출기 세 개. 절대형 둘 + 상대형 하나입니다.
+        #   절대형   측정이 0 에 붙는 고장(들림)에 강합니다. 빠릅니다(0.3초).
+        #   상대형   지령 대비 못 따라가는 모든 경우. **슬립을 잡는 유일한 길**(18.4).
+        # 둘의 조합이 고장 구분이 됩니다 — core.ALARM_ABS/ALARM_REL 주석의 표 참고.
         self.mons = {a: core.AxisMonitor(a, hold=self.hold) for a in ("yaw", "fwd")}
+        for a, rule in core.RULES_REL.items():
+            self.mons[f"{a}_rel"] = core.AxisMonitor(
+                a, rule=rule, hold=self.hold, relative=True,
+                steady_sec=rule.get("steady_sec"))
 
         self.cmd_counts: dict[str, int] = {}
         self.last_seen: dict[str, float] = {}
@@ -116,8 +123,8 @@ class PhmMonitor(Node):
             self.tick_host()
 
         self.get_logger().info(
-            f"phm_monitor 시작 — 규칙 {core.RULES}  경보명 {ALARM_NAME} "
-            f"(슬립은 검출되지 않습니다)")
+            f"phm_monitor 시작 — 검출기 {list(self.mons)}  "
+            f"절대형={core.ALARM_ABS} 상대형={core.ALARM_REL}")
 
     # ---- 구독 ----
     def on_cmd(self, msg: Twist, topic: str):
@@ -127,17 +134,22 @@ class PhmMonitor(Node):
         # 토픽을 보고 알아서 자릅니다 — 여기서 자르면 안 됩니다.
         self.hold.push(self._stamp(msg), msg.linear.x, msg.angular.z, topic)
 
+    def _feed(self, axis, t, value):
+        """같은 실측을 그 축의 검출기 전부에 먹입니다(절대형·상대형)."""
+        for key, mon in self.mons.items():
+            if mon.axis == axis:
+                mon.push_meas(t, value)
+
     def on_imu(self, msg: Imu):
         self.last_seen["imu"] = time.time()
-        self.mons["yaw"].push_meas(self._stamp(msg, msg.header),
-                                   msg.angular_velocity.z)
+        self._feed("yaw", self._stamp(msg, msg.header), msg.angular_velocity.z)
 
     def on_rf2o(self, msg: Odometry):
         self.last_seen["rf2o"] = time.time()
         # 부호 반전은 코어가 압니다 — 라이다가 180도 돌아 장착돼 있어서
         # rf2o 가 전진할 때 vx 를 음수로 냅니다.
         v = core.AXES["fwd"].get("sign", 1.0) * msg.twist.twist.linear.x
-        self.mons["fwd"].push_meas(self._stamp(msg, msg.header), v)
+        self._feed("fwd", self._stamp(msg, msg.header), v)
 
     def on_battery(self, msg: UInt16):
         self.last_seen["battery"] = time.time()
@@ -198,18 +210,23 @@ class PhmMonitor(Node):
         alarms = []
         for name, mon in self.mons.items():
             st = mon.state()
-            ax = core.AXES[name]
-            st.update(unit=ax["unit"], label=ax["label"], meas=ax["meas"])
+            ax = core.AXES[mon.axis]
+            rel = mon.relative
+            st.update(unit="ratio" if rel else ax["unit"],
+                      label=ax["label"] + (" (추종률)" if rel else ""),
+                      meas=ax["meas"], relative=rel)
             # 실측 토픽이 끊기면 잔차가 '마지막 값' 으로 굳습니다. 조용히 굳은 값을
             # 정상으로 보여주면 안 되므로 신선도를 같이 냅니다.
-            key = "imu" if name == "yaw" else "rf2o"
+            key = "imu" if mon.axis == "yaw" else "rf2o"
             age = now - self.last_seen[key] if key in self.last_seen else None
             st["fresh"] = age is not None and age <= stale
             st["age_sec"] = round(age, 2) if age is not None else None
             axes[name] = st
             if st["alarm"] and st["fresh"]:
-                alarms.append({"name": ALARM_NAME, "axis": name,
-                               "residual": st["residual"], "threshold": st["threshold"]})
+                alarms.append({"name": core.ALARM_REL if rel else core.ALARM_ABS,
+                               "axis": name,
+                               "residual": st["residual"],
+                               "threshold": st["threshold"]})
 
         blocked = None
         if not self.cmd_counts:
@@ -244,9 +261,16 @@ class PhmMonitor(Node):
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)),
             "health": "ALARM" if alarms else ("UNKNOWN" if blocked else "OK"),
             "alarms": alarms,
-            # ★ 이 검출기가 못 잡는 것을 화면이 알 수 있게 같이 실어 보냅니다.
-            #    받는 쪽이 'ALL CLEAR' 라고 쓰지 않게 하려는 것입니다.
-            "not_detected": ["SLIP"],
+            # ★ 검출기가 못 보는 축을 화면이 알 수 있게 실어 보냅니다.
+            #    26절에서 상대형이 들어와 슬립은 잡히게 됐지만, 그 앞뒤로 이 목록이
+            #    비었다고 '이상 없음' 이 되는 것은 아닙니다 — 여기 없는 고장(모터 단선,
+            #    기어 마모 등)은 애초에 이 검출기의 대상이 아닙니다.
+            "not_detected": [],
+            # 두 규칙의 조합이 곧 고장 구분입니다(core.ALARM_ABS 주석의 표).
+            "isolation_hint": (
+                "들림 계열" if any(a["name"] == core.ALARM_ABS for a in alarms)
+                else ("견인력 상실 계열"
+                      if any(a["name"] == core.ALARM_REL for a in alarms) else None)),
             "axes": axes,
             "cmd_source": self._cmd_src(),
             "battery_mv": self.battery_mv,
@@ -257,6 +281,7 @@ class PhmMonitor(Node):
             "host": self._host,
             "blocked_reason": blocked,
             "rules": {k: dict(v) for k, v in core.RULES.items()},
+            "rules_rel": {f"{k}_rel": dict(v) for k, v in core.RULES_REL.items()},
         }
         m = String()
         m.data = json.dumps(payload, ensure_ascii=False, allow_nan=False)
