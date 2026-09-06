@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- firefighter_ui_node 가 ui_default_mode 파라미터로 이 값을 치환해 서빙합니다. -->
+  <meta name="phoenix-default-mode" content="__DEFAULT_MODE__">
+  <title>Phoenix Fire Response Control Center</title>
+  <style>
+    :root {
+      color-scheme:dark; --bg:#080d14; --panel:#111a26; --panel2:#0c141f;
+      --line:#26374a; --text:#f3f7fb; --muted:#91a1b4; --accent:#f06436;
+      --amber:#fbbf24; --ok:#4ade80; --bad:#fb7185; --cyan:#38bdf8;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 25% -10%,#17283b 0,transparent 38%),var(--bg); color:var(--text); font:14px/1.45 system-ui,sans-serif; }
+    header { height:68px; padding:0 24px; border-bottom:1px solid var(--line); background:#0a111bcc; display:flex; align-items:center; justify-content:space-between; }
+    .header-tools { display:flex; align-items:center; gap:18px; }
+    .mode-picker { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+    select { min-height:36px; padding:0 10px; border:1px solid var(--line); border-radius:5px; background:#080f18; color:var(--text); font:inherit; }
+    h1 { margin:0; font-size:18px; letter-spacing:.13em; }
+    h2 { margin:0 0 14px; color:#aab8c8; font-size:11px; letter-spacing:.16em; text-transform:uppercase; }
+    main { max-width:1440px; margin:auto; padding:16px; display:grid; grid-template-columns:1.15fr .85fr; gap:14px; }
+    .panel { min-width:0; padding:18px; border:1px solid var(--line); border-radius:8px; background:linear-gradient(145deg,var(--panel),var(--panel2)); box-shadow:0 12px 30px #0003; }
+    .wide { grid-column:1/-1; }
+    .status { display:inline-flex; align-items:center; gap:8px; font-weight:800; letter-spacing:.06em; }
+    .status::before { content:""; width:8px; height:8px; border-radius:50%; background:currentColor; box-shadow:0 0 12px currentColor; }
+    .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--amber); } .muted { color:var(--muted); }
+    .meta { color:var(--muted); font-size:12px; margin-left:16px; }
+    /* ★ aspect-ratio를 프레임 크기로 맞춰야 레터박스가 안 생기고, 그래야
+       퍼센트로 얹은 박스가 영상과 정확히 겹칩니다. JS가 실측값으로 갱신합니다. */
+    .vision-frame { position:relative; width:100%; aspect-ratio:4/3; overflow:hidden; display:grid; place-items:center; border:1px solid #33475c; border-radius:6px; background:linear-gradient(#07111bbb,#07111bbb),repeating-linear-gradient(0deg,transparent 0 39px,#22364a55 40px),repeating-linear-gradient(90deg,transparent 0 39px,#22364a55 40px); }
+    #visionStream { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; z-index:1; background:#050c14; }
+    #visionBoxes { position:absolute; inset:0; z-index:2; pointer-events:none; }
+    .vbox { position:absolute; border:2px solid currentColor; box-shadow:0 0 0 1px #0009; }
+    .vbox b { position:absolute; left:-2px; top:-17px; padding:1px 5px; background:#07111be6; font:800 10px/1.5 monospace; white-space:nowrap; }
+    .vision-copy { z-index:3; text-align:center; } .vision-copy strong { display:block; font-size:19px; letter-spacing:.08em; }
+    .vision-copy span { color:var(--muted); }
+    .vision-stat { position:absolute; left:10px; bottom:8px; z-index:3; color:var(--muted); font:700 11px/1 monospace; }
+    form,.rule-controls { display:flex; gap:8px; }
+    [hidden] { display:none !important; }
+    input,button { min-height:42px; border-radius:5px; border:1px solid var(--line); font:inherit; }
+    input { flex:1; min-width:0; padding:0 12px; background:#080f18; color:var(--text); }
+    button { padding:0 20px; background:var(--accent); border-color:var(--accent); color:white; font-weight:800; cursor:pointer; }
+    .mission-note { min-height:20px; margin:8px 0 18px; color:var(--muted); font-size:12px; }
+    .status-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .metric { padding:13px; border:1px solid var(--line); background:#09111b99; }
+    .label { color:var(--muted); font-size:10px; letter-spacing:.12em; text-transform:uppercase; }
+    .primary { margin:5px 0 0; font-size:22px; font-weight:850; overflow-wrap:anywhere; }
+    .secondary { margin:4px 0 0; color:var(--muted); overflow-wrap:anywhere; }
+    .reason { min-height:64px; margin-top:10px; padding:12px; border-left:3px solid var(--cyan); background:#07121d; color:#d8e9f7; white-space:pre-wrap; }
+    .chips { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+    .chip { padding:4px 7px; border:1px solid var(--line); color:var(--muted); font-size:11px; }
+    .map-frame { position:relative; height:300px; border:1px solid #33475c; border-radius:6px; background:#08111b; overflow:hidden; }
+    /* ★ object-fit:contain 과 SVG 기본 preserveAspectRatio="xMidYMid meet"는
+       고유 종횡비가 같으면 **같은 레터박스**를 만듭니다. viewBox를 PNG 크기로
+       두는 것만으로 지도와 마커가 정확히 겹칩니다. */
+    #slamMap { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; z-index:0; }
+    #semanticMap { position:absolute; inset:0; width:100%; height:100%; z-index:1; }
+    .map-empty { position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); }
+    .legend { margin-top:9px; display:flex; gap:15px; color:var(--muted); font-size:12px; }
+    .timeline { height:338px; overflow:auto; margin:0; padding:0; list-style:none; }
+    .timeline li { position:relative; margin-left:8px; padding:0 0 16px 22px; border-left:1px solid #35506a; }
+    .timeline li::before { content:""; position:absolute; left:-5px; top:4px; width:9px; height:9px; border-radius:50%; background:var(--cyan); }
+    .timeline time { display:block; color:var(--muted); font:11px/1.5 monospace; }
+    .timeline .empty { border:0; color:var(--muted); padding-left:0; }
+    .timeline .empty::before { display:none; }
+    .bottom-grid { display:grid; grid-template-columns:1.5fr .5fr; gap:18px; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:9px 8px; text-align:left; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-size:10px; letter-spacing:.09em; text-transform:uppercase; }
+    tbody tr:last-child td { border-bottom:0; }
+    .result-box { padding:14px; border:1px solid var(--line); background:#09111b99; }
+    @media (max-width:900px) { main { grid-template-columns:1fr; } .wide { grid-column:auto; } .bottom-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>PHOENIX FIRE RESPONSE CONTROL CENTER</h1>
+  <div class="header-tools">
+    <label class="mode-picker">MODE
+      <select id="modeSelector" aria-label="Operation mode">
+        <option value="VLA">VLA Brain</option>
+        <option value="RULE_BASED">Rule-based</option>
+      </select>
+    </label>
+    <div><span id="connection" class="status bad">DISCONNECTED</span><span id="updatedAt" class="meta">status: -</span></div>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>Live Vision <button type="button" id="visionToggle">CAMERA ON</button></h2>
+    <div class="vision-frame" id="visionFrame" aria-label="Live camera stream with detection overlay">
+      <img id="visionStream" alt="Live camera stream" hidden>
+      <div id="visionBoxes"></div>
+      <div id="visionFallback" class="vision-copy"><strong>CAMERA STREAM: HW_PENDING</strong><span>/ui/camera/compressed 대기 중</span></div>
+      <span id="visionStat" class="vision-stat">DETECT -</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Mission / Robot Status</h2>
+    <form id="missionForm">
+      <input id="missionInput" aria-label="Mission" placeholder="인명을 우선 확인해." required>
+      <button type="submit">실행</button>
+    </form>
+    <div id="ruleControls" class="rule-controls" hidden>
+      <button type="button" data-rule-command="START">START</button>
+      <button type="button" data-rule-command="STOP">STOP</button>
+    </div>
+    <p id="missionResult" class="mission-note">VLA mission boundary</p>
+    <p id="currentMission" class="secondary">current mission: -</p>
+    <div class="status-grid">
+      <div class="metric"><span class="label">Robot Status</span><p id="robotState" class="primary">-</p><p id="robotPose" class="secondary">pose: -</p></div>
+      <div class="metric"><span id="actionLabel" class="label">Current Action</span><p id="actionName" class="primary">-</p><p id="actionTarget" class="secondary">target: -</p></div>
+    </div>
+    <div class="reason"><span id="decisionLabel" class="label">VLA Decision / Reason</span><div id="decisionTitle">-</div><div id="decisionReason" class="secondary">판단 근거 없음</div></div>
+    <div class="chips"><span id="validation" class="chip">VALIDATION -</span><span id="submission" class="chip">SUBMISSION -</span></div>
+  </section>
+
+  <section class="panel">
+    <h2>Semantic Map</h2>
+    <div class="map-frame"><img id="slamMap" alt="SLAM occupancy grid" hidden><svg id="semanticMap" role="img" aria-label="SLAM map and WorldModel semantic coordinates"></svg><div id="mapEmpty" class="map-empty">위치 정보 없음</div></div>
+    <div class="legend"><span id="mapMode">AUTO-FIT</span><span>R Robot</span><span>H Home</span><span>P Person</span><span>F Fire</span><span>T Target</span></div>
+  </section>
+
+  <section class="panel">
+    <h2>Situation Timeline</h2>
+    <ol id="timeline" class="timeline"><li class="empty">canonical status event를 기다리는 중입니다.</li></ol>
+  </section>
+
+  <section class="panel wide bottom-grid">
+    <div>
+      <h2>Detected Objects</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Type</th><th>Confidence</th><th>Map Position</th><th>State</th></tr></thead>
+        <tbody id="objects"><tr><td colspan="5" class="muted">발견 객체 없음</td></tr></tbody>
+      </table>
+    </div>
+    <div>
+      <h2>Recent Result</h2>
+      <div class="result-box"><p id="resultAction" class="primary">-</p><p id="resultStatus" class="secondary">status: -</p><p id="resultDetail" class="secondary">detail: -</p></div>
+    </div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const svgNS='http://www.w3.org/2000/svg';
+const DEFAULT_MODE=(()=>{const raw=document.querySelector('meta[name="phoenix-default-mode"]')?.content?.trim().toUpperCase();return raw==='RULE_BASED'?'RULE_BASED':'VLA';})();
+let activeMode=DEFAULT_MODE;
+const timelineEvents=[];
+const eventKeys=new Set();
+let lastRuleSituation=null;
+const dash=v=>(v===null||v===undefined||v==='')?'-':String(v);
+const finite=n=>Number.isFinite(Number(n));
+const validPose=p=>p&&finite(p.x)&&finite(p.y);
+const pose=p=>validPose(p)?`(${Number(p.x).toFixed(2)}, ${Number(p.y).toFixed(2)})`:'-';
+const actionName=a=>a?.action||'-';
+const actionTarget=a=>a?.target||'-';
+function setConnection(connected){const el=$('connection');el.textContent=connected?'CONNECTED':'DISCONNECTED';el.className=`status ${connected?'ok':'bad'}`;}
+function eventTime(value){const date=new Date(value);return Number.isNaN(date.valueOf())?'--:--:--':date.toLocaleTimeString('ko-KR',{hour12:false});}
+function addEvent(key,timestamp,message){if(!message||eventKeys.has(key))return;eventKeys.add(key);timelineEvents.unshift({key,timestamp,message});timelineEvents.splice(12);renderTimeline();}
+function renderTimeline(){const list=$('timeline');list.replaceChildren();if(!timelineEvents.length){const item=document.createElement('li');item.className='empty';item.textContent='canonical status event를 기다리는 중입니다.';list.append(item);return;}for(const event of timelineEvents){const item=document.createElement('li');const time=document.createElement('time');time.textContent=eventTime(event.timestamp);const text=document.createElement('span');text.textContent=event.message;item.append(time,text);list.append(item);}}
+function updateTimeline(status,world){const stamp=status.timestamp;for(const person of world.people||[])addEvent(`person:${person.id}`,person.first_seen||stamp,`${person.id} 사람이 감지됐습니다.`);for(const fire of world.fires||[])addEvent(`fire:${fire.id}`,fire.first_seen||stamp,`${fire.id} 화재가 감지됐습니다.`);const decision=status.decision||{};if(decision.action){let message=`VLA 결정: ${decision.action}${decision.target?` ${decision.target}`:''}`;if(decision.action==='NAVIGATE_TO')message=`${dash(decision.target)}로 이동을 시작합니다.`;if(decision.action==='EXTINGUISH')message=`${dash(decision.target)} 화재 진압을 시작합니다.`;addEvent(`decision:${decision.action}:${decision.target||''}:${decision.reason||''}`,stamp,message);if(decision.reason)addEvent(`reason:${decision.action}:${decision.target||''}:${decision.reason}`,stamp,`VLA 판단 근거: ${decision.reason}`);}const last=world.last_action||{};if(last.action&&last.status){const message=last.status==='SUCCEEDED'?`${last.action} ${dash(last.target)} 작업이 성공적으로 완료됐습니다.`:`${last.action} ${dash(last.target)} 결과: ${last.status}`;addEvent(`result:${last.action_id||''}:${last.status}`,stamp,message);}}
+function renderObjects(world){const body=$('objects');const people=(world.people||[]).map(x=>({...x,type:'PERSON',displayState:x.state||(x.reported?'REPORTED':'-')}));const fires=(world.fires||[]).map(x=>({...x,type:'FIRE',displayState:x.state||'-'}));const items=[...people,...fires];body.replaceChildren();if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=5;cell.className='muted';cell.textContent='발견 객체 없음';row.append(cell);body.append(row);return;}for(const item of items){const confidence=finite(item.confidence)?`${Math.round(Number(item.confidence)*100)}%`:'-';const row=document.createElement('tr');for(const value of [item.id,item.type,confidence,pose(item.position),item.displayState]){const cell=document.createElement('td');cell.textContent=dash(value);row.append(cell);}body.append(row);}}
+function svgElement(name,attrs={},text=''){const el=document.createElementNS(svgNS,name);for(const [key,value] of Object.entries(attrs))el.setAttribute(key,String(value));if(text)el.textContent=text;return el;}
+const visionState={streaming:false};
+function setVisionAvailable(available){
+  const stream=$('visionStream');
+  $('visionFallback').hidden=available;
+  stream.hidden=!available;
+  if(available){
+    // ★ src를 매번 다시 넣으면 MJPEG 연결이 그때마다 끊겼다 다시 붙습니다.
+    if(!stream.getAttribute('src'))stream.src='/api/vision/stream';
+  }else{
+    if(stream.getAttribute('src'))stream.removeAttribute('src');
+    $('visionBoxes').replaceChildren();
+    $('visionStat').textContent='DETECT -';
+  }
+}
+function renderVisionBoxes(overlay){
+  const width=Number(overlay.width),height=Number(overlay.height);
+  if(finite(width)&&finite(height)&&width>0&&height>0){
+    const ratio=`${width} / ${height}`;
+    if($('visionFrame').style.aspectRatio!==ratio)$('visionFrame').style.aspectRatio=ratio;
+  }
+  const layer=$('visionBoxes');layer.replaceChildren();
+  const boxes=overlay.boxes||[];
+  $('visionStat').textContent=`DETECT ${boxes.length}`;
+  for(const box of boxes){
+    const w=Number(box.w),h=Number(box.h),x=Number(box.cx)-w/2,y=Number(box.cy)-h/2;
+    if(!finite(x)||!finite(y)||!(w>0)||!(h>0))continue;
+    const element=document.createElement('div');
+    element.className='vbox';
+    element.style.color=String(box.class_name).startsWith('person')?'#4ade80':'#f06436';
+    element.style.left=`${x*100}%`;element.style.top=`${y*100}%`;
+    element.style.width=`${w*100}%`;element.style.height=`${h*100}%`;
+    const label=document.createElement('b');
+    label.textContent=`${dash(box.class_name)} ${finite(box.confidence)?Math.round(Number(box.confidence)*100)+'%':'-'}`;
+    element.append(label);
+    layer.append(element);
+  }
+}
+async function refreshVision(){
+  try{
+    const response=await fetch('/api/vision/detections',{cache:'no-store'});
+    if(!response.ok)throw new Error();
+    const overlay=await response.json();
+    if(!overlay.available){setVisionAvailable(false);return;}
+    // 다른 브라우저 탭/기기가 켰거나 새로고침으로 로컬 상태를 잃은
+    // 경우에도, 실제로 박스가 들어오면 버튼 라벨을 실제 상태에 맞춘다.
+    if(!visionEnabled){visionEnabled=true;updateVisionToggleLabel();}
+    setVisionAvailable(true);
+    renderVisionBoxes(overlay);
+  }catch(_error){setVisionAvailable(false);}
+}
+let lastWorld={};
+const mapState={available:false,version:0,robot:null,meta:null};
+
+function mapProject(meta){
+  const step=Number(meta.render_step)||1;
+  // ★ PNG가 step배 축소됐으므로 한 픽셀이 resolution*step 미터입니다.
+  //   step=1인 작은 지도에서는 안 드러나고 큰 지도에서만 마커가 어긋납니다.
+  const scale=Number(meta.resolution)*step;
+  const width=Number(meta.png_width),height=Number(meta.png_height);
+  const origin=meta.origin||{};
+  if(!(scale>0)||!finite(width)||!finite(height)||!validPose(origin))return null;
+  const yaw=finite(origin.yaw)?Number(origin.yaw):0;
+  const cos=Math.cos(yaw),sin=Math.sin(yaw);
+  return {width,height,project:p=>{
+    const dx=Number(p.x)-Number(origin.x),dy=Number(p.y)-Number(origin.y);
+    return {
+      x:(dx*cos+dy*sin)/scale,
+      // ★ PNG는 위->아래, grid는 아래->위. 여기서 뒤집지 않으면 마커만 상하 반전됩니다.
+      y:height-(-dx*sin+dy*cos)/scale,
+    };
+  }};
+}
+
+// 상태 문자열은 모드별로 어휘가 다릅니다 — VLA는 domain.py의 PersonState/
+// FireState(REPORTED, ACTIVE, ...), Rule-based는 state_manager의 7분류
+// (person_confirmed, fire_unvisited, ...)를 씁니다. 둘 다 키로 등록해 두면
+// 모드를 몰라도 같은 함수가 맞는 색을 고릅니다.
+const PERSON_STATE_COLOR={
+  DETECTED:'#fbbf24',person_unconfirmed:'#fbbf24',
+  REPORTED:'#4ade80',person_confirmed:'#4ade80',
+  LOST:'#64748b',person_unreachable:'#f87171',
+};
+const FIRE_STATE_COLOR={
+  ACTIVE:'#fb7185',fire_unvisited:'#fb7185',
+  PENDING_VERIFICATION:'#f59e0b',fire_failed:'#f59e0b',
+  EXTINGUISHED:'#94a3b8',fire_extinguished:'#94a3b8',
+  INACCESSIBLE:'#a855f7',fire_unreachable:'#a855f7',
+};
+
+function collectMarkers(world){
+  const current=world.current_action||{},markers=[];
+  if(validPose(world.robot?.home_pose))markers.push({kind:'H',id:'Home',position:world.robot.home_pose,color:'#a78bfa'});
+  // 로봇은 TF에서 온 live pose를 우선합니다 — 5Hz라 부드럽고 두 모드 모두에서 옵니다.
+  if(validPose(mapState.robot))markers.push({kind:'R',id:'Robot',position:mapState.robot,color:'#38bdf8',yaw:mapState.robot.yaw});
+  else if(validPose(world.robot?.pose))markers.push({kind:'R',id:'Robot',position:world.robot.pose,color:'#38bdf8'});
+  for(const item of world.people||[])if(validPose(item.position))markers.push({kind:'P',id:item.id,position:item.position,color:PERSON_STATE_COLOR[item.state]||'#4ade80',state:item.state});
+  for(const item of world.fires||[])if(validPose(item.position))markers.push({kind:'F',id:item.id,position:item.position,color:FIRE_STATE_COLOR[item.state]||'#fb7185',state:item.state});
+  if(validPose(current.target_pose))markers.push({kind:'T',id:current.target||'Target',position:current.target_pose,color:'#fbbf24',target:true});
+  return markers;
+}
+
+function autoFitFrame(markers){
+  const xs=markers.map(m=>Number(m.position.x)),ys=markers.map(m=>Number(m.position.y));
+  let minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  if(maxX-minX<1){minX-=.5;maxX+=.5;}
+  if(maxY-minY<1){minY-=.5;maxY+=.5;}
+  const padX=(maxX-minX)*.18,padY=(maxY-minY)*.18;
+  minX-=padX;maxX+=padX;minY-=padY;maxY+=padY;
+  const width=600,height=300;
+  return {width,height,grid:true,project:p=>({
+    x:28+(Number(p.x)-minX)/(maxX-minX)*(width-56),
+    y:height-24-(Number(p.y)-minY)/(maxY-minY)*(height-48),
+  })};
+}
+
+function renderMap(world){
+  lastWorld=world;
+  const svg=$('semanticMap'),empty=$('mapEmpty');
+  svg.replaceChildren();
+  const markers=collectMarkers(world);
+  const frame=mapState.available?mapProject(mapState.meta):null;
+  empty.hidden=Boolean(frame)||markers.length>0;
+  if(!frame&&!markers.length)return;
+
+  const {width,height,project,grid}=frame||autoFitFrame(markers);
+  svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
+  // 마커 크기를 viewBox에 맞춥니다. 고정값을 쓰면 SLAM 지도에서 점이 방을 덮습니다.
+  const unit=Math.max(width,height)/50;
+
+  if(grid){
+    for(let i=1;i<6;i++)svg.append(svgElement('line',{x1:i*100,y1:0,x2:i*100,y2:height,stroke:'#203449','stroke-width':1}));
+    for(let i=1;i<3;i++)svg.append(svgElement('line',{x1:0,y1:i*100,x2:width,y2:i*100,stroke:'#203449','stroke-width':1}));
+  }
+
+  const robot=markers.find(m=>m.kind==='R'),target=markers.find(m=>m.target);
+  if(robot&&target){
+    const a=project(robot.position),b=project(target.position);
+    svg.append(svgElement('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:'#fbbf24','stroke-width':unit/6,'stroke-dasharray':`${unit*.6} ${unit*.5}`}));
+  }
+  for(const marker of markers){
+    const point=project(marker.position);
+    if(marker.kind==='R'&&finite(marker.yaw)){
+      const length=unit*2,angle=Number(marker.yaw);
+      svg.append(svgElement('line',{x1:point.x,y1:point.y,
+        x2:point.x+length*Math.cos(angle),y2:point.y-length*Math.sin(angle),
+        stroke:marker.color,'stroke-width':unit/5}));
+    }
+    if(marker.kind==='F'){
+      // 불은 삼각형, 나머지는 원 — 모양으로도 사람/불을 구분해 색맹·흑백 출력에서도 갈립니다.
+      const points=`${point.x},${point.y-unit*1.15} ${point.x-unit},${point.y+unit*.85} ${point.x+unit},${point.y+unit*.85}`;
+      svg.append(svgElement('polygon',{points,fill:marker.color,stroke:marker.color,'stroke-width':unit/12,'stroke-linejoin':'round'}));
+    }else{
+      svg.append(svgElement('circle',{cx:point.x,cy:point.y,r:marker.target?unit*1.25:unit,fill:marker.target?'none':marker.color,stroke:marker.color,'stroke-width':marker.target?unit/4:unit/12}));
+    }
+    svg.append(svgElement('text',{x:point.x,y:point.y+unit*.35,'text-anchor':'middle',fill:marker.target?marker.color:'#07111b','font-size':unit*.9,'font-weight':900},marker.kind));
+    svg.append(svgElement('text',{x:point.x+unit*1.35,y:point.y-unit*1.1,fill:'#cbd9e7','font-size':unit*.8},`${marker.id}${marker.state?` [${marker.state}]`:''} ${pose(marker.position)}`));
+  }
+}
+
+async function refreshMapLayer(){
+  const slam=$('slamMap');
+  try{
+    const response=await fetch('/api/map',{cache:'no-store'});
+    if(!response.ok)throw new Error();
+    const payload=await response.json();
+    mapState.robot=validPose(payload.robot)?payload.robot:null;
+    if(payload.available){
+      mapState.available=true;mapState.meta=payload;
+      // version이 바뀔 때만 다시 받습니다. 서버가 ETag로 304를 주지만
+      // 요청 자체를 안 하는 게 LAN에서 훨씬 쌉니다.
+      if(payload.version!==mapState.version){
+        mapState.version=payload.version;
+        slam.src=`/api/map.png?v=${payload.version}`;
+      }
+      slam.hidden=false;
+    }else{
+      mapState.available=false;mapState.meta=null;mapState.version=0;
+      slam.hidden=true;slam.removeAttribute('src');
+    }
+  }catch(_error){
+    mapState.available=false;mapState.meta=null;mapState.robot=null;
+    mapState.version=0;slam.hidden=true;
+  }
+  $('mapMode').textContent=mapState.available?'SLAM MAP':'AUTO-FIT';
+  renderMap(lastWorld);
+}
+function renderVLA(status){const world=status.world_model||{},robot=world.robot||{},decision=status.decision||{},current=world.current_action||{},last=world.last_action||{},validation=status.validation||{},submission=status.submission||{};$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`current mission: ${dash(world.mission?.text)}`;$('robotState').textContent=dash(robot.navigation_status);$('robotPose').textContent=`pose: ${pose(robot.pose)}`;$('actionName').textContent=dash(current.action||decision.action);$('actionTarget').textContent=`target: ${dash(current.target||decision.target)}`;$('decisionTitle').textContent=decision.action?`${decision.action} ${dash(decision.target)}`:'-';$('decisionReason').textContent=decision.reason||'판단 근거 없음';$('validation').textContent=`VALIDATION ${validation.approved===true?'PASS':validation.approved===false?'REJECTED':'-'}`;$('submission').textContent=`SUBMISSION ${dash(submission.status)}`;$('resultAction').textContent=last.action?`${last.action} ${dash(last.target)}`:'-';$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`detail: ${dash(last.detail||last.reason)}`;renderMap(world);renderObjects(world);updateTimeline(status,world);}
+function ruleWorld(status){const mission=status.mission||{},targets=status.detections?.targets||[],people=[],fires=[];let personIndex=0,fireIndex=0;for(const target of targets){const item={position:{x:target.x,y:target.y},confidence:target.confidence,state:target.type};if(String(target.type).startsWith('person'))people.push({...item,id:`person_${String(++personIndex).padStart(4,'0')}`});if(String(target.type).startsWith('fire'))fires.push({...item,id:`fire_${String(++fireIndex).padStart(4,'0')}`});}return{robot:{navigation_status:status.robot?.navigation_status},mission:{text:mission.last_command?.command},current_action:{action:mission.state,target:mission.target_type,target_pose:mission.current_target},people,fires};}
+function renderRuleBased(status){const mission=status.mission||{},robot=status.robot||{},exploration=status.exploration||{},suppression=status.suppression||{},last=mission.last_command||{},world=ruleWorld(status);$('updatedAt').textContent=`status: ${eventTime(status.timestamp)}`;$('currentMission').textContent=`last command: ${dash(last.command)}`;$('robotState').textContent=dash(mission.state);$('robotPose').textContent=`battery: ${dash(robot.battery_raw)}`;$('actionName').textContent=dash(mission.target_type);$('actionTarget').textContent=`target: ${pose(mission.current_target)}`;$('decisionTitle').textContent=`EXPLORATION ${dash(exploration.status)}`;$('decisionReason').textContent=`Nav2: ${dash(robot.navigation_status)} · Suppression: ${dash(suppression.status)}`;$('validation').textContent=`NAV2 ${dash(robot.navigation_status)}`;$('submission').textContent=`SUPPRESSION ${dash(suppression.status)}`;$('resultAction').textContent=dash(last.command);$('resultStatus').textContent=`status: ${dash(last.status)}`;$('resultDetail').textContent=`blocked: ${dash(status.blocked_reason)}`;renderMap(world);renderObjects(world);if(mission.state!=='UNKNOWN'){const situation=`${mission.state}:${mission.target_type}`;if(situation!==lastRuleSituation){lastRuleSituation=situation;addEvent(`rule:${situation}:${status.timestamp}`,status.timestamp,`FSM ${dash(mission.state)} · target ${dash(mission.target_type)}`);}}}
+function render(status){if(activeMode==='RULE_BASED')renderRuleBased(status);else renderVLA(status);}
+function configureMode(){const rule=activeMode==='RULE_BASED';$('missionForm').hidden=rule;$('ruleControls').hidden=!rule;$('missionResult').textContent=rule?'Rule-based START/STOP boundary':'VLA mission boundary';$('actionLabel').textContent=rule?'FSM Target':'Current Action';$('decisionLabel').textContent=rule?'Exploration / Nav2 / Suppression':'VLA Decision / Reason';render(rule?{}:{world_model:{}});timelineEvents.splice(0);eventKeys.clear();lastRuleSituation=null;renderTimeline();setConnection(false);}
+async function refresh(){const requestedMode=activeMode;try{const response=await fetch(`/api/status?mode=${encodeURIComponent(requestedMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();if(requestedMode!==activeMode)return;render(status);setConnection(Boolean(status.timestamp));}catch(_error){if(requestedMode===activeMode)setConnection(false);}}
+async function submitMission(text){const requestedMode=activeMode;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:requestedMode})});const data=await response.json();if(requestedMode!==activeMode)return;$('missionResult').textContent=response.ok?`전송됨: ${data.mission_id}`:`오류: ${data.error}`;if(response.ok&&requestedMode==='VLA')$('missionInput').value='';}catch(_error){if(requestedMode===activeMode)$('missionResult').textContent='오류: mission boundary에 연결할 수 없습니다.';}}
+$('modeSelector').addEventListener('change',event=>{activeMode=event.target.value;configureMode();refresh();});
+$('missionForm').addEventListener('submit',event=>{event.preventDefault();const text=$('missionInput').value.trim();if(text&&activeMode==='VLA')submitMission(text);});
+$('visionStream').addEventListener('error',()=>setVisionAvailable(false));
+let visionEnabled=false;
+function updateVisionToggleLabel(){$('visionToggle').textContent=visionEnabled?'CAMERA OFF':'CAMERA ON';}
+updateVisionToggleLabel();
+async function toggleVision(){
+  const next=!visionEnabled;
+  $('visionToggle').disabled=true;
+  try{
+    const response=await fetch('/api/vision/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next})});
+    if(!response.ok)throw new Error();
+    visionEnabled=next;
+    if(!visionEnabled)setVisionAvailable(false);
+  }catch(_error){/* 실패 시 상태 유지 */}
+  finally{$('visionToggle').disabled=false;updateVisionToggleLabel();}
+}
+$('visionToggle').addEventListener('click',toggleVision);
+refreshVision();setInterval(refreshVision,200);refreshMapLayer();setInterval(refreshMapLayer,200);
+for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
+$('modeSelector').value=activeMode;
+configureMode();
+refresh();setInterval(refresh,1000);
+</script>
+</body>
+</html>
