@@ -1,0 +1,170 @@
+// index.html 의 PHM 렌더링을 최소 DOM 셰임 위에서 **실제로 실행**합니다.
+//
+// 왜 이런 걸 두나
+//   PHM 패널이 지켜야 할 것 세 가지는 마크업만 봐서는 확인이 안 됩니다.
+//     1) 경보 이름을 바꾸지 않는다 — 이 검출기는 들림만 잡습니다(LIFT_SUSPECTED).
+//     2) not_detected 를 드러낸다 — 경보가 **없을 때** 특히 필요합니다.
+//        안 그러면 'ALL CLEAR' 처럼 읽혀서 안 잡는 고장(슬립)까지 없다고 말합니다.
+//     3) stale / 축별 fresh 를 흐리게 표시한다 — 끊긴 값이 정상으로 보이면 안 됩니다.
+//   전부 조건부 렌더링이라 실제로 돌려봐야 압니다.
+//
+//   실행:  node tests/js/phm_render_test.mjs fire_vla_core/web/index.html
+//   pytest 에서도 부릅니다 (tests/test_firefighter_ui_phm.py, node 없으면 skip).
+import fs from 'node:fs';
+
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const js = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
+
+class El {
+  constructor(tag){ this.tag=tag; this.children=[]; this.className=''; this._text='';
+                    this.style=new Proxy({},{set:(t,k,v)=>{t[k]=v;return true;}}); this.hidden=false; }
+  append(...kids){ this.children.push(...kids); }
+  replaceChildren(...kids){ this.children=kids; }
+  set textContent(v){ this._text=String(v); this.children=[]; }
+  get textContent(){ return this._text + this.children.map(c=>c.textContent).join(' '); }
+  get childElementCount(){ return this.children.length; }
+  setAttribute(){}
+  addEventListener(){}
+  querySelector(){ return null; }
+  querySelectorAll(){ return []; }
+}
+const els = {};
+const ID = ['phmHealth','phmAge','phmAxes','phmBlocked','phmLimit','phmBattery','phmCpu','phmTemp','phmCmd',
+            'connection','updatedAt','modeSelector','missionForm','ruleControls','missionResult','currentMission',
+            'robotState','robotPose','actionName','actionTarget','actionLabel','decisionLabel','decisionTitle',
+            'decisionReason','validation','submission','resultAction','resultStatus','resultDetail','timeline',
+            'objects','visionToggle','visionStream','visionBoxes','visionFallback','visionStat','visionFrame',
+            'slamMap','semanticMap','mapEmpty','mapMode','missionInput'];
+for (const id of ID) els[id] = new El('div');
+globalThis.document = {
+  getElementById: id => els[id] || (els[id] = new El('div')),
+  createElement: t => new El(t),
+  createElementNS: (_ns,t) => new El(t),
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  addEventListener: () => {},
+};
+globalThis.window = { addEventListener(){}, location:{} };
+globalThis.setInterval = () => 0;
+globalThis.setTimeout = () => 0;
+globalThis.Image = class { set src(_v){} addEventListener(){} };
+globalThis.URL = { createObjectURL:()=> '', revokeObjectURL(){} };
+globalThis.fetch = async () => { throw new Error('no network in test'); };
+
+const ctx = {};
+const fn = new Function(js + '\nreturn {renderPhm, PHM_HEALTH};');
+const { renderPhm } = fn();
+
+let failed = 0;
+const check = (name, cond, detail='') => {
+  console.log(`${cond ? '  통과' : '  ★실패'}  ${name}${cond ? '' : '  ' + detail}`);
+  if (!cond) failed++;
+};
+
+const base = (over={}) => ({
+  schema_version:1, mode:'PHM', health:'OK', alarms:[], not_detected:['SLIP'],
+  available:true, stale:false, age_sec:0.4, battery_mv:7826, battery_low_mv:7000,
+  host_warnings:[], isolation_hint:null, not_detected:[],
+  host:{cpu_used_pct:14.0, thermal_c:{'thermal_zone0:cpu-thermal':52.6},
+        loadavg_1m:0.82, cpu_mhz:1500, cpu_mhz_max:1800, freq_ratio:0.83,
+        mem_used_pct:41.0, mem_avail_mb:2380},
+  cmd_source:'/controller/cmd_vel', blocked_reason:null,
+  rules:{yaw:{thr:0.35,frac:0.9167}, fwd:{thr:0.15,frac:0.8333}},
+  axes:{
+    yaw:{residual:0.088, threshold:0.35, ratio:0.10, alarm:false, evaluated:476, fresh:true, age_sec:0.02,
+         unit:'rad/s', label:'요레이트', meas:'자이로'},
+    fwd:{residual:0.016, threshold:0.15, ratio:0.05, alarm:false, evaluated:462, fresh:true, age_sec:0.10,
+         unit:'m/s', label:'전진속도', meas:'rf2o'},
+  }, ...over});
+
+console.log('[1] 정상');
+renderPhm(base());
+check('health 배지 NOMINAL', els.phmHealth.textContent==='NOMINAL', els.phmHealth.textContent);
+check('배지 색 ok', els.phmHealth.className.includes('ok'), els.phmHealth.className);
+check('축 카드 2개', els.phmAxes.childElementCount===2);
+check('not_detected 비면 숨김', els.phmLimit.hidden);
+check('경보 없으면 원인 힌트도 숨김', els.phmIsolation.hidden);
+const stats = () => els.phmHostGrid.children.map(c => c.textContent);
+check('파이 상태 카드 6개', els.phmHostGrid.childElementCount===6, els.phmHostGrid.childElementCount);
+check('배터리 V 변환', stats().some(t=>t.includes('7.83 V')), stats()[0]);
+check('배터리 임계 표시', stats().some(t=>t.includes('low < 7.00 V')));
+check('온도 표시', stats().some(t=>t.includes('52.6°C')));
+check('CPU + load', stats().some(t=>t.includes('14%')&&t.includes('load 0.82')));
+check('메모리 여유', stats().some(t=>t.includes('41%')&&t.includes('2380 MB free')));
+check('경고 칩 없음', els.phmFlags.childElementCount===0);
+
+console.log('[2] 경보');
+renderPhm(base({health:'ALARM',
+  alarms:[{name:'LIFT_SUSPECTED',axis:'fwd',residual:0.187,threshold:0.15}],
+  axes:{...base().axes, fwd:{...base().axes.fwd, residual:0.187, ratio:1.0, alarm:true}}}));
+check('health 배지 ALARM', els.phmHealth.textContent==='ALARM');
+check('배지 색 bad', els.phmHealth.className.includes('bad'));
+const fwdCard = els.phmAxes.children.find(c=>c.textContent.includes('전진속도'));
+check('경보 축 카드에 alarm 클래스', fwdCard && fwdCard.className.includes('alarm'), fwdCard && fwdCard.className);
+const yawCard = els.phmAxes.children.find(c=>c.textContent.includes('요레이트'));
+check('정상 축은 alarm 아님', yawCard && !yawCard.className.includes('alarm'));
+
+console.log('[2c] 고장 구분 힌트 — 절대형+상대형 조합');
+renderPhm(base({health:'ALARM', isolation_hint:'견인력 상실 계열',
+  alarms:[{name:'TRACKING_DEFICIT',axis:'fwd_rel',residual:0.42,threshold:0.15}],
+  axes:{...base().axes,
+    fwd_rel:{residual:0.42, threshold:0.15, ratio:0.35, alarm:true, evaluated:46,
+             fresh:true, age_sec:0.1, unit:'ratio', label:'전진속도 (추종률)',
+             meas:'rf2o', relative:true}}}));
+check('★ 상대형만 뜨면 견인력 상실', !els.phmIsolation.hidden
+      && els.phmIsolation.textContent.includes('견인력 상실'));
+check('조치 안내 포함', els.phmIsolation.textContent.includes('노면'));
+check('축 카드 3개', els.phmAxes.childElementCount===3, els.phmAxes.childElementCount);
+const relCard = els.phmAxes.children.find(c=>c.textContent.includes('추종률'));
+check('상대형 축이 alarm', relCard?.className.includes('alarm'));
+
+renderPhm(base({health:'ALARM', isolation_hint:'들림 계열',
+  alarms:[{name:'LIFT_SUSPECTED',axis:'fwd',residual:0.19,threshold:0.15},
+          {name:'TRACKING_DEFICIT',axis:'fwd_rel',residual:1.0,threshold:0.15}]}));
+check('★ 둘 다 뜨면 들림', els.phmIsolation.textContent.includes('들림 계열'));
+check('들림 조치 안내', els.phmIsolation.textContent.includes('거치'));
+
+console.log('[2b] 파이 경고 — 배터리/저전압');
+renderPhmHost_case();
+function renderPhmHost_case(){
+  renderPhm(base({battery_mv:6800,
+    host_warnings:[{name:'BATTERY_LOW',detail:'6800 mV < 7000 mV'},
+                   {name:'UNDER_VOLTAGE_SEEN',detail:'under_voltage_occurred'},
+                   {name:'THROTTLED',detail:'throttled_now'}],
+    host:{...base().host, cpu_used_pct:96.0, freq_ratio:0.33, mem_used_pct:93.0,
+          thermal_c:{'thermal_zone0:cpu-thermal':82.4}}}));
+  const cards = els.phmHostGrid.children;
+  const find = t => cards.find(c=>c.textContent.includes(t));
+  check('★ 배터리 부족이면 bad', find('6.80 V')?.className.includes('bad'), find('6.80 V')?.className);
+  check('80°C 이상이면 bad', find('82.4°C')?.className.includes('bad'), find('82.4°C')?.className);
+  check('CPU 90% 이상이면 warn', find('96%')?.className.includes('warn'), find('96%')?.className);
+  check('주파수 절반 이하면 warn', find('33% of max')?.className.includes('warn'));
+  check('메모리 90% 이상이면 warn', find('93%')?.className.includes('warn'));
+  check('경고 칩 3개', els.phmFlags.childElementCount===3, els.phmFlags.childElementCount);
+  const chips = els.phmFlags.children;
+  check('★ 현재/이력 구분 — 이력은 now 아님',
+        chips.find(c=>c.textContent.includes('이력'))?.className.includes('now')===false);
+  check('★ 현재 스로틀은 now', chips.find(c=>c.textContent==='스로틀 (현재)')?.className.includes('now'));
+}
+
+console.log('[3] stale — 끊긴 값을 정상으로 보이면 안 됨');
+renderPhm(base({health:'UNKNOWN', stale:true, age_sec:9.3,
+  blocked_reason:'PHM status가 9.3초째 갱신되지 않았습니다.',
+  axes:{...base().axes, yaw:{...base().axes.yaw, fresh:false, age_sec:9.3}}}));
+check('health UNKNOWN', els.phmHealth.textContent==='UNKNOWN');
+check('blocked 사유 표시', !els.phmBlocked.hidden && els.phmBlocked.textContent.includes('9.3초'));
+const staleCard = els.phmAxes.children.find(c=>c.textContent.includes('요레이트'));
+check('★ 끊긴 축 흐리게(dim)', staleCard && staleCard.className.includes('dim'), staleCard && staleCard.className);
+check('끊긴 축에 경과 표기', staleCard && staleCard.textContent.includes('갱신 없음'));
+
+console.log('[4] phm_monitor 미기동');
+renderPhm({schema_version:1,mode:'PHM',available:false,health:'UNKNOWN',alarms:[],
+           blocked_reason:'PHM status를 기다리는 중입니다. phm_monitor 노드가 떠 있는지 확인하세요.'});
+check('축 없음 안내', els.phmAxes.textContent.includes('축 데이터 없음'));
+check('파이 상태는 값 없이도 카드를 그림', els.phmHostGrid.childElementCount===6);
+check('age 표시 안 함', els.phmAge.textContent==='-', els.phmAge.textContent);
+check('not_detected 없으면 숨김', els.phmLimit.hidden);
+check('힌트 없으면 숨김', els.phmIsolation.hidden);
+
+console.log(failed ? `\n실패 ${failed}건` : '\n전부 통과');
+process.exit(failed ? 1 : 0);

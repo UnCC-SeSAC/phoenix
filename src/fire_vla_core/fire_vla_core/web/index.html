@@ -72,6 +72,34 @@
     th { color:var(--muted); font-size:10px; letter-spacing:.09em; text-transform:uppercase; }
     tbody tr:last-child td { border-bottom:0; }
     .result-box { padding:14px; border:1px solid var(--line); background:#09111b99; }
+    /* PHM — 로봇 건전성. 모드와 무관한 상시 패널입니다. */
+    .phm-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+    .phm-axis { padding:13px; border:1px solid var(--line); background:#09111b99; }
+    .phm-axis.alarm { border-color:var(--bad); background:#1c0f16; }
+    .phm-axis.dim { opacity:.55; }
+    .phm-num { font-variant-numeric:tabular-nums; }
+    /* 창 안에서 임계를 넘은 표본 비율. 경보 조건이 '비율' 이라 이걸 보여주는 게
+       잔차 숫자 하나보다 판정에 가깝습니다. */
+    .phm-bar { position:relative; height:6px; margin-top:8px; border-radius:3px; background:#1b2a3a; overflow:hidden; }
+    .phm-bar i { position:absolute; inset:0 auto 0 0; background:var(--cyan); }
+    .phm-bar.alarm i { background:var(--bad); }
+    .phm-bar b { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--amber); }
+    .phm-note { margin:10px 0 0; padding:9px 11px; border-left:3px solid var(--amber); background:#1a1509; color:#f4e6c4; font-size:12px; }
+    /* 파이 상태 — 잔차 축과 시각적으로 구분되게 한 단 낮춰 둡니다.
+       구동 고장(잔차)과 전원·발열 문제는 원인도 조치도 다릅니다. */
+    .phm-host { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+    .phm-host-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:9px; }
+    .phm-stat { padding:9px 10px; border:1px solid var(--line); background:#09111b99; }
+    .phm-stat .label { font-size:9px; }
+    .phm-stat b { display:block; margin-top:3px; font-size:17px; font-weight:800; font-variant-numeric:tabular-nums; }
+    .phm-stat small { display:block; margin-top:2px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+    .phm-stat.warn b { color:var(--amber); } .phm-stat.bad b { color:var(--bad); }
+    .phm-stat.warn { border-color:var(--amber); } .phm-stat.bad { border-color:var(--bad); }
+    /* 스로틀·저전압은 지나간 이력(sticky)도 봐야 합니다 — 로봇이 이상하게 굴 때
+       제일 먼저 볼 값이라 칩으로 따로 세웁니다. */
+    .phm-flags { display:flex; gap:7px; flex-wrap:wrap; margin-top:9px; }
+    .phm-flag { padding:4px 8px; border:1px solid var(--amber); color:var(--amber); font-size:11px; font-weight:700; letter-spacing:.04em; }
+    .phm-flag.now { border-color:var(--bad); color:var(--bad); }
     @media (max-width:900px) { main { grid-template-columns:1fr; } .wide { grid-column:auto; } .bottom-grid { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -129,6 +157,24 @@
   <section class="panel">
     <h2>Situation Timeline</h2>
     <ol id="timeline" class="timeline"><li class="empty">canonical status event를 기다리는 중입니다.</li></ol>
+  </section>
+
+  <!-- PHM 은 모드 전환과 무관합니다. 건전성은 VLA/rule-based 와 직교하고,
+       모드를 바꿨다고 사라지면 안 됩니다. /api/status 가 아니라 /api/phm 을 봅니다. -->
+  <section class="panel wide">
+    <h2>Robot Health (PHM)
+      <span id="phmHealth" class="status muted" style="margin-left:12px">UNKNOWN</span>
+      <span id="phmAge" class="meta">-</span>
+    </h2>
+    <div class="phm-grid" id="phmAxes"></div>
+    <p id="phmIsolation" class="phm-note" hidden></p>
+    <p id="phmBlocked" class="phm-note" hidden></p>
+    <p id="phmLimit" class="phm-note" hidden></p>
+    <div class="phm-host">
+      <h2 style="margin-bottom:9px">Pi / Power</h2>
+      <div class="phm-host-grid" id="phmHostGrid"></div>
+      <div class="phm-flags" id="phmFlags"></div>
+    </div>
   </section>
 
   <section class="panel wide bottom-grid">
@@ -381,7 +427,191 @@ refreshVision();setInterval(refreshVision,200);refreshMapLayer();setInterval(ref
 for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
 $('modeSelector').value=activeMode;
 configureMode();
+
+// ---------------------------------------------------------------- PHM
+// /api/phm 은 로봇의 phm_monitor 가 낸 JSON 을 UI 노드가 **해석하지 않고** 실어
+// 나른 것입니다. 여기서도 최소한만 해석합니다 — 임계·규칙은 로봇이 정합니다.
+//
+// ★ 화면이 지켜야 할 것 세 가지
+//   1) 경보 이름을 바꾸지 않습니다. 이 검출기는 '들림' 만 잡습니다(LIFT_SUSPECTED).
+//      'TRACTION LOSS' 같은 포괄적인 이름으로 바꾸면 거짓말이 됩니다.
+//   2) not_detected 를 화면에 드러냅니다. 경보가 없다고 'ALL CLEAR' 라고 쓰면
+//      안 잡는 고장(슬립)까지 없다고 말하는 셈입니다.
+//   3) stale / 축별 fresh 를 흐리게 표시합니다. 끊긴 값이 정상으로 보이면 안 됩니다.
+const PHM_HEALTH={OK:['ok','NOMINAL'],ALARM:['bad','ALARM'],UNKNOWN:['muted','UNKNOWN']};
+// 절대형(측정이 0 에 붙음)과 상대형(지령만큼 못 따라감)이 둘 다 뜨면 들림,
+// 상대형만 뜨면 견인력 상실입니다. 실측으로 확인된 구분입니다.
+const LIMIT_HINT={
+  '들림 계열':'바퀴가 떠 있거나 거치대 위입니다. 기구·거치를 보세요.',
+  '견인력 상실 계열':'지령만큼 안 나갑니다. 노면·타이어·적재를 보세요.',
+};
+
+function phmAxisCard(axis){
+  const alarm=Boolean(axis.alarm), stale=axis.fresh===false;
+  const el=document.createElement('div');
+  el.className=`phm-axis${alarm?' alarm':''}${stale?' dim':''}`;
+  const thr=Number(axis.threshold);
+  const res=finite(axis.residual)?Number(axis.residual):null;
+  const ratio=finite(axis.ratio)?Number(axis.ratio):0;
+
+  const label=document.createElement('span');
+  label.className='label';
+  label.textContent=`${dash(axis.label)} · ${dash(axis.meas)}`;
+  const value=document.createElement('p');
+  value.className='primary phm-num';
+  value.textContent=res===null?'-':`${res.toFixed(3)} ${dash(axis.unit)}`;
+  const sub=document.createElement('p');
+  sub.className='secondary phm-num';
+  sub.textContent=`threshold ${finite(thr)?thr.toFixed(3):'-'} · 평가 ${dash(axis.evaluated)}건`
+    +(stale?` · ${dash(axis.age_sec)}초째 갱신 없음`:'');
+
+  // 경보 조건은 '창 안에서 임계를 넘은 표본의 비율' 입니다. 잔차 숫자 하나보다
+  // 이 막대가 판정에 가깝습니다. 노란 눈금이 경보가 걸리는 지점입니다.
+  const bar=document.createElement('div');
+  bar.className=`phm-bar${alarm?' alarm':''}`;
+  const fill=document.createElement('i');
+  fill.style.width=`${Math.max(0,Math.min(1,ratio))*100}%`;
+  bar.append(fill);
+  const rule=phmRules[axis.axis];
+  if(rule&&finite(rule.frac)){const mark=document.createElement('b');mark.style.left=`${Number(rule.frac)*100}%`;bar.append(mark);}
+
+  el.append(label,value,sub,bar);
+  return el;
+}
+
+let phmRules={};
+
+function renderPhm(data){
+  const health=String(data.health||'UNKNOWN').toUpperCase();
+  const [cls,text]=PHM_HEALTH[health]||PHM_HEALTH.UNKNOWN;
+  const badge=$('phmHealth');
+  badge.className=`status ${cls}`;
+  badge.textContent=text;
+  $('phmAge').textContent=data.available===false?'-'
+    :`age ${finite(data.age_sec)?Number(data.age_sec).toFixed(1):'-'}s`;
+
+  phmRules=data.rules||{};
+  const axes=data.axes||{};
+  const host=$('phmAxes');
+  host.replaceChildren();
+  const alarms=Array.isArray(data.alarms)?data.alarms:[];
+  const alarmed=new Set(alarms.map(a=>a.axis));
+  for(const key of Object.keys(axes)){
+    const axis={...axes[key],axis:key,alarm:axes[key].alarm||alarmed.has(key)};
+    host.append(phmAxisCard(axis));
+  }
+  if(!host.childElementCount){
+    const empty=document.createElement('p');
+    empty.className='secondary';
+    empty.textContent='축 데이터 없음';
+    host.append(empty);
+  }
+
+  // 절대형과 상대형이 서로 다른 고장을 가립니다. 어느 쪽이 떴는지가 곧 원인 힌트라
+  // 로봇이 판단해서 보내고(isolation_hint) 화면은 그대로 씁니다.
+  const iso=$('phmIsolation');
+  iso.hidden=!data.isolation_hint;
+  iso.textContent=data.isolation_hint
+    ? `추정 원인: ${data.isolation_hint} — ${LIMIT_HINT[data.isolation_hint]||''}`
+    : '';
+
+  const blocked=$('phmBlocked');
+  blocked.hidden=!data.blocked_reason;
+  blocked.textContent=data.blocked_reason||'';
+
+  // 안 잡는 고장을 항상 밝힙니다 — 경보가 없어도(특히 없을 때) 필요합니다.
+  const limit=$('phmLimit');
+  const missed=Array.isArray(data.not_detected)?data.not_detected:[];
+  limit.hidden=missed.length===0;
+  limit.textContent=missed.length
+    ? `이 검출기가 잡지 않는 고장: ${missed.join(', ')} — 경보가 없다고 이상이 없는 것은 아닙니다.`
+    : '';
+
+  renderPhmHost(data);
+}
+
+// ---- 파이 상태 ----
+// 무엇이 문제인지는 **로봇이 판단**해서 host_warnings 로 보냅니다(phm_monitor_node).
+// 여기서는 그리기만 합니다. 화면이 임계를 따로 들고 있으면 주행 로직과 어긋납니다 —
+// 배터리 임계는 uncc_example/state_manager.py 의 low_battery_threshold 와 같은 값입니다.
+function phmStat(label, value, sub, level){
+  const el=document.createElement('div');
+  el.className=`phm-stat${level?` ${level}`:''}`;
+  const l=document.createElement('span'); l.className='label'; l.textContent=label;
+  const b=document.createElement('b'); b.textContent=value;
+  el.append(l,b);
+  if(sub){const s=document.createElement('small');s.textContent=sub;el.append(s);}
+  return el;
+}
+
+function renderPhmHost(data){
+  const host=data.host||{};
+  const warn=new Set((data.host_warnings||[]).map(w=>w.name));
+  const grid=$('phmHostGrid');
+  grid.replaceChildren();
+
+  const mv=data.battery_mv, low=data.battery_low_mv;
+  grid.append(phmStat('Battery',
+    finite(mv)?`${(Number(mv)/1000).toFixed(2)} V`:'-',
+    finite(low)?`low < ${(Number(low)/1000).toFixed(2)} V`:'',
+    warn.has('BATTERY_LOW')?'bad':''));
+
+  const cpu=host.cpu_used_pct;
+  grid.append(phmStat('CPU', finite(cpu)?`${Number(cpu).toFixed(0)}%`:'-',
+    finite(host.loadavg_1m)?`load ${Number(host.loadavg_1m).toFixed(2)}`:'',
+    finite(cpu)&&Number(cpu)>=90?'warn':''));
+
+  // 첫 zone 을 씁니다 — 키 이름이 장비마다 다릅니다(thermal_zone0:cpu-thermal 등).
+  const temps=Object.values(host.thermal_c||{});
+  const t=temps.length?Number(temps[0]):null;
+  // 파이는 80°C 부터 스로틀합니다. 그 전에 눈에 띄게 합니다.
+  grid.append(phmStat('Temp', t===null?'-':`${t.toFixed(1)}°C`, '',
+    t===null?'':(t>=80?'bad':(t>=70?'warn':''))));
+
+  const mhz=host.cpu_mhz, ratio=host.freq_ratio;
+  grid.append(phmStat('CPU Clock', finite(mhz)?`${Math.round(Number(mhz))}`:'-',
+    finite(ratio)?`${Math.round(Number(ratio)*100)}% of max`:'MHz',
+    // 주파수가 최대치의 절반 아래로 눌려 있으면 스로틀이나 전원 문제 신호입니다.
+    finite(ratio)&&Number(ratio)<0.5?'warn':''));
+
+  const mem=host.mem_used_pct;
+  grid.append(phmStat('Memory', finite(mem)?`${Number(mem).toFixed(0)}%`:'-',
+    finite(host.mem_avail_mb)?`${Math.round(Number(host.mem_avail_mb))} MB free`:'',
+    finite(mem)&&Number(mem)>=90?'warn':''));
+
+  grid.append(phmStat('Cmd Source', data.cmd_source?String(data.cmd_source).replace(/^\//,''):'-',
+    data.cmd_source?'':'지령 없음'));
+
+  // 스로틀/저전압. '지금'(now)과 '한 번이라도'(SEEN)를 색으로 구분합니다 —
+  // 후자는 sticky 라 전원이 순간 흔들렸던 이력을 보여줍니다.
+  const flags=$('phmFlags');
+  flags.replaceChildren();
+  const LABEL={UNDER_VOLTAGE:'저전압 (현재)',THROTTLED:'스로틀 (현재)',
+               UNDER_VOLTAGE_SEEN:'저전압 이력',THROTTLED_SEEN:'스로틀 이력',
+               BATTERY_LOW:'배터리 부족'};
+  for(const w of data.host_warnings||[]){
+    const chip=document.createElement('span');
+    chip.className=`phm-flag${w.name.endsWith('_SEEN')?'':' now'}`;
+    chip.textContent=LABEL[w.name]||w.name;
+    if(w.detail)chip.title=w.detail;
+    flags.append(chip);
+  }
+}
+
+async function refreshPhm(){
+  try{
+    const response=await fetch('/api/phm',{cache:'no-store'});
+    if(!response.ok)throw new Error();
+    renderPhm(await response.json());
+  }catch(_error){
+    // 엔드포인트 자체에 못 닿는 것과 phm_monitor 가 없는 것은 다릅니다.
+    // 후자는 available:false 로 정상 응답이 옵니다.
+    renderPhm({health:'UNKNOWN',blocked_reason:'UI 서버에서 PHM 상태를 가져오지 못했습니다.'});
+  }
+}
+
 refresh();setInterval(refresh,1000);
+refreshPhm();setInterval(refreshPhm,1000);
 </script>
 </body>
 </html>
