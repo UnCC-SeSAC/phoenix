@@ -1,6 +1,9 @@
 import functools
 import json
 import math
+import copy
+import os
+from ament_index_python.packages import get_package_share_directory
 
 import rclpy
 
@@ -25,6 +28,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 
 from .state_manager import StateManager
 from .log_utils import make_event_logger
+from .object_approach import approach_pose, arrival_error
 
 from frontier_exploration_ros2.srv import ControlExploration
 
@@ -42,6 +46,19 @@ class MissionExecutor(Node):
         self.declare_parameter("action_check_period", 0.2)
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("base_frame", "base_footprint")
+        self.declare_parameter('object_approach_enabled', False)
+        self.declare_parameter('front_wheel_offset_m', 0.12)
+        self.declare_parameter('object_clearance_m', 0.25)
+        self.declare_parameter('object_distance_tolerance_m', 0.025)
+        self.declare_parameter('object_heading_tolerance_deg', 3.0)
+        self.object_approach_enabled = self.get_parameter('object_approach_enabled').value
+        self.front_wheel_offset = self.get_parameter('front_wheel_offset_m').value
+        self.object_clearance = self.get_parameter('object_clearance_m').value
+        self.object_distance_tolerance = self.get_parameter('object_distance_tolerance_m').value
+        self.object_heading_tolerance = math.radians(
+            self.get_parameter('object_heading_tolerance_deg').value)
+        self._object_xy = None
+        self._nav_target_key = None
 
         # keepout 원 겹침 판정 여유 — footprint 대각선(약 0.195m)만큼
         # 남았을 때 걸치는 걸로 본다 (fire_keepout_node 의
@@ -227,6 +244,11 @@ class MissionExecutor(Node):
             # FIRE_DETECTED 를 벗어나면 진압이 안 끝났어도 무조건 멈춘다.
             self._cancel_fire_suppression()
 
+        if self.state != msg.data:
+            self._cancel_nav_goal()
+            # State and target are separate topics: never send the previous
+            # state's pose while waiting for the new target message.
+            self.current_target = None
         self.state = msg.data
 
     def target_callback(self, msg):
@@ -306,6 +328,8 @@ class MissionExecutor(Node):
             StateManager.PERSON_DETECTED,
             StateManager.FIRE_DETECTED,
             StateManager.RETURNING_TO_CHARGE,
+            StateManager.RETURNING_TO_BASE,
+            StateManager.RETURNING_MANUAL,
         ):
             # 셋 다 "현재 목적지로 이동"까지는 동일하게 처리한다. 도착 후
             # 동작(구조/진압 호출/복귀 완료)이 갈리는 부분은 _nav_goal_result
@@ -450,7 +474,8 @@ class MissionExecutor(Node):
             pose_stamped.pose.position.y,
         )
 
-        if target_xy == self._nav_goal_xy:
+        target_key = (self.state, *target_xy)
+        if target_key == self._nav_target_key:
             # 같은 목적지로 이미 보내둔 goal 이 진행 중이면 다시 안 보낸다
             return
 
@@ -461,15 +486,46 @@ class MissionExecutor(Node):
             )
             return
 
+        object_xy = None
+        if self.object_approach_enabled and self.state in (
+                StateManager.FIRE_DETECTED, StateManager.PERSON_DETECTED):
+            robot_pose = self._robot_pose_yaw()
+            if robot_pose is None:
+                return
+            try:
+                ax, ay, yaw = approach_pose(*robot_pose[:2], *target_xy,
+                                           self.front_wheel_offset, self.object_clearance)
+            except ValueError as exc:
+                self._event_logger.error(str(exc))
+                self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+                return
+            object_xy = target_xy
+            pose_stamped = copy.deepcopy(pose_stamped)
+            pose_stamped.pose.position.x = ax
+            pose_stamped.pose.position.y = ay
+            pose_stamped.pose.orientation.x = pose_stamped.pose.orientation.y = 0.0
+            pose_stamped.pose.orientation.z = math.sin(yaw / 2.0)
+            pose_stamped.pose.orientation.w = math.cos(yaw / 2.0)
+            target_xy = (ax, ay)
+            self._event_logger.info(
+                f'Object approach: object={object_xy}, goal={target_xy}, '
+                f'wheel_clearance={self.object_clearance:.3f}m offset={self.front_wheel_offset:.3f}m')
+
         # 목적지가 바뀌었으니 진행 중이던 goal 은 취소하고 새로 보낸다
         self._cancel_nav_goal()
 
         self._nav_goal_xy = target_xy
+        self._nav_target_key = target_key
+        self._object_xy = object_xy
         self._nav_goal_token += 1
         token = self._nav_goal_token
 
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        if object_xy is not None:
+            goal.behavior_tree = os.path.join(
+                get_package_share_directory('uncc_example'), 'config', 'object_approach.xml')
 
         self._event_logger.info(
             f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})"
@@ -487,6 +543,8 @@ class MissionExecutor(Node):
             self._nav_goal_handle = None
 
         self._nav_goal_xy = None
+        self._nav_target_key = None
+        self._object_xy = None
         # 취소만 하고 새 goal 을 안 보내는 경우(EXPLORING 진입)에도, 남아
         # 있던 콜백이 stale 로 인식되도록 토큰을 올려둔다.
         self._nav_goal_token += 1
@@ -495,6 +553,9 @@ class MissionExecutor(Node):
 
         if token != self._nav_goal_token:
             # 이미 취소/대체된 goal 의 뒤늦은 응답 — 지금 상태를 건드리지 않는다.
+            handle = future.result()
+            if handle.accepted:
+                handle.cancel_goal_async()
             return
 
         goal_handle = future.result()
@@ -502,6 +563,7 @@ class MissionExecutor(Node):
         if not goal_handle.accepted:
             self.get_logger().warn("Nav2 goal 이 거부됨")
             self._nav_goal_xy = None
+            self._nav_target_key = None
             return
 
         self._nav_goal_handle = goal_handle
@@ -523,6 +585,28 @@ class MissionExecutor(Node):
 
         if status == GoalStatus.STATUS_SUCCEEDED:
             self._event_logger.info("Nav2 목적지 도착")
+            if self._object_xy is not None:
+                pose = self._robot_pose_yaw()
+                if pose is None:
+                    self._event_logger.error('Object arrival rejected: no fresh robot TF')
+                    self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+                    return
+                gap, error, heading = arrival_error(
+                    pose, self._object_xy, self.front_wheel_offset, self.object_clearance)
+                self._event_logger.info(
+                    f'Object arrival: wheel_gap={gap:.3f}m error={error:+.3f}m '
+                    f'heading_error={math.degrees(heading):+.2f}deg')
+                if abs(error) > self.object_distance_tolerance or abs(heading) > self.object_heading_tolerance:
+                    self._event_logger.error('Object arrival outside tolerance; action not started')
+                    self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+                    return
+                if self.state == StateManager.FIRE_DETECTED:
+                    # Goal already faces the real fire; preserve keepout while
+                    # suppressing rather than rotating toward the approach point.
+                    self._call_fire_suppression()
+                else:
+                    self.notify_target_complete()
+                return
 
             # 도착 시점의 state 로 분기한다 — target 이 진행 중인 동안엔
             # state_manager 가 state 를 안 바꾸므로 이 값을 그대로 믿어도 된다.
@@ -540,6 +624,7 @@ class MissionExecutor(Node):
             # 시도조차 제대로 못 해보고 취소된 것. unreachable 로 포기하지
             # 않고 다음 tick 에 같은 목적지로 재시도한다.
             self._nav_goal_xy = None
+            self._nav_target_key = None
             self.get_logger().warn("Nav2 goal 이 취소됨 — 다음 tick 에 재시도")
         else:
             self._nav_goal_xy = None
@@ -579,6 +664,12 @@ class MissionExecutor(Node):
         except TransformException:
             return None
 
+        age = (self.get_clock().now().nanoseconds
+               - Time.from_msg(transform.header.stamp).nanoseconds) / 1e9
+        if abs(age) > 0.5:
+            self._event_logger.warn(f'Robot pose TF stale: age={age:.3f}s',
+                                    throttle_duration_sec=2.0)
+            return None
         t = transform.transform.translation
         q = transform.transform.rotation
         yaw = math.atan2(

@@ -30,6 +30,9 @@ class DemoStateManager(StateManager):
 
     PHASE_INITIAL_SWEEP = 'initial_sweep'
     PHASE_CLUSTER_FIRE = 'cluster_fire'
+    PHASE_CLUSTER_PERSON = 'cluster_person'
+    PHASE_LOW_BATTERY_RETURN = 'low_battery_return'
+    PHASE_WAITING_FOR_CHARGE = 'waiting_for_charge'
     PHASE_RETURN_AFTER_CLUSTER = 'return_after_cluster'
     PHASE_ALIGN_AT_BASE = 'align_at_base'
     PHASE_SECOND_SWEEP = 'second_sweep'
@@ -90,6 +93,11 @@ class DemoStateManager(StateManager):
         self._cluster_deadline = None
         self._single_detection_ready_at = None
         self._single_detection_deadline = None
+        self._cluster_people = []
+        self._alignment_next = self.PHASE_SECOND_SWEEP
+        self._return_reason = None
+        self._spin_generation = 0
+        self._spin_goal_handle = None
 
         self.get_logger().info(
             'Demo state manager ready: two-sortie scenario, no frontier exploration'
@@ -109,21 +117,31 @@ class DemoStateManager(StateManager):
         return response
 
     def target_complete_callback(self, request, response):
-        # RETURNING_TO_CHARGE 도착 시 base MissionExecutor가 같은 서비스를
-        # 호출한다. base에는 active_target이 없어 no-op이므로 여기서 각
-        # 복귀 단계의 완료 신호로 해석한다.
+        # All return reasons share navigation, but only successful mission
+        # returns may advance the scenario. Charging is never mission success.
         if (
-            self.state == self.RETURNING_TO_CHARGE
+            self.state in (self.RETURNING_TO_CHARGE, self.RETURNING_TO_BASE,
+                           self.RETURNING_MANUAL)
             and self.active_target is None
         ):
+            if request.data != self.TARGET_STATUS_SUCCESS:
+                self._manual_stop = False
+                self._fail_mission(f'base 복귀 실패: {request.data}')
+                response.success = True
+                return response
             if self.phase == self.PHASE_RETURN_AFTER_CLUSTER:
+                self._alignment_next = self.PHASE_SECOND_SWEEP
                 self.phase = self.PHASE_ALIGN_AT_BASE
                 self._event_logger.info(
                     '1차 복귀 완료: 최초 헤딩 정렬 시작'
                 )
             elif self.phase == self.PHASE_FINAL_RETURN:
-                self.phase = self.PHASE_COMPLETE
-                self._event_logger.info('최종 복귀 완료: 데모 미션 종료')
+                self._alignment_next = self.PHASE_COMPLETE
+                self.phase = self.PHASE_ALIGN_AT_BASE
+                self._event_logger.info('최종 복귀 도착: 최초 헤딩 정렬 시작')
+            elif self.phase == self.PHASE_LOW_BATTERY_RETURN:
+                self.phase = self.PHASE_WAITING_FOR_CHARGE
+                self._event_logger.info('저전압 복귀 도착: WAITING_FOR_CHARGE (임무 완료 아님)')
             elif self.phase == self.PHASE_MANUAL_RETURN:
                 self._reset_demo_after_manual_stop()
 
@@ -135,11 +153,20 @@ class DemoStateManager(StateManager):
             self.active_target is not None
             and self.active_target['type'] == 'fire'
         )
+        if self.active_target is None:
+            response.success = False
+            return response
+        if request.data != self.TARGET_STATUS_SUCCESS:
+            self._fail_mission(f'객체 처리 실패: {request.data}')
+            response.success = True
+            return response
         response = super().target_complete_callback(request, response)
 
         if completed_fire and completed_phase == self.PHASE_CLUSTER_FIRE:
-            self.phase = self.PHASE_RETURN_AFTER_CLUSTER
-            self._event_logger.info('1차 화재 처리 완료: 1차 base 복귀')
+            self.phase = self.PHASE_CLUSTER_PERSON
+            self._event_logger.info('1차 화재 처리 완료: 같은 군집 person 접근 시작')
+        elif completed_phase == self.PHASE_CLUSTER_PERSON:
+            self._process_cluster_person()
         elif completed_fire and completed_phase == self.PHASE_SINGLE_FIRE:
             self.phase = self.PHASE_FINAL_RETURN
             self._event_logger.info('단독 화재 처리 완료: 최종 base 복귀')
@@ -171,8 +198,12 @@ class DemoStateManager(StateManager):
             self._enter_terminal_state(self.MISSION_FAILED)
             return
 
+        if self.phase == self.PHASE_WAITING_FOR_CHARGE:
+            self._enter_terminal_state('WAITING_FOR_CHARGE')
+            return
+
         if self.is_battery_low():
-            self.phase = self.PHASE_FINAL_RETURN
+            self.phase = self.PHASE_LOW_BATTERY_RETURN
             self._enter_returning_when_pose_ready('low battery')
             return
 
@@ -182,8 +213,10 @@ class DemoStateManager(StateManager):
             self._process_initial_sweep(now)
         elif self.phase == self.PHASE_CLUSTER_FIRE:
             self._process_cluster_fire(now)
+        elif self.phase == self.PHASE_CLUSTER_PERSON:
+            self._process_cluster_person()
         elif self.phase == self.PHASE_RETURN_AFTER_CLUSTER:
-            self._enter_returning_when_pose_ready('cluster fire complete')
+            self._enter_returning_when_pose_ready('cluster fire/person complete')
         elif self.phase == self.PHASE_ALIGN_AT_BASE:
             self._process_base_alignment()
         elif self.phase == self.PHASE_SECOND_SWEEP:
@@ -192,6 +225,8 @@ class DemoStateManager(StateManager):
             self._process_single_fire(now)
         elif self.phase == self.PHASE_FINAL_RETURN:
             self._enter_returning_when_pose_ready('all demo fires complete')
+        elif self.phase == self.PHASE_LOW_BATTERY_RETURN:
+            self._enter_returning_when_pose_ready('low battery')
         else:
             self._enter_terminal_state(self.MISSION_FAILED)
 
@@ -243,6 +278,10 @@ class DemoStateManager(StateManager):
         target = cluster_fire or single_fire
 
         if target is not None:
+            if self.active_target is None:
+                self._cluster_people = [entry for entry in (target['cluster'] or [])
+                                        if entry['type'] == 'person'
+                                        and entry['status'] != 'done']
             self._enter_urgent_target(target)
             return
 
@@ -277,7 +316,11 @@ class DemoStateManager(StateManager):
         yaw_error = self._normalize_angle(self.start_yaw - self.robot_yaw)
 
         if abs(math.degrees(yaw_error)) <= self.heading_tolerance_deg:
-            self._begin_second_sweep(time.monotonic())
+            if self._alignment_next == self.PHASE_COMPLETE:
+                self.phase = self.PHASE_COMPLETE
+                self._event_logger.info('최종 복귀 정렬 완료: 데모 미션 종료')
+            else:
+                self._begin_second_sweep(time.monotonic())
             return
 
         self._event_logger.info(
@@ -351,6 +394,19 @@ class DemoStateManager(StateManager):
     # Target selection
     # =========================================================
 
+    def _process_cluster_person(self):
+        candidates = [entry for entry in self._cluster_people
+                      if entry['status'] != 'done']
+        if candidates:
+            target = self.active_target or self._nearest_to_robot(candidates)
+            if not self._is_within_map(target):
+                self._fail_mission('군집 person이 지도 범위 밖에 있음')
+                return
+            self._enter_urgent_target(target)
+        else:
+            self.phase = self.PHASE_RETURN_AFTER_CLUSTER
+            self._event_logger.info('1차 fire/person 처리 완료: 1차 base 복귀')
+
     def _pick_cluster_fire(self):
         if self.active_target is not None:
             return self.active_target
@@ -405,24 +461,35 @@ class DemoStateManager(StateManager):
 
         self._spin_pending = True
         self._spin_purpose = purpose
+        generation = self._spin_generation
         future = self._spin_client.send_goal_async(goal)
-        future.add_done_callback(self._spin_goal_response)
+        future.add_done_callback(
+            lambda result: self._spin_goal_response(result, generation))
 
-    def _spin_goal_response(self, future):
+    def _spin_goal_response(self, future, generation):
         try:
             goal_handle = future.result()
         except Exception as exc:
             self._spin_failed(f'spin goal 전송 실패: {exc}')
             return
 
+        if generation != self._spin_generation:
+            if goal_handle.accepted:
+                goal_handle.cancel_goal_async()
+            return
         if not goal_handle.accepted:
             self._spin_failed('spin goal이 거부됨')
             return
 
+        self._spin_goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._spin_goal_result)
+        result_future.add_done_callback(
+            lambda result: self._spin_goal_result(result, generation))
 
-    def _spin_goal_result(self, future):
+    def _spin_goal_result(self, future, generation):
+        if generation != self._spin_generation:
+            return
+        self._spin_goal_handle = None
         try:
             status = future.result().status
         except Exception as exc:
@@ -490,7 +557,21 @@ class DemoStateManager(StateManager):
             )
             return
 
-        self.state = self.RETURNING_TO_CHARGE
+        return_state = (self.RETURNING_TO_CHARGE if reason == 'low battery'
+                        else self.RETURNING_MANUAL if reason == 'manual stop'
+                        else self.RETURNING_TO_BASE)
+        if self.state != return_state or self._return_reason != reason:
+            self._spin_generation += 1
+            if self._spin_goal_handle is not None:
+                self._spin_goal_handle.cancel_goal_async()
+                self._spin_goal_handle = None
+            self._spin_pending = False
+            self._spin_purpose = None
+            self._event_logger.info(
+                f'Base return: reason={reason}, phase={self.phase}, '
+                f'battery_raw={self.latest_battery}, threshold={self.low_battery_threshold}')
+        self._return_reason = reason
+        self.state = return_state
         self.active_target = None
 
         start_pose = PoseStamped()
@@ -524,6 +605,8 @@ class DemoStateManager(StateManager):
         self._single_detection_deadline = None
         self._spin_pending = False
         self._spin_purpose = None
+        self._cluster_people = []
+        self._return_reason = None
 
         self._event_logger.info('수동 정지: 홈 도착, 데모 시나리오를 처음 상태로 초기화')
 

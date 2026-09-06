@@ -1,0 +1,11 @@
+<!-- Humble BT: explicit approach pose, no substitution near a blocked object. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="ObjectApproach">
+      <RateController hz="1.0">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="ObjectPlanner"/>
+      </RateController>
+      <FollowPath path="{path}" controller_id="ObjectFollowPath" goal_checker_id="object_goal_checker"/>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>

@@ -34,6 +34,12 @@ def generate_launch_description():
     original_node = base_launch.Node
 
     def demo_node(*args, **kwargs):
+        if kwargs.get('executable') == 'mission_executor':
+            kwargs['parameters'] = list(kwargs.get('parameters', [])) + [{
+                'object_approach_enabled': True,
+                'front_wheel_offset_m': 0.12,
+                'object_clearance_m': 0.25,
+            }]
         if kwargs.get('executable') == 'state_manager':
             kwargs['executable'] = 'demo_state_manager'
             kwargs['parameters'] = [{

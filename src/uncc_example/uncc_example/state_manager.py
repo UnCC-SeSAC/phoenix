@@ -43,6 +43,8 @@ class StateManager(Node):
     # 배터리가 임계치 이하: 다른 목적지보다 우선하여 충전하러 복귀
     # (frontier_exploration_ros2 의 return_to_start 와는 다른 개념이라 구분)
     RETURNING_TO_CHARGE = 'RETURNING_TO_CHARGE'
+    RETURNING_TO_BASE = 'RETURNING_TO_BASE'
+    RETURNING_MANUAL = 'RETURNING_MANUAL'
 
     # target_complete 요청(request.data)에 담기는 처리 결과 문자열.
     # mission_executor 가 그대로 가져다 쓰므로 여기서만 정의한다.
@@ -569,7 +571,7 @@ class StateManager(Node):
             self._battery_low_state = raw_low
 
         if self._battery_low_state:
-            self.get_logger().warn(
+            self._event_logger.warn(
                 f'배터리 부족 (raw {self.latest_battery} <= '
                 f'임계값 {self.low_battery_threshold})',
                 throttle_duration_sec=5.0,
@@ -798,9 +800,10 @@ class StateManager(Node):
 
         target_id = id(self.active_target)
 
-        if state_changed or target_id != self._last_published_target_id:
-            self.target_pub.publish(pose_stamped)
-            self._last_published_target_id = target_id
+        # Refresh the pose even if state/target topic delivery order differs.
+        # MissionExecutor deduplicates navigation requests by state and target.
+        self.target_pub.publish(pose_stamped)
+        self._last_published_target_id = target_id
 
     # =========================================================
     # Target priority (가까운 목적지부터 처리)
