@@ -3,6 +3,7 @@ import json
 import math
 import copy
 import os
+import time
 from ament_index_python.packages import get_package_share_directory
 
 import rclpy
@@ -18,7 +19,9 @@ from tf2_ros import Buffer, TransformListener, TransformException
 from builtin_interfaces.msg import Duration as ActionDuration
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped, Point
+from geometry_msgs.msg import PoseStamped, Point, PolygonStamped, PointStamped
+from nav2_msgs.msg import Costmap
+from tf2_geometry_msgs import do_transform_point
 from nav2_msgs.action import NavigateToPose, Spin, DriveOnHeading
 
 from interfaces.action import SuppressFire
@@ -28,7 +31,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 
 from .state_manager import StateManager
 from .log_utils import make_event_logger
-from .object_approach import approach_pose, arrival_error
+from .object_approach import approach_candidates, footprint_is_free, arrival_error
 
 from frontier_exploration_ros2.srv import ControlExploration
 
@@ -59,6 +62,22 @@ class MissionExecutor(Node):
             self.get_parameter('object_heading_tolerance_deg').value)
         self._object_xy = None
         self._nav_target_key = None
+        self.declare_parameter('approach_retry_interval_sec', 2.0)
+        self.declare_parameter('approach_timeout_sec', 90.0)
+        self.declare_parameter('approach_max_attempts', 3)
+        self.declare_parameter('approach_costmap_max_age_sec', 3.0)
+        self._approach_retry_interval = max(0.1, float(self.get_parameter('approach_retry_interval_sec').value))
+        self._approach_timeout = max(1.0, float(self.get_parameter('approach_timeout_sec').value))
+        self._approach_max_attempts = max(1, int(self.get_parameter('approach_max_attempts').value))
+        self._approach_map_age = max(0.1, float(self.get_parameter('approach_costmap_max_age_sec').value))
+        self._global_costmap = None
+        self._global_costmap_received = 0.0
+        self._robot_footprint = None
+        self._pending_footprint = None
+        self._footprint_received = 0.0
+        self._approach_context = None
+        self._approach_status = None
+        self._approach_status_pub = self.create_publisher(String, '/mission/approach_status', 10)
 
         # keepout 원 겹침 판정 여유 — footprint 대각선(약 0.195m)만큼
         # 남았을 때 걸치는 걸로 본다 (fire_keepout_node 의
@@ -96,6 +115,10 @@ class MissionExecutor(Node):
         # -----------------------------
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.create_subscription(Costmap, '/global_costmap/costmap_raw',
+                                 self._costmap_callback, 1)
+        self.create_subscription(PolygonStamped, '/global_costmap/published_footprint',
+                                 self._footprint_callback, 1)
 
         self._keepout_circles = []  # [(x, y, radius), ...]
         self._escaping = False
@@ -246,6 +269,8 @@ class MissionExecutor(Node):
 
         if self.state != msg.data:
             self._cancel_nav_goal()
+            self._approach_context = None
+            self._set_approach_status('IDLE', 'mission state changed')
             # State and target are separate topics: never send the previous
             # state's pose while waiting for the new target message.
             self.current_target = None
@@ -293,6 +318,13 @@ class MissionExecutor(Node):
     # =========================================================
 
     def timer_callback(self):
+
+        self._update_footprint()
+        context = self._approach_context
+        if context is not None and not context['finished']:
+            if time.monotonic() - context['started'] >= self._approach_timeout:
+                self._finish_approach_failure('total approach timeout')
+                return
 
         if self._escaping:
             if (
@@ -489,16 +521,10 @@ class MissionExecutor(Node):
         object_xy = None
         if self.object_approach_enabled and self.state in (
                 StateManager.FIRE_DETECTED, StateManager.PERSON_DETECTED):
-            robot_pose = self._robot_pose_yaw()
-            if robot_pose is None:
+            selected = self._select_approach(target_key, target_xy)
+            if selected is None:
                 return
-            try:
-                ax, ay, yaw = approach_pose(*robot_pose[:2], *target_xy,
-                                           self.front_wheel_offset, self.object_clearance)
-            except ValueError as exc:
-                self._event_logger.error(str(exc))
-                self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
-                return
+            ax, ay, yaw = selected
             object_xy = target_xy
             pose_stamped = copy.deepcopy(pose_stamped)
             pose_stamped.pose.position.x = ax
@@ -524,6 +550,9 @@ class MissionExecutor(Node):
         goal.pose = pose_stamped
         goal.pose.header.stamp = self.get_clock().now().to_msg()
         if object_xy is not None:
+            self._approach_context['attempts'] += 1
+            self._set_approach_status('APPROACHING',
+                f"attempt={self._approach_context['attempts']}/{self._approach_max_attempts}")
             goal.behavior_tree = os.path.join(
                 get_package_share_directory('uncc_example'), 'config', 'object_approach.xml')
 
@@ -561,6 +590,9 @@ class MissionExecutor(Node):
         goal_handle = future.result()
 
         if not goal_handle.accepted:
+            if self._object_xy is not None:
+                self._retry_approach('goal rejected')
+                return
             self.get_logger().warn("Nav2 goal 이 거부됨")
             self._nav_goal_xy = None
             self._nav_target_key = None
@@ -589,7 +621,7 @@ class MissionExecutor(Node):
                 pose = self._robot_pose_yaw()
                 if pose is None:
                     self._event_logger.error('Object arrival rejected: no fresh robot TF')
-                    self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+                    self._retry_approach('arrival TF unavailable')
                     return
                 gap, error, heading = arrival_error(
                     pose, self._object_xy, self.front_wheel_offset, self.object_clearance)
@@ -598,8 +630,10 @@ class MissionExecutor(Node):
                     f'heading_error={math.degrees(heading):+.2f}deg')
                 if abs(error) > self.object_distance_tolerance or abs(heading) > self.object_heading_tolerance:
                     self._event_logger.error('Object arrival outside tolerance; action not started')
-                    self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+                    self._retry_approach('arrival outside distance/heading tolerance')
                     return
+                self._approach_context['finished'] = True
+                self._set_approach_status('ARRIVED', 'distance and heading verified')
                 if self.state == StateManager.FIRE_DETECTED:
                     # Goal already faces the real fire; preserve keepout while
                     # suppressing rather than rotating toward the approach point.
@@ -619,6 +653,9 @@ class MissionExecutor(Node):
                 # 호출해도 무시되고(no-op), person 은 이걸로 완료 처리된다.
                 self.notify_target_complete()
         elif status == GoalStatus.STATUS_CANCELED:
+            if self._object_xy is not None:
+                self._retry_approach('navigation canceled')
+                return
             # 우리가 새 goal 로 갈아탈 때는 토큰이 먼저 올라가서 여기까지
             # 안 온다 — 여기 도달했다는 건 nav2 쪽 프리엠션 충돌 등으로
             # 시도조차 제대로 못 해보고 취소된 것. unreachable 로 포기하지
@@ -627,12 +664,120 @@ class MissionExecutor(Node):
             self._nav_target_key = None
             self.get_logger().warn("Nav2 goal 이 취소됨 — 다음 tick 에 재시도")
         else:
+            if self._object_xy is not None:
+                self._retry_approach(f'navigation failed status={status}')
+                return
             self._nav_goal_xy = None
             self.get_logger().warn(
                 f"Nav2 goal 이 실패함 — 도달 불가로 보고 다음 목적지로 "
                 f"넘어감 (status={status})"
             )
             self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
+
+    def _set_approach_status(self, status, reason):
+        if status != self._approach_status:
+            self._approach_status = status
+            self._approach_status_pub.publish(String(data=status))
+        self._event_logger.info(f'Approach {status}: {reason}', throttle_duration_sec=1.0)
+
+    def _costmap_callback(self, msg):
+        self._global_costmap = msg
+        self._global_costmap_received = time.monotonic()
+
+    def _footprint_callback(self, msg):
+        self._pending_footprint = (msg, time.monotonic())
+
+    def _update_footprint(self):
+        if self._pending_footprint is None:
+            return
+        msg, received = self._pending_footprint
+        if time.monotonic() - received > self._approach_map_age:
+            self._pending_footprint = None
+            return
+        try:
+            tf = self.tf_buffer.lookup_transform(self.base_frame, msg.header.frame_id,
+                                                 Time.from_msg(msg.header.stamp))
+            points = []
+            for p in msg.polygon.points:
+                point = PointStamped(header=msg.header, point=Point(x=float(p.x), y=float(p.y), z=float(p.z)))
+                transformed = do_transform_point(point, tf).point
+                points.append((transformed.x, transformed.y))
+            if len(points) >= 3:
+                self._robot_footprint = points
+                self._footprint_received = received
+                self._pending_footprint = None
+        except TransformException:
+            # The footprint can arrive before TF for its timestamp. Retry on the
+            # next timer without blocking the executor or using an old transform.
+            pass
+
+    def _select_approach(self, key, target):
+        now = time.monotonic()
+        context = self._approach_context
+        if context is None or context['key'] != key:
+            context = dict(key=key, started=now, next_check=0.0, attempts=0,
+                           candidates=None, failed=set(), selected=None, finished=False)
+            self._approach_context = context
+        if context['finished'] or now < context['next_check']:
+            return None
+        context['next_check'] = now + self._approach_retry_interval
+        if now - context['started'] >= self._approach_timeout:
+            self._finish_approach_failure('no valid approach before timeout')
+            return None
+        if context['attempts'] >= self._approach_max_attempts:
+            self._finish_approach_failure('navigation attempt limit')
+            return None
+        grid = self._global_costmap
+        if (grid is None or self._robot_footprint is None or
+                now - self._global_costmap_received > self._approach_map_age or
+                now - self._footprint_received > self._approach_map_age):
+            self._set_approach_status('WAITING_APPROACH', 'waiting for fresh global costmap/footprint')
+            return None
+        # Costmap and object positions must share a frame; never compare them silently.
+        if grid.header.frame_id != self.map_frame:
+            self._set_approach_status('WAITING_APPROACH', f'costmap frame mismatch: {grid.header.frame_id}')
+            return None
+        pose = self._robot_pose_yaw()
+        if pose is None:
+            self._set_approach_status('WAITING_APPROACH', 'waiting for robot TF')
+            return None
+        if context['candidates'] is None:
+            try:
+                context['candidates'] = approach_candidates(*pose[:2], *target,
+                    self.front_wheel_offset, self.object_clearance)
+            except ValueError:
+                self._set_approach_status('WAITING_APPROACH', 'object overlaps robot origin')
+                return None
+        for index, candidate in enumerate(context['candidates']):
+            if index in context['failed']:
+                continue
+            if footprint_is_free(candidate, self._robot_footprint, grid):
+                context['selected'] = index
+                self._event_logger.info(f'Approach candidate {index}: pose={candidate}, footprint clear')
+                return candidate
+        self._set_approach_status('WAITING_APPROACH', 'no free untried candidate; waiting for costmap update')
+        return None
+
+    def _retry_approach(self, reason):
+        context = self._approach_context
+        if context is None or context['finished']:
+            return
+        context['failed'].add(context['selected'])
+        self._cancel_nav_goal()
+        if context['attempts'] >= self._approach_max_attempts:
+            self._finish_approach_failure(f'attempt limit: {reason}')
+        else:
+            context['next_check'] = time.monotonic() + self._approach_retry_interval
+            self._set_approach_status('WAITING_APPROACH', f'{reason}; will check another candidate')
+
+    def _finish_approach_failure(self, reason):
+        context = self._approach_context
+        if context is None or context['finished']:
+            return
+        context['finished'] = True
+        self._cancel_nav_goal()
+        self._set_approach_status('FAILED', reason)
+        self.notify_target_complete(status=StateManager.TARGET_STATUS_UNREACHABLE)
 
     # =========================================================
     # Keepout 이탈 — 주행 중 로봇 발판이 keepout 원과 겹치면, 그 원의
