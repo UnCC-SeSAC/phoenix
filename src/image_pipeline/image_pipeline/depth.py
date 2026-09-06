@@ -417,6 +417,36 @@ def sample_distance_cascade(depth, box, stages=DEFAULT_CASCADE,
     return first
 
 
+def point_below_box(box, gap: float = 1.0):
+    """박스 **바로 아래 중간** 점 (u, v). `gap`은 아랫변에서 내려가는 픽셀 수."""
+    x1, y1, x2, y2 = (float(v) for v in box)
+    return ((x1 + x2) / 2.0, y2 + float(gap))
+
+
+def sample_point(depth, u: float, v: float, encoding: str | None = None,
+                 depth_scale: float | None = None) -> DistanceSample:
+    """픽셀 **한 점**의 뎁스. 집계도 문턱도 없습니다.
+
+    `sample_distance_detail`은 영역을 잡고 통계를 내고 유효비율을 봅니다.
+    여기는 전부 건너뜁니다 — 좌표를 반올림해 그 칸의 값을 그대로 냅니다.
+    `min_valid_ratio`, `z_min`/`z_max`, `max_spread_m` 모두 적용되지 않습니다.
+
+    ★ 유일하게 남는 것은 `to_meters`가 NaN으로 바꾼 값(0·음수·포화)입니다.
+      이건 문턱이 아니라 **그 칸에 측정값이 없다**는 뜻이라 숫자를 만들 수가
+      없습니다 (§3-4). depth 0을 0m로 내보내면 메인이 로봇 발밑을 화재 지점으로
+      계산합니다.
+    """
+    depth_m = to_meters(depth, encoding=encoding, depth_scale=depth_scale)
+    height, width = depth_m.shape[:2]
+    x, y = int(round(float(u))), int(round(float(v)))
+    if not (0 <= x < width and 0 <= y < height):
+        return DistanceSample(None, 0, 0, 0.0, 0.0, "below", "box_outside_image")
+    val = float(depth_m[y, x])
+    if not np.isfinite(val):
+        return DistanceSample(None, 0, 1, 0.0, 0.0, "below", "no_valid_pixels")
+    return DistanceSample(val, 1, 1, 1.0, 0.0, "below", "ok")
+
+
 def parse_cascade(text: str):
     """`"center:median,below:max"` -> `(("center","median"), ("below","max"))`.
 
