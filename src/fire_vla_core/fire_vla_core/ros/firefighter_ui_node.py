@@ -661,7 +661,16 @@ class FirefighterUINode(Node):
         )
         self._http.start()
         host, port = self._http.address
-        self.get_logger().info(f"Firefighter UI started: http://{host}:{port}")
+        # 다른 노드들의 부트 로그(SLAM/nav2/vision 등)에 묻히지 않도록
+        # 굵은 초록색 박스로 강조한다 — 이 줄이 뜨면 브라우저로 UI를
+        # 열어도 되는 시점이라는 뜻.
+        self.get_logger().info(
+            "\n\033[1;32m"
+            "========================================================\n"
+            f"  FIREFIGHTER UI READY  ->  http://{host}:{port}\n"
+            "========================================================"
+            "\033[0m"
+        )
         if allow_remote:
             self.get_logger().warn(
                 "ui_allow_remote=true — UI가 LAN에 노출됩니다. "
