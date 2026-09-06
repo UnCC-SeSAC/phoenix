@@ -206,6 +206,14 @@ class RuleBasedUIAdapter(Node):
         client.call_async(Trigger.Request()).add_done_callback(_on_response)
 
     def _publish_status(self):
+        # discovery 가 끝나기 전에 눌리면 서비스 호출이 조용히 드롭되므로
+        # (경고 로그만 남고 UI엔 아무 표시가 없음), UI가 버튼을 비활성화할
+        # 수 있게 매번 최신 준비 상태를 스냅샷에 실어 보낸다.
+        self.status.mission_ready = (
+            self._start_mission_client.service_is_ready()
+            and self._stop_mission_client.service_is_ready()
+        )
+
         msg = String()
         msg.data = json.dumps(
             self.status.snapshot(),

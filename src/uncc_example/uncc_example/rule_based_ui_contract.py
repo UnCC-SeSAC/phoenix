@@ -49,6 +49,9 @@ class RuleBasedStatus:
 
     mission_state: str = 'UNKNOWN'
     manual_stop: bool = False
+    # start_mission/stop_mission 서비스가 아직 discovery 전이면 False —
+    # UI가 이걸 보고 버튼을 눌러도 되는 시점을 판단한다.
+    mission_ready: bool = False
     target_type: str = 'idle'
     current_target: dict[str, Any] | None = None
     found_targets: list[dict[str, Any]] = field(default_factory=list)
@@ -84,6 +87,7 @@ class RuleBasedStatus:
             'timestamp': utc_now_iso(),
             'mission': {
                 'state': display_state,
+                'ready': self.mission_ready,
                 'target_type': self.target_type,
                 'current_target': copy.deepcopy(self.current_target),
                 'last_command': copy.deepcopy(self.last_command),

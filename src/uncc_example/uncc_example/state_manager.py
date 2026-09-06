@@ -17,7 +17,14 @@ from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid
 from interfaces.srv import SetString
-from slam_toolbox.srv import Reset as SlamReset
+
+# slam_toolbox 전용 커스텀 서비스(slam_toolbox.srv.Reset)에 의존하지 않고,
+# 모든 rclcpp_lifecycle 노드가 표준으로 제공하는 lifecycle 프로토콜만으로
+# 맵을 리셋한다 — sync_slam_toolbox_node 는 LifecycleNode 라 deactivate ->
+# cleanup -> configure -> activate 를 거치면 내부 pose graph/mapper 가
+# 전부 새로 초기화된다(노드 재시작과 동일한 효과, 프로세스는 안 죽음).
+from lifecycle_msgs.msg import Transition
+from lifecycle_msgs.srv import ChangeState
 
 from .log_utils import make_event_logger
 
@@ -221,10 +228,12 @@ class StateManager(Node):
 
         # stop_mission 으로 홈에 복귀한 뒤, 다음 탐사가 예전 맵(예: 그 사이
         # 열렸다 닫힌 문처럼 지금은 안 맞는 정보)이 아니라 지금 라이다가
-        # 보는 그대로에서 다시 시작하도록 slam_toolbox 맵을 리셋한다.
-        self._slam_reset_client = self.create_client(
-            SlamReset,
-            '/slam_toolbox/reset',
+        # 보는 그대로에서 다시 시작하도록 slam_toolbox 를 lifecycle
+        # 전환으로 리셋한다 (change_state 는 모든 LifecycleNode가 표준으로
+        # 제공하므로 slam_toolbox 버전/설치본에 따라 달라지지 않는다).
+        self._slam_lifecycle_client = self.create_client(
+            ChangeState,
+            '/slam_toolbox/change_state',
         )
 
         # 행동 노드가 목적지 처리를 끝내면 호출. request.data 에 처리 결과
@@ -613,31 +622,63 @@ class StateManager(Node):
         self._publish_found_targets()
         self._call_slam_reset()
 
+    # deactivate -> cleanup -> configure -> activate 순서로 반드시 이
+    # 순서대로 밟아야 한다(cleanup 은 inactive 상태에서만 허용되는 등,
+    # lifecycle 상태머신이 순서를 강제한다).
+    _SLAM_RESET_SEQUENCE = (
+        Transition.TRANSITION_DEACTIVATE,
+        Transition.TRANSITION_CLEANUP,
+        Transition.TRANSITION_CONFIGURE,
+        Transition.TRANSITION_ACTIVATE,
+    )
+
     def _call_slam_reset(self):
-        if not self._slam_reset_client.service_is_ready():
+        if not self._slam_lifecycle_client.service_is_ready():
             self.get_logger().warning(
-                '/slam_toolbox/reset 서비스가 아직 준비되지 않음 — 맵 리셋 건너뜀'
+                '/slam_toolbox/change_state 서비스가 아직 준비되지 않음 — '
+                '맵 리셋 건너뜀'
             )
             return
 
-        def _on_response(future):
-            try:
-                future.result()
-            except Exception as exc:  # noqa: BLE001 - 리셋 실패는 로깅만 함
-                self.get_logger().warning(f'/slam_toolbox/reset 호출 실패: {exc}')
-                return
+        self._send_slam_transition(0)
 
+    def _send_slam_transition(self, step):
+        if step >= len(self._SLAM_RESET_SEQUENCE):
             # map 원점이 리셋 시점 로봇 위치 근처로 다시 잡히므로, 예전
             # 좌표계 기준이던 start_x/y 를 버리고 다음 TF 갱신에서 새
             # map 좌표계 기준으로 다시 잡는다.
             self.start_x = None
             self.start_y = None
             self._event_logger.info(
-                'slam_toolbox 맵 리셋 완료 — 시작 위치 재획득 대기'
+                'slam_toolbox 맵 리셋 완료(lifecycle 재순환) — 시작 위치 재획득 대기'
             )
+            return
 
-        self._slam_reset_client.call_async(
-            SlamReset.Request()
+        transition_id = self._SLAM_RESET_SEQUENCE[step]
+        request = ChangeState.Request(transition=Transition(id=transition_id))
+
+        def _on_response(future):
+            try:
+                response = future.result()
+            except Exception as exc:  # noqa: BLE001 - 실패는 로깅만 함
+                self.get_logger().error(
+                    f'slam_toolbox lifecycle 전환(id={transition_id}) 호출 실패: '
+                    f'{exc} — slam_toolbox 가 중간 상태에 멈춰 있을 수 있으니 '
+                    "'ros2 lifecycle set /slam_toolbox activate' 로 수동 복구 필요"
+                )
+                return
+
+            if not response.success:
+                self.get_logger().error(
+                    f'slam_toolbox lifecycle 전환(id={transition_id}) 거부됨 — '
+                    "'ros2 lifecycle set /slam_toolbox activate' 로 수동 복구 필요"
+                )
+                return
+
+            self._send_slam_transition(step + 1)
+
+        self._slam_lifecycle_client.call_async(
+            request
         ).add_done_callback(_on_response)
 
     # =========================================================
