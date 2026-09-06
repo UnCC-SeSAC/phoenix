@@ -35,6 +35,7 @@ class DemoStateManager(StateManager):
     PHASE_SECOND_SWEEP = 'second_sweep'
     PHASE_SINGLE_FIRE = 'single_fire'
     PHASE_FINAL_RETURN = 'final_return'
+    PHASE_MANUAL_RETURN = 'manual_return'
     PHASE_COMPLETE = 'complete'
     PHASE_FAILED = 'failed'
 
@@ -123,6 +124,8 @@ class DemoStateManager(StateManager):
             elif self.phase == self.PHASE_FINAL_RETURN:
                 self.phase = self.PHASE_COMPLETE
                 self._event_logger.info('최종 복귀 완료: 데모 미션 종료')
+            elif self.phase == self.PHASE_MANUAL_RETURN:
+                self._reset_demo_after_manual_stop()
 
             response.success = True
             return response
@@ -150,6 +153,14 @@ class DemoStateManager(StateManager):
     def _refresh_state(self):
         if not self._mission_started:
             self._enter_standby()
+            return
+
+        if self._manual_stop:
+            # stop_mission 이 호출되면 어느 phase에 있었든(진압 중이었어도)
+            # 무조건 중단하고 base로 복귀시킨다. FIRE_DETECTED 를 벗어나는
+            # 것만으로 mission_executor 가 알아서 진압을 취소한다.
+            self.phase = self.PHASE_MANUAL_RETURN
+            self._enter_returning_when_pose_ready('manual stop')
             return
 
         if self.phase == self.PHASE_COMPLETE:
@@ -494,6 +505,27 @@ class DemoStateManager(StateManager):
         self.state = state
         self.active_target = None
         self._publish(None)
+
+    def _reset_demo_after_manual_stop(self):
+        super()._reset_after_manual_stop()
+
+        # base 는 start_x/y 만 안다 — slam 리셋으로 map 좌표계가 바뀌면
+        # 데모가 쓰는 start_yaw 도 같이 버려야 다음 TF 에서 셋이 함께
+        # 새 좌표계 기준으로 다시 잡힌다 (_update_robot_pose 참고).
+        self.start_yaw = None
+
+        self.phase = self.PHASE_INITIAL_SWEEP
+        self._sweep_round = 0
+        self._sweep_steps = []
+        self._sweep_step_index = 0
+        self._dwell_until = None
+        self._cluster_deadline = None
+        self._single_detection_ready_at = None
+        self._single_detection_deadline = None
+        self._spin_pending = False
+        self._spin_purpose = None
+
+        self._event_logger.info('수동 정지: 홈 도착, 데모 시나리오를 처음 상태로 초기화')
 
     def _fail_mission(self, reason):
         if self.phase != self.PHASE_FAILED:

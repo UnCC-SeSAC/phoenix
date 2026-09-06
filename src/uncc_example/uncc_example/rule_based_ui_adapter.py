@@ -9,6 +9,7 @@ from rclpy.qos import qos_profile_action_status_default
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool, String, UInt16
+from std_srvs.srv import Trigger
 
 from .rule_based_ui_contract import RuleBasedStatus, parse_mission_command
 
@@ -58,9 +59,18 @@ class RuleBasedUIAdapter(Node):
             '/mission/enabled',
             10,
         )
+        self._start_mission_client = self.create_client(
+            Trigger, '/state_manager/start_mission'
+        )
+        self._stop_mission_client = self.create_client(
+            Trigger, '/state_manager/stop_mission'
+        )
 
         self.create_subscription(
             String, '/mission/state', self._mission_state_callback, 10
+        )
+        self.create_subscription(
+            Bool, '/mission/manual_stop', self._manual_stop_callback, 10
         )
         self.create_subscription(
             String, '/mission/target_type', self._target_type_callback, 10
@@ -115,6 +125,9 @@ class RuleBasedUIAdapter(Node):
     def _mission_state_callback(self, msg):
         self.status.mission_state = msg.data
 
+    def _manual_stop_callback(self, msg):
+        self.status.manual_stop = msg.data
+
     def _target_type_callback(self, msg):
         self.status.target_type = msg.data
 
@@ -163,11 +176,34 @@ class RuleBasedUIAdapter(Node):
         self._last_mission_id = command['mission_id']
         enabled = command['command'] == 'START'
         self._enabled_pub.publish(Bool(data=enabled))
+        self._call_mission_trigger(
+            self._start_mission_client if enabled else self._stop_mission_client
+        )
         self.status.last_command = {
             **command,
             'status': 'ACCEPTED',
         }
         self.status.blocked_reason = ''
+
+    def _call_mission_trigger(self, client):
+        if not client.service_is_ready():
+            self.get_logger().warning(
+                f'{client.srv_name} 서비스가 아직 준비되지 않았습니다.'
+            )
+            return
+
+        def _on_response(future):
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001 - 서비스 호출 실패를 그냥 로깅만 함
+                self.get_logger().warning(f'{client.srv_name} 호출 실패: {exc}')
+                return
+            if not result.success:
+                self.get_logger().warning(
+                    f'{client.srv_name} 실패: {result.message}'
+                )
+
+        client.call_async(Trigger.Request()).add_done_callback(_on_response)
 
     def _publish_status(self):
         msg = String()

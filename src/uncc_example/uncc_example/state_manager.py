@@ -12,11 +12,12 @@ from tf2_ros import Buffer, TransformListener, TransformException
 
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 
-from std_msgs.msg import String, UInt16
+from std_msgs.msg import Bool, String, UInt16
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid
 from interfaces.srv import SetString
+from slam_toolbox.srv import Reset as SlamReset
 
 from .log_utils import make_event_logger
 
@@ -103,6 +104,9 @@ class StateManager(Node):
         self.state = self.STANDBY
         # start_mission 서비스가 호출되기 전까지 True 로 안 바뀐다
         self._mission_started = False
+        # stop_mission 서비스로 켜짐 — 배터리와 무관하게 강제로 복귀시키고,
+        # start_mission 이 다시 호출되기 전까지 유지된다
+        self._manual_stop = False
 
         self.robot_x = None
         self.robot_y = None
@@ -132,6 +136,7 @@ class StateManager(Node):
 
         self._last_published_state = None
         self._last_published_target_id = None
+        self._last_published_manual_stop = None
 
         # 카메라는 SLAM 이 아직 못 그린 영역도 멀리서 감지할 수 있어서,
         # 감지된 좌표가 지금 global costmap 범위 밖일 수 있다 — 그 상태로
@@ -190,6 +195,16 @@ class StateManager(Node):
             10,
         )
 
+        # UI 표시 전용 신호 — RETURNING_TO_CHARGE 가 배터리 때문인지
+        # stop_mission(수동 정지) 때문인지 구분하려고 별도로 알린다.
+        # /mission/state 자체는 mission_executor 가 그대로 비교하는
+        # 값이라 바꾸면 안 된다.
+        self.manual_stop_pub = self.create_publisher(
+            Bool,
+            '/mission/manual_stop',
+            10,
+        )
+
         self.target_pub = self.create_publisher(
             PoseStamped,
             '/mission/current_target',
@@ -202,6 +217,14 @@ class StateManager(Node):
             String,
             '/mission/found_targets',
             10,
+        )
+
+        # stop_mission 으로 홈에 복귀한 뒤, 다음 탐사가 예전 맵(예: 그 사이
+        # 열렸다 닫힌 문처럼 지금은 안 맞는 정보)이 아니라 지금 라이다가
+        # 보는 그대로에서 다시 시작하도록 slam_toolbox 맵을 리셋한다.
+        self._slam_reset_client = self.create_client(
+            SlamReset,
+            '/slam_toolbox/reset',
         )
 
         # 행동 노드가 목적지 처리를 끝내면 호출. request.data 에 처리 결과
@@ -220,6 +243,16 @@ class StateManager(Node):
             Trigger,
             '~/start_mission',
             self.start_mission_callback,
+        )
+
+        # UI의 STOP 버튼 등에서 호출 — 배터리와 무관하게 강제로
+        # RETURNING_TO_CHARGE 로 보내고, start_mission 이 다시 호출되기
+        # 전까지 그 상태를 유지한다.
+        # ros2 service call /state_manager/stop_mission std_srvs/srv/Trigger "{}"
+        self.create_service(
+            Trigger,
+            '~/stop_mission',
+            self.stop_mission_callback,
         )
 
         # State machine timer
@@ -558,8 +591,54 @@ class StateManager(Node):
 
         self.active_target = None
 
+        # stop_mission 으로 복귀 중이었다면 이 호출이 곧 "홈 도착" 신호다
+        # (RETURNING_TO_CHARGE 는 active_target 이 없어서 위 분기를 안 타지만
+        # nav2 도착 시 mission_executor 가 그래도 여기를 호출한다) — 이 기회에
+        # 다음 start_mission 이 처음 탐사처럼 시작하도록 미션 기록을 지운다.
+        if self.state == self.RETURNING_TO_CHARGE and self._manual_stop:
+            self._reset_after_manual_stop()
+
         response.success = True
         return response
+
+    def _reset_after_manual_stop(self):
+        self._event_logger.info(
+            'stop_mission: 홈 도착, 미션 기록을 지우고 STANDBY로 전환'
+        )
+        self._mission_started = False
+        self._manual_stop = False
+        self.target_queue = []
+        self.found_targets = []
+        self._pending_candidates = []
+        self._publish_found_targets()
+        self._call_slam_reset()
+
+    def _call_slam_reset(self):
+        if not self._slam_reset_client.service_is_ready():
+            self.get_logger().warning(
+                '/slam_toolbox/reset 서비스가 아직 준비되지 않음 — 맵 리셋 건너뜀'
+            )
+            return
+
+        def _on_response(future):
+            try:
+                future.result()
+            except Exception as exc:  # noqa: BLE001 - 리셋 실패는 로깅만 함
+                self.get_logger().warning(f'/slam_toolbox/reset 호출 실패: {exc}')
+                return
+
+            # map 원점이 리셋 시점 로봇 위치 근처로 다시 잡히므로, 예전
+            # 좌표계 기준이던 start_x/y 를 버리고 다음 TF 갱신에서 새
+            # map 좌표계 기준으로 다시 잡는다.
+            self.start_x = None
+            self.start_y = None
+            self._event_logger.info(
+                'slam_toolbox 맵 리셋 완료 — 시작 위치 재획득 대기'
+            )
+
+        self._slam_reset_client.call_async(
+            SlamReset.Request()
+        ).add_done_callback(_on_response)
 
     # =========================================================
     # Mission start signal (bringup 완료 후 운용자가 호출)
@@ -567,7 +646,10 @@ class StateManager(Node):
 
     def start_mission_callback(self, request, response):
 
-        if self._mission_started:
+        was_manual_stop = self._manual_stop
+        self._manual_stop = False
+
+        if self._mission_started and not was_manual_stop:
             response.success = True
             response.message = 'Mission already started'
             return response
@@ -577,6 +659,20 @@ class StateManager(Node):
 
         response.success = True
         response.message = 'Mission started'
+        return response
+
+    def stop_mission_callback(self, request, response):
+
+        if not self._mission_started:
+            response.success = True
+            response.message = 'Mission not started'
+            return response
+
+        self._manual_stop = True
+        self._event_logger.info('Mission stop signal received (manual return to base)')
+
+        response.success = True
+        response.message = 'Returning to base'
         return response
 
     # =========================================================
@@ -593,7 +689,7 @@ class StateManager(Node):
             self._enter_standby()
             return
 
-        if self.is_battery_low():
+        if self._manual_stop or self.is_battery_low():
             self._enter_returning_to_charge()
             return
 
@@ -649,6 +745,12 @@ class StateManager(Node):
             self.state_pub.publish(state_msg)
 
             self._last_published_state = self.state
+
+        if self._manual_stop != self._last_published_manual_stop:
+            manual_stop_msg = Bool()
+            manual_stop_msg.data = self._manual_stop
+            self.manual_stop_pub.publish(manual_stop_msg)
+            self._last_published_manual_stop = self._manual_stop
 
         if pose_stamped is None:
             return

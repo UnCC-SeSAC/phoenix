@@ -48,6 +48,7 @@ class RuleBasedStatus:
     """Mutable adapter-side cache serialized as one UI snapshot."""
 
     mission_state: str = 'UNKNOWN'
+    manual_stop: bool = False
     target_type: str = 'idle'
     current_target: dict[str, Any] | None = None
     found_targets: list[dict[str, Any]] = field(default_factory=list)
@@ -59,6 +60,13 @@ class RuleBasedStatus:
     blocked_reason: str = ''
 
     def snapshot(self) -> dict[str, Any]:
+        # RETURNING_TO_CHARGE 는 배터리 부족과 stop_mission(수동 정지) 둘 다에서
+        # 쓰는 내부 상태값이라 그대로 두고, UI에 보여줄 라벨만 여기서 구분한다.
+        display_state = (
+            'STOP_EXPLORING'
+            if self.mission_state == 'RETURNING_TO_CHARGE' and self.manual_stop
+            else self.mission_state
+        )
         targets = copy.deepcopy(self.found_targets)
         counts = {
             'person': sum(
@@ -75,7 +83,7 @@ class RuleBasedStatus:
             'mode': MODE,
             'timestamp': utc_now_iso(),
             'mission': {
-                'state': self.mission_state,
+                'state': display_state,
                 'target_type': self.target_type,
                 'current_target': copy.deepcopy(self.current_target),
                 'last_command': copy.deepcopy(self.last_command),
