@@ -33,8 +33,10 @@ from image_pipeline.depth import (
     backproject,
     box_center,
     project_box,
+    point_below_box,
     project_point,
     sample_distance_detail,
+    sample_point,
     to_base_link,
 )
 from image_pipeline.detection_json import detection_entry, is_surrogate
@@ -171,6 +173,13 @@ class SamplingParams:
     min_score: float = 0.0
     #: {class_id: region}. 비어 있으면 모든 클래스가 `region`을 씁니다.
     region_by_class: dict = field(default_factory=dict)
+
+    #: ★ 한 점 모드. True면 위의 영역·통계·문턱을 **전부 건너뛰고**
+    #: 박스 바로 아래 중간 픽셀 하나의 뎁스를 그대로 냅니다.
+    #: `region_by_class`에서 `below`로 매핑된 클래스에만 걸립니다 (기본: fire).
+    point_below: bool = False
+    #: 아랫변에서 몇 픽셀 내려간 점을 읽을지.
+    point_gap: float = 1.0
 
     def as_kwargs(self, region: str, method: str | None = None) -> dict:
         return dict(
@@ -340,6 +349,14 @@ def convert_frame_pixels(boxes, depth, k_color, k_depth, k_out=None,
         sample, _region, _is_fallback = _sample_with_fallback(
             depth, box_d, p, encoding, depth_scale, class_id)
 
+        if sample.distance is None:
+            # ★ `continue`가 **없는** 것이 `convert_frame`과의 차이입니다.
+            #   불명도 발행하는 게 계약이므로 아래로 계속 내려가 entry가 되고,
+            #   여기서는 사유만 진단에 남깁니다. 이 두 줄이 없으면 노드의
+            #   `_reasons`가 영원히 비어 로그의 "제외:" 절이 통째로 사라집니다
+            #   (`min_score` 기본 0.0이라 `low_score`도 발생 불가능).
+            dropped.append(Dropped(class_id, score, sample.reason))
+
         u, v = box_center(box)
         if k_out is not None:
             u, v = project_point(u, v, k_color, k_out)
@@ -361,6 +378,14 @@ def _sample_with_fallback(depth, box_d, p: SamplingParams, encoding, depth_scale
     물총이 대상 거리로 착각합니다.
     """
     region, method = p.region_for(class_id)
+
+    # ★ 한 점 모드 — 띠도 통계도 폴백도 없습니다. 박스 바로 아래 중간 픽셀 하나.
+    #   `below`로 매핑된 클래스에만 걸어, person(bottom)은 기존 경로를 씁니다.
+    if p.point_below and region == "below":
+        u, v = point_below_box(box_d, p.point_gap)
+        return (sample_point(depth, u, v, encoding=encoding,
+                             depth_scale=depth_scale), "below", True)
+
     first = sample_distance_detail(
         depth, box_d, encoding=encoding, depth_scale=depth_scale,
         **p.as_kwargs(region, method))

@@ -104,6 +104,8 @@ class Detection3DNode(Node):
             min_score=float(p("min_score").value),
             region_by_class=parse_region_by_class(
                 str(p("region_by_class").value)),
+            point_below=bool(p("point_below").value),
+            point_gap=float(p("point_gap").value),
         )
 
         self.bridge = CvBridge()
@@ -195,7 +197,12 @@ class Detection3DNode(Node):
             f"({self.params.method})"
             + (f" | 클래스별 {mapping}" if mapping else " | 클래스별 매핑 없음")
             + "  ← 검출 라벨이 여기 이름과 정확히 같은지 확인하세요")
-        if self.params.band_offset > 0.0:
+        if self.params.point_below:
+            self.get_logger().info(
+                f"[태스크②] 한 점 모드 ON — below 클래스는 박스 아랫변에서 "
+                f"{self.params.point_gap:.0f}px 아래 중간 픽셀 하나를 그대로 읽습니다. "
+                "띠/통계/유효비율/z범위/폴백 전부 무시됩니다")
+        elif self.params.band_offset > 0.0:
             lo, hi = self.params.band_offset, self.params.band_offset + self.params.band_ratio
             self.get_logger().info(
                 f"[태스크②] below 띠 = 박스 아래 {lo:.1f}~{hi:.1f}배 지점 "
@@ -281,6 +288,15 @@ class Detection3DNode(Node):
         # ★ method는 자동으로 따라갑니다 (below→max). region만 바꾸면 median이
         #   걸려 -0.326m가 나갑니다 — detection3d.SamplingParams.region_for 참고.
         self.declare_parameter("region_by_class", "fire:below,person:bottom")
+
+        # ★★ 한 점 모드. True면 `below`로 매핑된 클래스(기본 fire)에서
+        #   띠·통계·유효비율·z범위·폴백을 **전부 건너뛰고** 박스 바로 아래
+        #   중간 픽셀 하나의 뎁스를 그대로 발행합니다.
+        #   그 픽셀이 0(스테레오 구멍)일 때만 `no_valid_pixels`로 null입니다.
+        #   아래 band_offset/band_ratio/central/min_valid_ratio/z_min/z_max는
+        #   이 모드에서 **무시됩니다** — 끄면(False) 다시 살아납니다.
+        self.declare_parameter("point_below", True)
+        self.declare_parameter("point_gap", 1.0)
 
         # ★ 폴백 기본 꺼짐. 켜기 전에 HANDOVER 8장 편향 표를 읽으세요.
         self.declare_parameter("fallback_regions", "")   # 예: "bottom,below,ring"

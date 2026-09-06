@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +25,7 @@ from image_pipeline.depth import (  # noqa: E402
     box_center,
     dummy_scene,
     ground_plane_depth,
+    k_from_hfov,
     optical_to_base_link_matrix,
     project_box,
     synthetic_depth,
@@ -669,3 +671,51 @@ class TestBandOffset:
 
         p25, _d, _w = self._measure(self._params(3.5), cup_offset_m=0.065)
         assert p25 == pytest.approx(dist, abs=0.05), "p25는 컵을 유지합니다"
+
+
+class TestPointBelowMode:
+    """`point_below` 배선 — 어떤 클래스에 걸리고 무엇을 무시하는가."""
+
+    @staticmethod
+    def _k():
+        return k_from_hfov(640, 480, 60.0)
+
+    def test_fire_uses_the_single_point_ignoring_band_params(self):
+        """★ band_offset=3.5 는 화면 밖으로 나가 null 이던 값입니다.
+        한 점 모드에서는 그 파라미터가 아예 안 읽혀야 합니다."""
+        depth = np.zeros((480, 640), dtype=np.uint16)
+        depth[261, 320] = 2500                      # 이 한 칸만 유효
+        p = SamplingParams(point_below=True, band_offset=3.5, band_ratio=3.0,
+                           min_valid_ratio=0.9, z_max=1.0,
+                           region_by_class={"fire": "below"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "fire", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth"] == pytest.approx(2.5)
+        assert r.entries[0]["depth_status"] == "fallback_below"
+
+    def test_person_keeps_the_old_path(self):
+        """`below`로 매핑된 클래스에만 걸립니다 — person은 bottom 그대로."""
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        p = SamplingParams(point_below=True,
+                           region_by_class={"fire": "below", "person": "bottom"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "person", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth_status"] == "fallback_bottom"
+
+    def test_hole_still_publishes_unknown_with_a_reason(self):
+        """★ null 이어도 검출은 나갑니다(계약). 사유는 진단에 남습니다."""
+        depth = np.zeros((480, 640), dtype=np.uint16)
+        p = SamplingParams(point_below=True, region_by_class={"fire": "below"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "fire", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth"] is None
+        assert r.entries[0]["depth_status"] == "unknown"
+        assert r.reason_counts() == {"no_valid_pixels": 1}
+
+    def test_off_restores_the_old_behaviour(self):
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        p = SamplingParams(point_below=False, band_offset=3.5, band_ratio=3.0,
+                           region_by_class={"fire": "below"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "fire", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth"] == pytest.approx(2.5)
