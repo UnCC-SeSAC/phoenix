@@ -121,6 +121,31 @@ RULES_REL = {
 ALARM_ABS = "LIFT_SUSPECTED"
 ALARM_REL = "TRACKING_DEFICIT"
 
+# ---------------------------------------------------------------------------
+# 들림 대 견인력 상실 — '1.0 에 붙어 있나' 로 가릅니다 (2026-09-06)
+# ---------------------------------------------------------------------------
+# 종전에는 절대형이 울렸으면 들림으로 봤습니다. 그 규칙이 깨졌습니다.
+#
+#   live34/35 (경사 20도 횡단, 심한 견인력 상실) 에서 절대형과 상대형이 **시간대까지
+#   겹쳐** 들림으로 오판했습니다. 게다가 절대형 fwd 임계 0.15 는 완전 정지 시
+#   |e| = gain*|cmd| 이므로 **지령 0.164 미만에서는 원리적으로 안 울립니다** —
+#   같은 사고가 속도에 따라 다른 이름으로 뜹니다(live34 fwd 4% / live35 fwd 0%).
+#
+# 대신 상대 잔차의 **모양**을 봅니다. 바퀴가 뜨면 실측이 항상 0 이라 r 이 1.0 에
+# 붙어 흩어지지 않습니다. 접지가 남아 있으면 미끄러졌다 물렸다 하며 크게 퍼집니다.
+#
+#     경보 중 표본에서 r > 0.80 인 비율      19런 실측
+#         들림        1.000  1.000
+#         견인력 상실  0.135  0.232          <- 경사 20도 횡단
+#         약한 슬립    0.000 ~ 0.031
+#         정상(오경보) 0.222
+#
+# 1.000 대 0.232 로 여유가 큽니다. 0.50 을 문턱으로 둡니다.
+# **표본이 들림 2런뿐입니다.** 다만 기전이 분명합니다(실측이 0 에 고정) — 들림에서
+# 이 값이 1.0 이 아니게 되려면 바퀴가 바닥에 닿아야 합니다.
+PINNED_HI = 0.80      # '실측이 사실상 0' 으로 볼 상대 잔차
+PINNED_FRAC = 0.50    # 창 안에서 이 비율을 넘으면 들림 계열
+
 MIN_CMD = 0.05     # 이 값 미만의 |지령| 은 평가하지 않습니다(정지 중 잡음 배제)
 
 # 실시간 평가 격자. `08` 의 오프라인 스윕이 지령을 20Hz ZOH 격자로 뽑아 평가하므로
@@ -225,7 +250,7 @@ class TimeWindowAlarm:
         # 임계를 0.45 까지 올려도 그대로 남습니다. 임계가 아니라 창이 문제였습니다.
         # nominal_dt 는 더 안 씁니다(호환을 위해 인자는 남깁니다). MIN_SAMPLES 주석 참고.
         self.min_samples = max(3, int(min_samples))
-        self._win = collections.deque()      # (t, hit)
+        self._win = collections.deque()      # (t, hit, e) — e 는 isolation 용
         self._cnt = 0
         self._t0 = None
         self.active = False
@@ -233,13 +258,18 @@ class TimeWindowAlarm:
         self.alarmed = 0
         self.first = None
         self.ratio = 0.0
+        # 창이 비었을 때 쓸 마지막 분포. 상대형은 게이트 때문에 표본이 희박해서
+        # (들림 런 실측 0.7Hz) 창이 자주 빕니다. 그때마다 판정을 못 하면 라벨이
+        # 튑니다 — 절대형은 20Hz 로 계속 울리고 있기 때문입니다.
+        self._last_pinned = None
+        self._last_pinned_t = None
 
     def feed(self, t, e):
         """잔차 한 건을 넣고 현재 경보 상태를 돌려줍니다."""
         if self._t0 is None:
             self._t0 = t
         hit = 1 if e >= self.thr else 0
-        self._win.append((t, hit))
+        self._win.append((t, hit, e))
         self._cnt += hit
         while self._win and t - self._win[0][0] > self.win_sec:
             self._cnt -= self._win.popleft()[1]
@@ -260,11 +290,60 @@ class TimeWindowAlarm:
         self.active = False
         return False
 
+    def pinned_frac(self, hi=PINNED_HI):
+        """창 안 표본 중 |e| > hi 인 비율. 표본이 없으면 None.
+
+        들림과 견인력 상실을 가르는 데 씁니다(PINNED_HI 주석). 상대형에서만
+        뜻이 있습니다 — 절대형의 e 는 무차원이 아니라 비교 기준이 다릅니다.
+        """
+        n = len(self._win)
+        if n >= self.min_samples:
+            f = sum(1 for _, _, e in self._win if e > hi) / n
+            self._last_pinned = f
+            self._last_pinned_t = self._win[-1][0]
+            return f
+        # 창이 덜 찼으면 마지막 판단을 씁니다. 오래된 것은 안 씁니다 — 고장이
+        # 끝난 뒤의 기억으로 새 경보를 물들이면 안 됩니다.
+        if self._last_pinned_t is not None and self._win:
+            if self._win[-1][0] - self._last_pinned_t <= 2.0 * self.win_sec:
+                return self._last_pinned
+        return None
+
     def reset(self):
         self._win.clear()
         self._cnt = 0
         self._t0 = None
         self.active = False
+        self._last_pinned = None
+        self._last_pinned_t = None
+
+
+def isolation_hint(rel_alarm, abs_alarmed=False):
+    """경보가 났을 때 원인 계열 한 줄. 경보가 없으면 None.
+
+    rel_alarm    상대형 TimeWindowAlarm
+    abs_alarmed  절대형이 하나라도 울리고 있나
+
+    ★ 판정은 상대 잔차 창의 **모양**이 합니다(PINNED_HI 주석). 경보가 켜져 있는지와
+      무관하게 창을 봅니다 — 절대형과 상대형은 창 길이가 2초 대 16초라 켜지고 꺼지는
+      시점이 어긋납니다. 상대형이 잠깐 내려간 사이에 절대형만 남으면, 켜짐 여부로
+      판정할 경우 들림 런 도중에 라벨이 튑니다(실측: live13/live25).
+    """
+    f = rel_alarm.pinned_frac() if rel_alarm is not None else None
+    pinned = f is not None and f >= PINNED_FRAC
+    active = rel_alarm is not None and rel_alarm.active
+
+    # 실측이 1.0 에 붙어 있으면 바퀴가 안 도는 것입니다 — 속도와 무관합니다.
+    if pinned and (active or abs_alarmed):
+        return "들림 계열"
+    if active:
+        return "견인력 상실 계열"
+    # 절대형만 울리고 상대 창은 1.0 에 안 붙어 있는 경우. 실측에서 나옵니다
+    # (live31_slip6 의 요레이트 경보 1건). 둘 중 어느 계열도 아니므로 넘겨짚지
+    # 않습니다 — 화면은 경보 자체와 축을 보여주면 됩니다.
+    if abs_alarmed:
+        return "원인 미상 — 절대형만"
+    return None
 
 
 def run_alarm(res, thr, win_sec, frac):

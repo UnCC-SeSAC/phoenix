@@ -202,6 +202,13 @@ class PhmMonitor(Node):
     def _cmd_src(self):
         return max(self.cmd_counts, key=self.cmd_counts.get) if self.cmd_counts else None
 
+    def _rel_alarm(self):
+        """상대형 감시기의 알람 객체. 구분 판정이 이 창의 분포를 봅니다."""
+        for mon in self.mons.values():
+            if mon.relative:
+                return mon.alarm
+        return None
+
     def tick(self):
         now = time.time()
         stale = float(self.get_parameter("stale_sec").value)
@@ -221,6 +228,12 @@ class PhmMonitor(Node):
             age = now - self.last_seen[key] if key in self.last_seen else None
             st["fresh"] = age is not None and age <= stale
             st["age_sec"] = round(age, 2) if age is not None else None
+            if rel:
+                # 들림/견인력 상실을 가르는 근거값. 화면이 숫자로 보여줄 수 있게
+                # 판정 결과와 함께 냅니다(core.PINNED_HI 주석).
+                f = mon.alarm.pinned_frac()
+                st["pinned_frac"] = round(f, 3) if f is not None else None
+                st["pinned_hi"] = core.PINNED_HI
             axes[name] = st
             if st["alarm"] and st["fresh"]:
                 alarms.append({"name": core.ALARM_REL if rel else core.ALARM_ABS,
@@ -266,11 +279,12 @@ class PhmMonitor(Node):
             #    비었다고 '이상 없음' 이 되는 것은 아닙니다 — 여기 없는 고장(모터 단선,
             #    기어 마모 등)은 애초에 이 검출기의 대상이 아닙니다.
             "not_detected": [],
-            # 두 규칙의 조합이 곧 고장 구분입니다(core.ALARM_ABS 주석의 표).
-            "isolation_hint": (
-                "들림 계열" if any(a["name"] == core.ALARM_ABS for a in alarms)
-                else ("견인력 상실 계열"
-                      if any(a["name"] == core.ALARM_REL for a in alarms) else None)),
+            # 고장 구분. **상대 잔차의 모양**이 판정하고 절대형은 보조입니다
+            # (core.PINNED_HI / core.isolation_hint 주석). 종전의 '절대형이 울리면
+            # 들림' 규칙은 2026-09-06 경사 런에서 깨졌습니다.
+            "isolation_hint": core.isolation_hint(
+                rel_alarm=self._rel_alarm(),
+                abs_alarmed=any(a["name"] == core.ALARM_ABS for a in alarms)),
             "axes": axes,
             "cmd_source": self._cmd_src(),
             "battery_mv": self.battery_mv,
