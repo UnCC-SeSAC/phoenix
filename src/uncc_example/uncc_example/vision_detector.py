@@ -1,4 +1,5 @@
 import json
+import time
 
 import rclpy
 
@@ -6,6 +7,7 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.executors import MultiThreadedExecutor
 
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401  PointStamped 변환 등록용
@@ -60,8 +62,8 @@ class VisionDetector(Node):
         # 이 클래스들만 fire/person 감지로 취급
         self.declare_parameter("target_classes", ["fire", "person"])
 
-        self.declare_parameter("tf_timeout_sec", 0.2)   # 1.0 -> 0.2
-        self.declare_parameter("tf_fallback_max_age_sec", 0.5) # 신규
+        self.declare_parameter("tf_timeout_sec", 0.2)
+        self.declare_parameter("tf_fallback_max_age_sec", 0.5)
 
         self.map_frame = self.get_parameter("map_frame").value
         self.depth_frame_id = self.get_parameter("depth_frame_id").value
@@ -79,7 +81,12 @@ class VisionDetector(Node):
         # TF (카메라 좌표 -> map 좌표 변환용)
         # -----------------------------
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
+        # TF listener uses its own reentrant callback group. The main executor's
+        # second worker can receive TF while the detection callback waits for it.
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=False)
+        self._tf_counts = dict(exact=0, fallback=0, dropped=0, unavailable=0)
+        self._tf_wait_ms = 0.0
+        self.create_timer(5.0, self._report_tf_health)
 
         # -----------------------------
         # Subscriptions
@@ -146,15 +153,20 @@ class VisionDetector(Node):
         ).to_msg()
 
         results = []
+        detections = [d for d in payload.get("detections", [])
+                      if d.get("class_name") in self.target_classes
+                      and d.get("depth") is not None]
+        if not detections:
+            return
+        transform = self._lookup_frame_transform(stamp)
+        if transform is None:
+            return
 
-        for detection in payload.get("detections", []):
+        for detection in detections:
 
             class_name = detection.get("class_name")
 
-            if class_name not in self.target_classes:
-                continue
-
-            map_point = self._compute_map_position(detection, stamp)
+            map_point = self._compute_map_position(detection, stamp, transform)
 
             if map_point is None:
                 continue
@@ -170,7 +182,7 @@ class VisionDetector(Node):
         if results:
             self._publish_detections(results)
 
-    def _compute_map_position(self, detection, stamp):
+    def _compute_map_position(self, detection, stamp, transform):
 
         u = detection["x"]
         v = detection["y"]
@@ -185,19 +197,31 @@ class VisionDetector(Node):
         point.point.x = (u - self.cx) * depth_m / self.fx
         point.point.y = (v - self.cy) * depth_m / self.fy
         point.point.z = depth_m
+        return do_transform_point(point, transform)
 
+    def _lookup_frame_transform(self, stamp):
+        point = PointStamped()
+        point.header.frame_id = self.depth_frame_id
+        point.header.stamp = stamp
+        started = time.monotonic()
         try:
-            return self.tf_buffer.transform(
-                point,
+            result = self.tf_buffer.lookup_transform(
                 self.map_frame,
+                self.depth_frame_id,
+                Time.from_msg(stamp),
                 timeout=Duration(seconds=self.tf_timeout_sec),
             )
+            self._tf_counts['exact'] += 1
+            return result
 
         except TransformException as e:
             return self._transform_with_latest_tf(point, e)
+        finally:
+            self._tf_wait_ms = (time.monotonic() - started) * 1000.0
 
     def _transform_with_latest_tf(self, point, first_error):
-        """detection 시각의 TF가 없을 때, TF가 밀린 정도가
+        """detection 시각의 TF가 없을 때 최신 TransformStamped를 반환한다.
+        TF가 밀린 정도가
         tf_fallback_max_age_sec 이내면 최신 TF로 근사한다.
         (로봇이 움직이는 중이므로 오차가 그 시간만큼 쌓인다 —
         너무 밀린 detection 은 위치가 크게 틀리므로 버린다.)"""
@@ -210,23 +234,30 @@ class VisionDetector(Node):
             )
 
         except TransformException as e:
+            self._tf_counts['unavailable'] += 1
             self._event_logger.warn(
                 f"TF unavailable (detection time: {first_error}, latest: {e})",
                 throttle_duration_sec=2.0,
             )
             return None
 
-        # gap 계산 — abs() 를 뺍니다
+        # Positive gap means the buffered transform is older than the image.
         gap_sec = (
             Time.from_msg(point.header.stamp).nanoseconds
             - Time.from_msg(latest.header.stamp).nanoseconds
         ) / 1e9
 
-        # 폐기 로그 — 부호와 판정을 같이 찍습니다
         if abs(gap_sec) > self.tf_fallback_max_age_sec:
+            self._tf_counts['dropped'] += 1
+            detection_age = (
+                self.get_clock().now().nanoseconds
+                - Time.from_msg(point.header.stamp).nanoseconds
+            ) / 1e9
             self._event_logger.warn(
                 f"Detection dropped: gap {gap_sec:+.2f}s "
-                f"({'TF stale' if gap_sec > 0 else 'detection stale'})",
+                f"({'TF stale' if gap_sec > 0 else 'detection stale'}); "
+                f"detection_age={detection_age:.3f}s; "
+                f"first_error={first_error}",
                 throttle_duration_sec=2.0,
             )
             return None
@@ -237,7 +268,25 @@ class VisionDetector(Node):
             throttle_duration_sec=2.0,
         )
 
-        return do_transform_point(point, latest)
+        self._tf_counts['fallback'] += 1
+        return latest
+
+    def _report_tf_health(self):
+        # Nonblocking edge lookups distinguish upstream TF lag from image age.
+        now_ns = self.get_clock().now().nanoseconds
+        edges = []
+        for target, source in ((self.map_frame, 'odom'),
+                               ('odom', 'base_footprint'),
+                               (self.map_frame, self.depth_frame_id)):
+            try:
+                tf = self.tf_buffer.lookup_transform(target, source, Time())
+                age = (now_ns - Time.from_msg(tf.header.stamp).nanoseconds) / 1e9
+                edges.append(f'{target}<-{source}:age={age:.3f}s')
+            except TransformException as exc:
+                edges.append(f'{target}<-{source}:unavailable={exc}')
+        self._event_logger.info(
+            f'TF health cumulative={self._tf_counts} last_lookup_ms={self._tf_wait_ms:.1f} '
+            f'executor={type(self.executor).__name__}; ' + '; '.join(edges))
 
     def _publish_detections(self, results):
 
@@ -257,14 +306,17 @@ def main(args=None):
     rclpy.init(args=args)
 
     node = VisionDetector()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
 
     try:
-        rclpy.spin(node)
+        executor.spin()
 
     except KeyboardInterrupt:
         pass
 
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
