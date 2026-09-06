@@ -55,6 +55,7 @@ setup(
             "mission_manager = uncc_example.mission_manager:main",
             "fire_suppression_node_dummy_stub = uncc_example.fire_suppression_node_dummy_stub:main",
             "fire_status_service_node = uncc_example.fire_status_service_node:main",
+            "rule_based_ui_adapter = uncc_example.rule_based_ui_adapter:main",
             "navigate_to_pose_dummy_stub = uncc_example.navigate_to_pose_dummy_stub:main",
             (
                 "frontier_state_controller = "
