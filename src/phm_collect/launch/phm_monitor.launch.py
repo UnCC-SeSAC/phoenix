@@ -11,6 +11,27 @@
     전진속도 /odom_rf2o        <- rf2o_laser_odometry 가 떠 있어야 합니다
     배터리  /ros_robot_controller/battery
 
+★★ rf2o 출력을 EKF 와 분리합니다 (`rf2o_topic` 기본 /phm/odom_rf2o)
+------------------------------------------------------------------
+이 브랜치의 `ekf.yaml` 은 **`odom1: odom_rf2o`** 입니다. 즉 EKF 가 rf2o 원본을
+그대로 융합하도록 설정돼 있습니다. 그런데 원본은 라이다가 180도 돌아 장착돼 있어
+x,y 부호가 반대이고 covariance 가 전부 0 입니다.
+
+`albitro/data_dashboard` 에서는 문제가 없었습니다 — 거기 `ekf.yaml` 은
+`odom_rf2o_fixed`(릴레이 출력)를 보므로 원본이 비어 있어도 됐습니다. **여기서는
+릴레이와 ekf.yaml 을 안 가져왔기 때문에 원본 토픽이 곧 EKF 입력입니다.**
+
+그래서 이 런치가 `/odom_rf2o` 로 발행하면 **EKF 가 부호 반대인 위치를 먹기 시작합니다**
+(실측: odom_raw 와 이동 벡터 148~159도 차이). 주행 스택과 같이 띄우면 조용히
+로컬라이제이션이 망가집니다.
+
+PHM 은 토픽 이름과 무관하게 동작하므로, rf2o 출력을 **`/phm/odom_rf2o` 로 remap** 해서
+EKF 의 시야 밖에 둡니다. EKF 는 종전대로 odom0(휠) + imu0 으로만 돕니다 — 이 런치를
+띄우기 전과 **완전히 같은 거동**입니다.
+
+EKF 에도 rf2o 를 먹이려면 릴레이와 ekf.yaml 을 함께 이식한 뒤
+`rf2o_topic:=/odom_rf2o` 로 되돌리세요. 그 전에는 절대 그러지 마세요.
+
 ★ 이 브랜치(albitro/phm_feat)에는 covariance 릴레이가 없습니다
 --------------------------------------------------------------
 릴레이(`controller` 패키지의 `rf2o_covariance_relay`)와 그 짝인 `ekf.yaml` 변경은
@@ -56,11 +77,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (DeclareLaunchArgument, GroupAction,
+                            IncludeLaunchDescription)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetRemap
 from launch_ros.parameter_descriptions import ParameterValue
 
 
@@ -83,11 +105,23 @@ def generate_launch_description():
                         'controller 패키지에 rf2o_covariance_relay entry point 가 '
                         '없으므로 기본이 false 입니다 — true 로 두면 런치가 실패합니다. '
                         'PHM 은 원본 /odom_rf2o 를 읽으므로 릴레이가 없어도 됩니다.'),
+        DeclareLaunchArgument(
+            'rf2o_topic', default_value='/phm/odom_rf2o',
+            description='rf2o 가 발행할 토픽이자 PHM 이 구독할 토픽. 기본값이 '
+                        '/odom_rf2o 가 아닌 이유는 위 독스트링 참고 — 이 브랜치의 '
+                        'EKF 가 /odom_rf2o 를 융합하도록 설정돼 있어서, 그대로 쓰면 '
+                        '부호가 반대인 위치를 EKF 가 먹습니다.'),
         DeclareLaunchArgument('status_topic', default_value='/phm/status'),
         DeclareLaunchArgument('publish_period_sec', default_value='1.0'),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(rf2o_launch),
-            condition=IfCondition(with_rf2o)),
+        # rf2o 는 odom_topic 파라미터로 /odom_rf2o 에 발행합니다. 그 이름을
+        # 여기서 갈아끼워 EKF 와 겹치지 않게 합니다(독스트링 ★★ 참고).
+        GroupAction(
+            condition=IfCondition(with_rf2o),
+            actions=[
+                SetRemap(src='/odom_rf2o', dst=LaunchConfiguration('rf2o_topic')),
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(rf2o_launch)),
+            ]),
         # ★ 릴레이는 이 브랜치에 없습니다 (with_relay 기본 false).
         # 릴레이는 EKF 의 odom1(= odom_rf2o_fixed) 입력을 만드는 쪽이고,
         # ekf.yaml 변경과 짝입니다. 둘 다 여기로 가져오지 않았습니다.
@@ -105,6 +139,8 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'status_topic': LaunchConfiguration('status_topic'),
+                # 위에서 remap 한 이름과 반드시 같아야 합니다.
+                'rf2o_topic': LaunchConfiguration('rf2o_topic'),
                 # 노드가 double 로 선언한 파라미터입니다. LaunchConfiguration 은
                 # 문자열이라 그대로 넘기면 기동 시 타입 오류가 납니다
                 # (firefighter_ui.launch.py 가 ParameterValue 를 쓰는 것과 같은 이유).
