@@ -52,11 +52,13 @@ class MissionExecutor(Node):
         self.declare_parameter('object_approach_enabled', False)
         self.declare_parameter('front_wheel_offset_m', 0.12)
         self.declare_parameter('object_clearance_m', 0.25)
+        self.declare_parameter('person_clearance_m', 0.25)
         self.declare_parameter('object_distance_tolerance_m', 0.025)
         self.declare_parameter('object_heading_tolerance_deg', 3.0)
         self.object_approach_enabled = self.get_parameter('object_approach_enabled').value
         self.front_wheel_offset = self.get_parameter('front_wheel_offset_m').value
         self.object_clearance = self.get_parameter('object_clearance_m').value
+        self.person_clearance = self.get_parameter('person_clearance_m').value
         self.object_distance_tolerance = self.get_parameter('object_distance_tolerance_m').value
         self.object_heading_tolerance = math.radians(
             self.get_parameter('object_heading_tolerance_deg').value)
@@ -535,7 +537,7 @@ class MissionExecutor(Node):
             target_xy = (ax, ay)
             self._event_logger.info(
                 f'Object approach: object={object_xy}, goal={target_xy}, '
-                f'wheel_clearance={self.object_clearance:.3f}m offset={self.front_wheel_offset:.3f}m')
+                f'wheel_clearance={self._clearance_for_state():.3f}m offset={self.front_wheel_offset:.3f}m')
 
         # 목적지가 바뀌었으니 진행 중이던 goal 은 취소하고 새로 보낸다
         self._cancel_nav_goal()
@@ -624,7 +626,7 @@ class MissionExecutor(Node):
                     self._retry_approach('arrival TF unavailable')
                     return
                 gap, error, heading = arrival_error(
-                    pose, self._object_xy, self.front_wheel_offset, self.object_clearance)
+                    pose, self._object_xy, self.front_wheel_offset, self._clearance_for_state())
                 self._event_logger.info(
                     f'Object arrival: wheel_gap={gap:.3f}m error={error:+.3f}m '
                     f'heading_error={math.degrees(heading):+.2f}deg')
@@ -711,6 +713,9 @@ class MissionExecutor(Node):
             # next timer without blocking the executor or using an old transform.
             pass
 
+    def _clearance_for_state(self):
+        return self.person_clearance if self.state == StateManager.PERSON_DETECTED else self.object_clearance
+
     def _select_approach(self, key, target):
         now = time.monotonic()
         context = self._approach_context
@@ -744,7 +749,7 @@ class MissionExecutor(Node):
         if context['candidates'] is None:
             try:
                 context['candidates'] = approach_candidates(*pose[:2], *target,
-                    self.front_wheel_offset, self.object_clearance)
+                    self.front_wheel_offset, self._clearance_for_state())
             except ValueError:
                 self._set_approach_status('WAITING_APPROACH', 'object overlaps robot origin')
                 return None
