@@ -31,6 +31,8 @@ from rclpy.node import Node
 from rclpy.action.server import ServerGoalHandle
 from rclpy.task import Future
 
+from rcl_interfaces.msg import SetParametersResult
+
 from interfaces.action import SuppressFire
 from interfaces.srv import CheckFireStatus
 
@@ -45,6 +47,10 @@ Device.pin_factory = LGPIOFactory()
 PUMP_PIN = 14
 SERVO_PIN = 13
 PWM_FREQUENCY = 1000
+
+# 펌프 PWM 듀티 기본값(0.0~1.0). 런타임에 다음 명령으로 조정 가능:
+#   ros2 param set /fire_suppression_node pump_value 0.6
+DEFAULT_PUMP_VALUE = 1.0
 
 SPRAY_SECONDS = 3.0
 RETRY_WAIT_SECONDS = 2.0
@@ -85,6 +91,14 @@ class FireSuppressionNode(Node):
         super().__init__("fire_suppression_node")
         self._event_logger = make_event_logger(self)
         self._busy = False
+
+        # ---- 펌프 세기 (런타임 조정) ----
+        # ★ 값만 보관하고 하드웨어에는 바로 쓰지 않는다. 대기 중에
+        #   param 을 바꿨다고 펌프가 돌기 시작하면 안 되기 때문 —
+        #   실제 반영은 run_suppression_routine 의 분사 루프에서 한다.
+        self.declare_parameter("pump_value", DEFAULT_PUMP_VALUE)
+        self.pump_value = float(self.get_parameter("pump_value").value)
+        self.add_on_set_parameters_callback(self._on_set_parameters)
 
         self.pump = PWMOutputDevice(
             PUMP_PIN, active_high=False, frequency=PWM_FREQUENCY, initial_value=0.0
@@ -184,6 +198,40 @@ class FireSuppressionNode(Node):
         await self._rclpy_sleep(SERVO_SETTLE_SECONDS)
         self.servo.detach()
 
+    def _on_set_parameters(self, params):
+        """`ros2 param set /fire_suppression_node pump_value 0.6` 처리.
+
+        ★ 범위를 벗어난 값을 그냥 받으면 gpiozero 가 **분사 시점에**
+          OutputDeviceBadValue 를 던진다. 그때는 이미 액션 실행 중이라
+          펌프가 켜진 채로 예외가 날 수 있으므로 여기서 미리 거절한다.
+        ★ 하드웨어에는 쓰지 않는다 — 분사 중이면 다음 스윕 tick(0.3s)에,
+          대기 중이면 다음 분사부터 반영된다.
+        """
+        for p in params:
+
+            if p.name != "pump_value":
+                continue
+
+            try:
+                value = float(p.value)
+            except (TypeError, ValueError):
+                return SetParametersResult(
+                    successful=False,
+                    reason="pump_value 는 실수여야 합니다",
+                )
+
+            if not 0.0 <= value <= 1.0:
+                return SetParametersResult(
+                    successful=False,
+                    reason=f"pump_value 는 0.0~1.0 이어야 합니다: {value}",
+                )
+
+            self.pump_value = value
+            self.get_logger().info(f"펌프 세기 변경: {value:.2f}")
+
+        return SetParametersResult(successful=True)
+
+
     async def run_suppression_routine(self, goal_handle) -> bool:
         """펌프 ON 상태로 SPRAY_SECONDS 동안 min/max 각도를 단순 왕복하며
         분사한다 (EMA 스무딩/가변속 스윕은 저가형 서보에서 체감 효과가
@@ -197,12 +245,20 @@ class FireSuppressionNode(Node):
         angle = min_angle
         self.servo.angle = angle  # detach 상태였다면 여기서 자동 재개됨
 
-        self.pump.value = 1.0
+        # 실제로 하드웨어에 써준 값. self.pump.value 를 되읽어 비교하지
+        # 않는 이유는 PWM 양자화 때문에 넣은 값과 정확히 같게 안 돌아올
+        # 수 있어서다 — 우리가 쓴 값을 직접 들고 비교한다.
+        applied = self.pump_value
+        self.pump.value = applied
         elapsed = 0.0
         try:
             while elapsed < SPRAY_SECONDS:
                 if goal_handle.is_cancel_requested:
                     return True
+                # 분사 도중 param 이 바뀌면 그 자리에서 반영한다.
+                if applied != self.pump_value:
+                    applied = self.pump_value
+                    self.pump.value = applied
                 angle = max_angle if angle == min_angle else min_angle
                 self.servo.angle = angle
                 await self._rclpy_sleep(SERVO_SWEEP_STEP_SECONDS)
