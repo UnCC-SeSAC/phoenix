@@ -39,7 +39,7 @@ def generate_launch_description():
                 {
                     "object_approach_enabled": True,
                     "front_wheel_offset_m": 0.12,
-                    "object_clearance_m": 0.10,
+                    "object_clearance_m": 0.20,
                     "person_clearance_m": 0.25,
                     "person_goal_tolerance_m": 0.10,
                 }
