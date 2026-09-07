@@ -390,6 +390,29 @@ class StateManager(Node):
         # 확정 좌표는 후보의 최초 감지 좌표를 그대로 쓴다(갱신 안 함).
         confirmed_pose = candidate['pose']
 
+        # position은 실제 객체 좌표로 유지하고, 객체를 확정했을 때의
+        # 로봇→객체 시선 방향을 orientation에 저장한다. 나중에 다른 객체
+        # 위치에서 접근 방향을 다시 만들지 않기 위한 힌트다.
+        heading_saved = False
+        if (
+            confirmed_pose.header.frame_id == self.map_frame
+            and self.robot_x is not None
+            and self.robot_y is not None
+        ):
+            position = confirmed_pose.pose.position
+            heading = math.atan2(
+                position.y - self.robot_y,
+                position.x - self.robot_x,
+            )
+            confirmed_pose.pose.orientation.z = math.sin(heading / 2.0)
+            confirmed_pose.pose.orientation.w = math.cos(heading / 2.0)
+            heading_saved = True
+        else:
+            # Identity quaternion을 저장 방향 0rad로 오해하지 않게 명시적인
+            # '힌트 없음' 값으로 둔다. mission_executor는 norm으로 구분한다.
+            confirmed_pose.pose.orientation.z = 0.0
+            confirmed_pose.pose.orientation.w = 0.0
+
         entry = {
             'type': target_type,
             'pose': confirmed_pose,
@@ -410,7 +433,8 @@ class StateManager(Node):
 
         self._event_logger.info(
             f"새 객체 인식: {target_type} "
-            f"({confirmed_position.x:.2f}, {confirmed_position.y:.2f})"
+            f"({confirmed_position.x:.2f}, {confirmed_position.y:.2f}) "
+            f"approach_heading_saved={heading_saved}"
         )
 
         return entry

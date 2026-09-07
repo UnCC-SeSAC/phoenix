@@ -545,7 +545,16 @@ class MissionExecutor(Node):
             StateManager.FIRE_DETECTED,
             StateManager.PERSON_DETECTED,
         ):
-            selected = self._select_approach(target_key, target_xy)
+            orientation = pose_stamped.pose.orientation
+            stored_heading = None
+            if math.hypot(orientation.z, orientation.w) > 0.5:
+                stored_heading = math.atan2(
+                    2.0 * orientation.w * orientation.z,
+                    1.0 - 2.0 * orientation.z * orientation.z,
+                )
+            selected = self._select_approach(
+                target_key, target_xy, stored_heading=stored_heading
+            )
             if selected is None:
                 return
             ax, ay, yaw = selected
@@ -559,7 +568,9 @@ class MissionExecutor(Node):
             target_xy = (ax, ay)
             self._event_logger.info(
                 f"Object approach: object={object_xy}, goal={target_xy}, "
-                f"wheel_clearance={self._approach_clearance():.3f}m offset={self.front_wheel_offset:.3f}m"
+                f"wheel_clearance={self._approach_clearance():.3f}m "
+                f"offset={self.front_wheel_offset:.3f}m "
+                f"basis={'initial_detection' if stored_heading is not None else 'current_pose'}"
             )
 
         # 목적지가 바뀌었으니 진행 중이던 goal 은 취소하고 새로 보낸다
@@ -785,7 +796,7 @@ class MissionExecutor(Node):
             else self.object_clearance
         )
 
-    def _select_approach(self, key, target):
+    def _select_approach(self, key, target, stored_heading=None):
         now = time.monotonic()
         context = self._approach_context
         if context is None or context["key"] != key:
@@ -837,6 +848,7 @@ class MissionExecutor(Node):
                     *target,
                     self.front_wheel_offset,
                     self._approach_clearance(),
+                    heading=stored_heading,
                 )
             except ValueError:
                 self._set_approach_status(

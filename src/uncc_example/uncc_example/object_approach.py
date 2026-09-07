@@ -2,10 +2,12 @@
 import math
 
 
-def approach_candidates(robot_x, robot_y, target_x, target_y, wheel_offset, clearance):
-    """Five deterministic candidates on the same clearance circle."""
-    _, _, heading = approach_pose(robot_x, robot_y, target_x, target_y,
-                                  wheel_offset, clearance)
+def approach_candidates(robot_x, robot_y, target_x, target_y, wheel_offset,
+                        clearance, heading=None):
+    """Five candidates using a saved sight line or the current robot pose."""
+    if heading is None:
+        _, _, heading = approach_pose(robot_x, robot_y, target_x, target_y,
+                                      wheel_offset, clearance)
     radius = wheel_offset + clearance
     return [(target_x - radius * math.cos(heading + math.radians(angle)),
              target_y - radius * math.sin(heading + math.radians(angle)),
