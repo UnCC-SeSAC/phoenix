@@ -387,7 +387,7 @@ class DemoStateManager(StateManager):
 
         if now >= self._single_detection_deadline:
             self._fail_mission(
-                'base 정면에서 단독 화재를 제한시간 내 찾지 못함'
+                '단독 화재를 제한시간 내 찾지 못함'
             )
 
     # =========================================================

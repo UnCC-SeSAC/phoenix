@@ -52,6 +52,11 @@ class MissionExecutor(Node):
         self.declare_parameter('object_approach_enabled', False)
         self.declare_parameter('front_wheel_offset_m', 0.12)
         self.declare_parameter('object_clearance_m', 0.25)
+        self.declare_parameter('person_clearance_m', 0.25)
+        # Keep in sync with person_goal_checker.xy_goal_tolerance.
+        self.declare_parameter('person_goal_tolerance_m', 0.10)
+        self.person_clearance = self.get_parameter('person_clearance_m').value
+        self.person_goal_tolerance = self.get_parameter('person_goal_tolerance_m').value
         self.declare_parameter('object_distance_tolerance_m', 0.025)
         self.declare_parameter('object_heading_tolerance_deg', 3.0)
         self.object_approach_enabled = self.get_parameter('object_approach_enabled').value
@@ -535,7 +540,7 @@ class MissionExecutor(Node):
             target_xy = (ax, ay)
             self._event_logger.info(
                 f'Object approach: object={object_xy}, goal={target_xy}, '
-                f'wheel_clearance={self.object_clearance:.3f}m offset={self.front_wheel_offset:.3f}m')
+                f'wheel_clearance={self._approach_clearance():.3f}m offset={self.front_wheel_offset:.3f}m')
 
         # 목적지가 바뀌었으니 진행 중이던 goal 은 취소하고 새로 보낸다
         self._cancel_nav_goal()
@@ -554,7 +559,9 @@ class MissionExecutor(Node):
             self._set_approach_status('APPROACHING',
                 f"attempt={self._approach_context['attempts']}/{self._approach_max_attempts}")
             goal.behavior_tree = os.path.join(
-                get_package_share_directory('uncc_example'), 'config', 'object_approach.xml')
+                get_package_share_directory('uncc_example'), 'config',
+                'person_approach.xml' if self.state == StateManager.PERSON_DETECTED
+                else 'object_approach.xml')
 
         self._event_logger.info(
             f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})"
@@ -623,17 +630,31 @@ class MissionExecutor(Node):
                     self._event_logger.error('Object arrival rejected: no fresh robot TF')
                     self._retry_approach('arrival TF unavailable')
                     return
-                gap, error, heading = arrival_error(
-                    pose, self._object_xy, self.front_wheel_offset, self.object_clearance)
-                self._event_logger.info(
-                    f'Object arrival: wheel_gap={gap:.3f}m error={error:+.3f}m '
-                    f'heading_error={math.degrees(heading):+.2f}deg')
-                if abs(error) > self.object_distance_tolerance or abs(heading) > self.object_heading_tolerance:
+                if self.state == StateManager.PERSON_DETECTED:
+                    # Person visitation needs proximity to the validated approach
+                    # goal, not the precise nozzle alignment required for fire.
+                    goal_error = math.hypot(pose[0] - self._nav_goal_xy[0],
+                                            pose[1] - self._nav_goal_xy[1])
+                    self._event_logger.info(
+                        f'Person arrival: goal_error={goal_error:.3f}m '
+                        f'tolerance={self.person_goal_tolerance:.3f}m (heading not required)')
+                    arrived = goal_error <= self.person_goal_tolerance
+                    detail = 'person approach position verified'
+                else:
+                    gap, error, heading = arrival_error(
+                        pose, self._object_xy, self.front_wheel_offset, self.object_clearance)
+                    self._event_logger.info(
+                        f'Object arrival: wheel_gap={gap:.3f}m error={error:+.3f}m '
+                        f'heading_error={math.degrees(heading):+.2f}deg')
+                    arrived = (abs(error) <= self.object_distance_tolerance
+                               and abs(heading) <= self.object_heading_tolerance)
+                    detail = 'distance and heading verified'
+                if not arrived:
                     self._event_logger.error('Object arrival outside tolerance; action not started')
-                    self._retry_approach('arrival outside distance/heading tolerance')
+                    self._retry_approach('arrival outside tolerance')
                     return
                 self._approach_context['finished'] = True
-                self._set_approach_status('ARRIVED', 'distance and heading verified')
+                self._set_approach_status('ARRIVED', detail)
                 if self.state == StateManager.FIRE_DETECTED:
                     # Goal already faces the real fire; preserve keepout while
                     # suppressing rather than rotating toward the approach point.
@@ -711,6 +732,10 @@ class MissionExecutor(Node):
             # next timer without blocking the executor or using an old transform.
             pass
 
+    def _approach_clearance(self):
+        return (self.person_clearance if self.state == StateManager.PERSON_DETECTED
+                else self.object_clearance)
+
     def _select_approach(self, key, target):
         now = time.monotonic()
         context = self._approach_context
@@ -744,7 +769,7 @@ class MissionExecutor(Node):
         if context['candidates'] is None:
             try:
                 context['candidates'] = approach_candidates(*pose[:2], *target,
-                    self.front_wheel_offset, self.object_clearance)
+                    self.front_wheel_offset, self._approach_clearance())
             except ValueError:
                 self._set_approach_status('WAITING_APPROACH', 'object overlaps robot origin')
                 return None

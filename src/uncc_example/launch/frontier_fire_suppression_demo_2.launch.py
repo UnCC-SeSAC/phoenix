@@ -1,6 +1,6 @@
-"""시나리오 2: 초기 스캔 후 군집 fire와 단독 fire를 연속 진압하는 데모."""
+"""시나리오 2: 군집 fire → person → 단독 fire → 최종 base 복귀."""
 
-# 기존 H/W 체인은 그대로 사용하고 상태 관리자만 교체한다.
+# 기존 H/W 체인에 객체 접근 설정과 시나리오 상태 관리자를 적용한다.
 import importlib.util
 import os
 
@@ -28,6 +28,14 @@ def generate_launch_description():
     original_node = base_launch.Node
 
     def scenario_2_node(*args, **kwargs):
+        if kwargs.get('executable') == 'mission_executor':
+            kwargs['parameters'] = list(kwargs.get('parameters', [])) + [{
+                'object_approach_enabled': True,
+                'front_wheel_offset_m': 0.12,
+                'object_clearance_m': 0.10,
+                'person_clearance_m': 0.25,
+                'person_goal_tolerance_m': 0.10,
+            }]
         if kwargs.get('executable') == 'state_manager':
             kwargs['executable'] = 'demo_state_manager_2'
             kwargs['parameters'] = [{
