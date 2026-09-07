@@ -722,10 +722,13 @@ class StateManager(Node):
         if was_started:
             # 처음 시작/(stop 후 홈 도착 완료) 둘 다 아니면 — 즉 미션이
             # 이미 도는 도중(홈 도착 전 stop 포함)이면 START는 재개가
-            # 아니라 리셋 버튼으로 동작한다: 지금 상황 기준으로 초기화.
+            # 아니라 리셋 버튼으로 동작한다: 지금 상황 기준으로 초기화만
+            # 하고 멈춰서, 실제로 움직이려면 STANDBY에서 START를 한 번
+            # 더 눌러야 한다 (리셋 즉시 움직이지 않는다).
             self._reset_mission_records()
+            self._mission_started = False
             self._event_logger.info(
-                'Mission reset signal received — 현재 상황 기준으로 초기화'
+                'Mission reset signal received — 대기 상태로 초기화'
             )
             response.success = True
             response.message = 'Mission reset'
