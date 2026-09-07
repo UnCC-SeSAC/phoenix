@@ -12,11 +12,14 @@ def approach_candidates(robot_x, robot_y, target_x, target_y, wheel_offset, clea
              heading + math.radians(angle)) for angle in (0, 15, -15, 30, -30)]
 
 
-def footprint_is_free(pose, footprint, costmap, lethal_cost=253):
+def footprint_is_free(pose, footprint, costmap, lethal_cost=254):
     """Check every grid cell intersecting a convex footprint (including interior).
 
     nav2_msgs/Costmap raw costs: 253 inscribed, 254 lethal, 255 unknown.
-    SAT includes cell boundaries, conservatively rejecting touching obstacles.
+    The costmap has already expanded 253 for the robot inscribed radius, so
+    applying the full footprint to it would count the robot size twice. Accept
+    253 here and reject only lethal/keepout (254) and unknown (255). SAT includes
+    cell boundaries, conservatively rejecting contact with those rejected cells.
     """
     meta = costmap.metadata
     if meta.resolution <= 0 or len(footprint) < 3:
