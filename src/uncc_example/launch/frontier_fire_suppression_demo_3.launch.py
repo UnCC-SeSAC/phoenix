@@ -1,6 +1,5 @@
-"""시나리오 2: 확인된 fire 처리 → 필요시 base 재탐색 → 무화재 확인 후 종료."""
+"""시나리오 3: 단일 객체도 우선 처리하고 base 재탐색 후 최종 판정."""
 
-# 기존 H/W 체인에 객체 접근 설정과 시나리오 상태 관리자를 적용한다.
 import importlib.util
 import os
 
@@ -25,23 +24,26 @@ def _load_hardware_test_launch():
 
 
 def generate_launch_description():
+    """Build the hardware demo launch with demo3 mission policy."""
     base_launch = _load_hardware_test_launch()
     original_node = base_launch.Node
 
-    def scenario_2_node(*args, **kwargs):
+    def scenario_3_node(*args, **kwargs):
         if kwargs.get("executable") == "mission_executor":
             kwargs["parameters"] = list(kwargs.get("parameters", [])) + [
                 {
+                    # mission_executor converts the object coordinate into a
+                    # costmap-validated stand-off pose before calling Nav2.
                     "object_approach_enabled": True,
                     "front_wheel_offset_m": 0.12,
-                    "object_clearance_m": 0.15,
-                    "person_clearance_m": 0.25,
+                    "object_clearance_m": 0.20,
+                    "person_clearance_m": 0.20,
                     "person_goal_tolerance_m": 0.10,
                 }
             ]
         if kwargs.get("executable") == "state_manager":
-            kwargs["executable"] = "demo_state_manager_2"
-            kwargs["parameters"] = [
+            kwargs["executable"] = "demo_state_manager_3"
+            kwargs["parameters"] = list(kwargs.get("parameters", [])) + [
                 {
                     "sweep_angle_deg": 15.0,
                     "sweep_dwell_sec": 1.0,
@@ -53,7 +55,7 @@ def generate_launch_description():
             ]
         return original_node(*args, **kwargs)
 
-    base_launch.Node = scenario_2_node
+    base_launch.Node = scenario_3_node
     try:
         return base_launch.generate_launch_description()
     finally:

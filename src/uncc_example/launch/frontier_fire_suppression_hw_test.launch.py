@@ -352,6 +352,9 @@ def generate_launch_description():
         executable='fire_suppression_node',
         name='fire_suppression_node',
         output='both',
+        parameters=[{
+            'pump_value': 1.0,
+        }],
     )
 
     # LiDAR보다 낮아서 obstacle_layer 가 못 보는 fire/person 위치를

@@ -21,13 +21,21 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
     package_share = get_package_share_directory('uncc_example')
     navigation_share = get_package_share_directory('navigation')
 
-    params_file = LaunchConfiguration('params_file')
+    params_file = RewrittenYaml(
+        source_file=LaunchConfiguration('params_file'),
+        param_rewrites={
+            'default_nav_to_pose_bt_xml': os.path.join(
+                package_share, 'config', 'base_navigation.xml'),
+        },
+        convert_types=True,
+    )
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_teb = LaunchConfiguration('use_teb')
 
