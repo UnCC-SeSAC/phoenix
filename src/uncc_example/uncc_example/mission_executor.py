@@ -62,7 +62,7 @@ class MissionExecutor(Node):
         self.declare_parameter("person_goal_tolerance_m", 0.10)
         self.person_clearance = self.get_parameter("person_clearance_m").value
         self.person_goal_tolerance = self.get_parameter("person_goal_tolerance_m").value
-        self.declare_parameter("object_distance_tolerance_m", 0.025)
+        self.declare_parameter("object_distance_tolerance_m", 0.05)
         self.declare_parameter("object_heading_tolerance_deg", 5.0)
         self.object_approach_enabled = self.get_parameter(
             "object_approach_enabled"

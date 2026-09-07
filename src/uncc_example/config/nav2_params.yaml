@@ -29,13 +29,13 @@ controller_server:
     object_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: False
-      xy_goal_tolerance: 0.02
-      yaw_goal_tolerance: 0.035
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.087
 
     person_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: False
-      xy_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.05
       yaw_goal_tolerance: 3.15  # Person visits do not require final heading.
 
     FollowPath:
@@ -162,7 +162,7 @@ controller_server:
       angular_granularity: 0.025
 
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.02
+      xy_goal_tolerance: 0.05
       trans_stopped_velocity: 0.01
 
       short_circuit_trajectory_evaluation: True
@@ -378,7 +378,7 @@ planner_server:
     planner_plugins: ["GridBased", "ObjectPlanner"]
     ObjectPlanner:
       plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.0
+      tolerance: 0.05
       use_astar: false
       allow_unknown: false
 
