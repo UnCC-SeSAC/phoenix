@@ -44,7 +44,6 @@ class StateManager(Node):
     # (frontier_exploration_ros2 의 return_to_start 와는 다른 개념이라 구분)
     RETURNING_TO_CHARGE = 'RETURNING_TO_CHARGE'
     RETURNING_TO_BASE = 'RETURNING_TO_BASE'
-    RETURNING_MANUAL = 'RETURNING_MANUAL'
 
     # target_complete 요청(request.data)에 담기는 처리 결과 문자열.
     # mission_executor 가 그대로 가져다 쓰므로 여기서만 정의한다.

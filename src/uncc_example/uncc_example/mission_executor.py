@@ -363,7 +363,6 @@ class MissionExecutor(Node):
             StateManager.FIRE_DETECTED,
             StateManager.RETURNING_TO_CHARGE,
             StateManager.RETURNING_TO_BASE,
-            StateManager.RETURNING_MANUAL,
         ):
             # 셋 다 "현재 목적지로 이동"까지는 동일하게 처리한다. 도착 후
             # 동작(구조/진압 호출/복귀 완료)이 갈리는 부분은 _nav_goal_result
@@ -559,8 +558,7 @@ class MissionExecutor(Node):
                 get_package_share_directory('uncc_example'), 'config', 'object_approach.xml')
         elif self.state in (
                 StateManager.RETURNING_TO_CHARGE,
-                StateManager.RETURNING_TO_BASE,
-                StateManager.RETURNING_MANUAL):
+                StateManager.RETURNING_TO_BASE):
             # 복귀 목적지는 벽에 붙어 있을 수 있어 자세 오차를 사실상 무시하는
             # return_goal_checker 를 쓴다 (거리 tolerance 는 general 과 동일).
             goal.behavior_tree = os.path.join(

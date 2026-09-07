@@ -120,8 +120,7 @@ class DemoStateManager(StateManager):
         # All return reasons share navigation, but only successful mission
         # returns may advance the scenario. Charging is never mission success.
         if (
-            self.state in (self.RETURNING_TO_CHARGE, self.RETURNING_TO_BASE,
-                           self.RETURNING_MANUAL)
+            self.state in (self.RETURNING_TO_CHARGE, self.RETURNING_TO_BASE)
             and self.active_target is None
         ):
             if request.data != self.TARGET_STATUS_SUCCESS:
@@ -558,7 +557,6 @@ class DemoStateManager(StateManager):
             return
 
         return_state = (self.RETURNING_TO_CHARGE if reason == 'low battery'
-                        else self.RETURNING_MANUAL if reason == 'manual stop'
                         else self.RETURNING_TO_BASE)
         if self.state != return_state or self._return_reason != reason:
             self._spin_generation += 1
