@@ -328,6 +328,34 @@ def generate_launch_description():
         ],
     )
 
+    # =========================================
+    # PHM — 로봇 건전성 감시 (use_phm, 기본 true)
+    # =========================================
+    # phm_monitor 가 잔차를 계산해 /phm/status 로 내고, 위의 firefighter_ui 가
+    # 그것을 /api/phm 으로 서빙합니다. 화면의 PHM 패널이 그 값을 그립니다.
+    #
+    # ★ rf2o 는 이 launch 가 안 띄웁니다(hardware.launch.py -> controller.launch.py
+    #   에도 없습니다). 그래서 phm_monitor.launch.py 가 자기 것을 띄웁니다.
+    #   그 출력은 /phm/odom_rf2o 로 remap 되어 **EKF 와 겹치지 않습니다** —
+    #   이 브랜치의 ekf.yaml 이 odom1: odom_rf2o 를 보고 있는데, rf2o 원본은
+    #   부호가 반대여서 그대로 먹이면 위치 추정이 망가집니다.
+    #   자세한 것은 phm_collect/launch/phm_monitor.launch.py 독스트링 참고.
+    #
+    # frontier_fire_suppression_hw_test.launch.py 와 같은 구성입니다 — 두 launch
+    # 에서 PHM 이 다르게 뜨면 화면 값을 비교할 수 없으므로 일부러 맞췄습니다.
+    phm = TimerAction(
+        period=16.0,
+        condition=IfCondition(LaunchConfiguration('use_phm')),
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(
+                        get_package_share_directory('phm_collect'),
+                        'launch', 'phm_monitor.launch.py')),
+            ),
+        ],
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'fire1_xy', default_value='[1.0, 2.0]',
@@ -384,6 +412,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'ui_allow_remote', default_value='true',
             description='true면 LAN 어디서든 웹 UI로 START/STOP 및 지도 열람 가능'),
+        DeclareLaunchArgument(
+            'use_phm', default_value='true',
+            description='PHM 건전성 감시(phm_monitor + 전용 rf2o)를 같이 띄운다. '
+                        'false면 웹 UI의 PHM 패널이 "사용 불가"로 표시된다 — '
+                        '오류가 아니라 감시 노드가 없다는 뜻'),
         hardware,
         camera,
         slam,
@@ -393,4 +426,5 @@ def generate_launch_description():
         frontier_state_controller,
         mission_stack,
         ui,
+        phm,
     ])
