@@ -207,6 +207,26 @@ class DemoStateManager3(DemoStateManager):
     # Initial selection and object dispatch
     # =========================================================
 
+    def _spin_failed(self, message):
+        """Keep detected initial targets usable when the sweep fails."""
+        if self.phase == self.PHASE_INITIAL_SWEEP and (
+            self._pick_pending('fire') is not None
+            or self._pick_pending('person') is not None
+        ):
+            self._spin_pending = False
+            self._spin_purpose = None
+            self._spin_goal_handle = None
+            self._event_logger.warn(
+                f'초기 spin 실패: {message}; 인식된 객체 처리로 전환'
+            )
+            # Reuse normal initial selection (fire first if both exist).
+            # Dispatch on the next timer tick so battery/manual-stop checks
+            # retain priority over object navigation.
+            self._process_initial_targets(time.monotonic())
+            return
+
+        super()._spin_failed(message)
+
     def _process_initial_targets(self, now):
         fire = self._pick_pending('fire')
         person = self._pick_pending('person')
