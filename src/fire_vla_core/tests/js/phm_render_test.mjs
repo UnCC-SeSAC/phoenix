@@ -109,13 +109,13 @@ renderPhm(base({health:'ALARM', isolation_hint:'견인력 상실 계열',
   alarms:[{name:'TRACKING_DEFICIT',axis:'fwd_rel',residual:0.42,threshold:0.15}],
   axes:{...base().axes,
     fwd_rel:{residual:0.42, threshold:0.15, ratio:0.35, alarm:true, evaluated:46,
-             fresh:true, age_sec:0.1, unit:'ratio', label:'전진속도 (추종률)',
+             fresh:true, age_sec:0.1, unit:'ratio', label:'전진속도 (추종 부족률)',
              meas:'rf2o', relative:true}}}));
 check('★ 상대형만 뜨면 견인력 상실', !els.phmIsolation.hidden
       && els.phmIsolation.textContent.includes('견인력 상실'));
 check('조치 안내 포함', els.phmIsolation.textContent.includes('노면'));
 check('축 카드 3개', els.phmAxes.childElementCount===3, els.phmAxes.childElementCount);
-const relCard = els.phmAxes.children.find(c=>c.textContent.includes('추종률'));
+const relCard = els.phmAxes.children.find(c=>c.textContent.includes('추종 부족률'));
 check('상대형 축이 alarm', relCard?.className.includes('alarm'));
 
 renderPhm(base({health:'ALARM', isolation_hint:'들림 계열',
