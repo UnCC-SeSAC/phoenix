@@ -52,7 +52,7 @@ class FireKeepoutNode(Node):
 
         # keepout + footprint(0.195m) <= xy_goal_tolerance(0.32m) 맞춰 축소.
         self.declare_parameter('fire_keepout_radius', 0.05)
-        self.declare_parameter('person_keepout_radius', 0.10)
+        self.declare_parameter('person_keepout_radius', 0.05)
 
         self.fire_keepout_radius = (
             self.get_parameter('fire_keepout_radius').value
