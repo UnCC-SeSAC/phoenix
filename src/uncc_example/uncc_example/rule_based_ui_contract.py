@@ -11,7 +11,7 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 MODE = 'RULE_BASED'
-ALLOWED_COMMANDS = {'START', 'STOP'}
+ALLOWED_COMMANDS = {'START', 'STOP', 'RESET'}
 
 
 def utc_now_iso() -> str:

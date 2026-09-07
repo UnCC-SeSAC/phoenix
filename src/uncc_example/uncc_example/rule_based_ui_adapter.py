@@ -4,7 +4,13 @@ import json
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_action_status_default
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_action_status_default,
+)
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseStamped
@@ -65,9 +71,21 @@ class RuleBasedUIAdapter(Node):
         self._stop_mission_client = self.create_client(
             Trigger, '/state_manager/stop_mission'
         )
+        self._reset_mission_client = self.create_client(
+            Trigger, '/state_manager/reset_mission'
+        )
 
+        # state_manager 가 transient_local로 발행하므로(늦게 붙어도 마지막
+        # 값을 받기 위해), 여기도 durability를 맞춰야 실제로 그 값을 받는다
+        # — volatile로 두면 호환은 되지만 late-joiner 샘플은 안 온다.
+        latched_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         self.create_subscription(
-            String, '/mission/state', self._mission_state_callback, 10
+            String, '/mission/state', self._mission_state_callback, latched_qos
         )
         self.create_subscription(
             Bool, '/mission/manual_stop', self._manual_stop_callback, 10
@@ -176,9 +194,12 @@ class RuleBasedUIAdapter(Node):
         self._last_mission_id = command['mission_id']
         enabled = command['command'] == 'START'
         self._enabled_pub.publish(Bool(data=enabled))
-        self._call_mission_trigger(
-            self._start_mission_client if enabled else self._stop_mission_client
-        )
+        client = {
+            'START': self._start_mission_client,
+            'STOP': self._stop_mission_client,
+            'RESET': self._reset_mission_client,
+        }[command['command']]
+        self._call_mission_trigger(client)
         self.status.last_command = {
             **command,
             'status': 'ACCEPTED',
@@ -212,6 +233,7 @@ class RuleBasedUIAdapter(Node):
         self.status.mission_ready = (
             self._start_mission_client.service_is_ready()
             and self._stop_mission_client.service_is_ready()
+            and self._reset_mission_client.service_is_ready()
         )
 
         msg = String()

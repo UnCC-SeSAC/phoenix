@@ -110,9 +110,7 @@ class DemoStateManager(StateManager):
     def start_mission_callback(self, request, response):
         response = super().start_mission_callback(request, response)
 
-        # 리셋(super()가 _mission_started 를 다시 False로 내림)일 때는
-        # 초기화만 하고 멈춘다 — 실제로 움직이는 건 그 다음 진짜 START부터.
-        if response.success and self._mission_started:
+        if response.success:
             self._begin_initial_sweep(time.monotonic(), new_round=True)
 
         return response

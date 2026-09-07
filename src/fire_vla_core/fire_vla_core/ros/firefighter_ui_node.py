@@ -58,7 +58,7 @@ _ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 _VLA_MODE = "VLA"
 _RULE_BASED_MODE = "RULE_BASED"
 _ALLOWED_MODES = {_VLA_MODE, _RULE_BASED_MODE}
-_RULE_BASED_COMMANDS = {"START", "STOP"}
+_RULE_BASED_COMMANDS = {"START", "STOP", "RESET"}
 
 _STREAM_BOUNDARY = "phoenixframe"
 _STREAM_WAIT_SEC = 1.0
@@ -189,7 +189,7 @@ def normalize_rule_based_command(text: str) -> str:
         raise ValueError("Rule-based command는 문자열이어야 합니다.")
     command = text.strip().upper()
     if command not in _RULE_BASED_COMMANDS:
-        raise ValueError("Rule-based mode는 START 또는 STOP만 지원합니다.")
+        raise ValueError("Rule-based mode는 START, STOP, RESET만 지원합니다.")
     return command
 
 

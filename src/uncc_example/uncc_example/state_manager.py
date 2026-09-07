@@ -198,10 +198,20 @@ class StateManager(Node):
         # -----------------------------
         # Publishers (실제 행동은 다른 노드가 이 값을 보고 수행)
         # -----------------------------
+        # /mission/state 는 값이 바뀔 때만 재발행되는 "현재 상태" 값이라
+        # (_publish 참고), UI 어댑터 등이 상태 변화 없이 나중에 붙으면
+        # volatile QoS로는 첫 값을 영영 못 받는다 — transient_local로
+        # 늦게 붙는 구독자에게도 마지막 값을 그대로 전달한다.
+        latched_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         self.state_pub = self.create_publisher(
             String,
             '/mission/state',
-            10,
+            latched_qos,
         )
 
         # UI 표시 전용 신호 — RETURNING_TO_CHARGE 가 배터리 때문인지
@@ -264,6 +274,15 @@ class StateManager(Node):
             Trigger,
             '~/stop_mission',
             self.stop_mission_callback,
+        )
+
+        # UI의 RESET 버튼 — 지금 뭘 하고 있든 상관없이 미션 기록을
+        # 비우고 SLAM을 리셋한다. START와 달리 움직이기 시작하진 않는다.
+        # ros2 service call /state_manager/reset_mission std_srvs/srv/Trigger "{}"
+        self.create_service(
+            Trigger,
+            '~/reset_mission',
+            self.reset_mission_callback,
         )
 
         # State machine timer
@@ -716,24 +735,9 @@ class StateManager(Node):
 
     def start_mission_callback(self, request, response):
 
-        was_started = self._mission_started
+        # START는 항상 "지금 상태에서 움직이기 시작"이다 — 초기화는
+        # RESET의 몫이라 여기서는 기록을 건드리지 않는다.
         self._manual_stop = False
-
-        if was_started:
-            # 처음 시작/(stop 후 홈 도착 완료) 둘 다 아니면 — 즉 미션이
-            # 이미 도는 도중(홈 도착 전 stop 포함)이면 START는 재개가
-            # 아니라 리셋 버튼으로 동작한다: 지금 상황 기준으로 초기화만
-            # 하고 멈춰서, 실제로 움직이려면 STANDBY에서 START를 한 번
-            # 더 눌러야 한다 (리셋 즉시 움직이지 않는다).
-            self._reset_mission_records()
-            self._mission_started = False
-            self._event_logger.info(
-                'Mission reset signal received — 대기 상태로 초기화'
-            )
-            response.success = True
-            response.message = 'Mission reset'
-            return response
-
         self._mission_started = True
         self._event_logger.info('Mission start signal received')
 
@@ -741,13 +745,28 @@ class StateManager(Node):
         response.message = 'Mission started'
         return response
 
+    def reset_mission_callback(self, request, response):
+
+        # RESET은 지금 뭘 하고 있든 상관없이 미션 기록/맵을 지우고
+        # STANDBY로 멈춘다 — 움직이는 건 그 다음 START의 몫이다.
+        self._manual_stop = False
+        self._mission_started = False
+        self._reset_mission_records()
+        self._event_logger.info(
+            'Mission reset signal received — 대기 상태로 초기화'
+        )
+
+        response.success = True
+        response.message = 'Mission reset'
+        return response
+
     def stop_mission_callback(self, request, response):
 
-        if not self._mission_started:
-            response.success = True
-            response.message = 'Mission not started'
-            return response
-
+        # STOP은 지금 상태가 뭐든(STANDBY/리셋 직후/MISSION_FAILED 포함)
+        # 무조건 base로 복귀시킨다. _mission_started가 False면
+        # _refresh_state가 _manual_stop을 보기도 전에 STANDBY로 빠지므로
+        # 여기서 같이 켜준다.
+        self._mission_started = True
         self._manual_stop = True
         self._event_logger.info('Mission stop signal received (manual return to base)')
 
