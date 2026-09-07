@@ -1,5 +1,6 @@
 import json
 import math
+import subprocess
 import time
 
 import rclpy
@@ -752,6 +753,7 @@ class StateManager(Node):
         self._manual_stop = False
         self._mission_started = False
         self._reset_mission_records()
+        self._restart_lidar()
         self._event_logger.info(
             'Mission reset signal received — 대기 상태로 초기화'
         )
@@ -759,6 +761,35 @@ class StateManager(Node):
         response.success = True
         response.message = 'Mission reset'
         return response
+
+    def _restart_lidar(self):
+        """라이다 드라이버 프로세스를 죽인다 — launch가 respawn=True로
+        띄운 거라 곧바로 다시 뜬다. 좀비 상태로 시리얼 포트를 붙잡은 채
+        멈춰서 아무 것도 발행하지 않는 상황(포트는 열려있는데
+        Publisher count가 0인 경우 등)의 확실한 복구 수단."""
+
+        try:
+            result = subprocess.run(
+                ['pkill', '-f', 'ldlidar_stl_ros2_node'],
+                check=False,
+                timeout=2.0,
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                self._event_logger.info('라이다 드라이버 재시작 요청 (pkill)')
+            elif result.returncode == 1:
+                # pkill은 매칭되는 프로세스가 없으면 1을 반환한다 — 애초에
+                # 안 떠 있던 것도 정상 상황이라 경고까진 아니다.
+                self.get_logger().info(
+                    '라이다 재시작: 매칭되는 프로세스 없음 (이미 안 떠있을 수 있음)'
+                )
+            else:
+                self.get_logger().warning(
+                    f'라이다 재시작 pkill이 비정상 종료(rc={result.returncode}): '
+                    f'{result.stderr.decode(errors="replace")}'
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.get_logger().warning(f'라이다 재시작 실패: {exc}')
 
     def stop_mission_callback(self, request, response):
 

@@ -28,6 +28,10 @@ def generate_launch_description():
         executable='ldlidar_stl_ros2_node',
         name='LD19',
         output='screen',
+        # RESET 버튼이 이 프로세스를 pkill로 죽여서 재시작을 유도한다
+        # (state_manager._restart_lidar 참고) — respawn이 없으면 그냥
+        # 죽은 채로 끝나버린다.
+        respawn=True,
         parameters=[
             {
                 'topic_name': 'scan',
