@@ -557,6 +557,14 @@ class MissionExecutor(Node):
                 f"attempt={self._approach_context['attempts']}/{self._approach_max_attempts}")
             goal.behavior_tree = os.path.join(
                 get_package_share_directory('uncc_example'), 'config', 'object_approach.xml')
+        elif self.state in (
+                StateManager.RETURNING_TO_CHARGE,
+                StateManager.RETURNING_TO_BASE,
+                StateManager.RETURNING_MANUAL):
+            # 복귀 목적지는 벽에 붙어 있을 수 있어 자세 오차를 사실상 무시하는
+            # return_goal_checker 를 쓴다 (거리 tolerance 는 general 과 동일).
+            goal.behavior_tree = os.path.join(
+                get_package_share_directory('uncc_example'), 'config', 'return_navigation.xml')
 
         self._event_logger.info(
             f"Nav2 goal 설정: ({target_xy[0]:.2f}, {target_xy[1]:.2f})"

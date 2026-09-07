@@ -11,7 +11,7 @@ controller_server:
     failure_tolerance: 0.3
 
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker", "object_goal_checker"]
+    goal_checker_plugins: ["general_goal_checker", "object_goal_checker", "return_goal_checker"]
     controller_plugins: ["FollowPath", "ObjectFollowPath"]
 
     progress_checker:
@@ -31,6 +31,12 @@ controller_server:
       stateful: False
       xy_goal_tolerance: 0.02
       yaw_goal_tolerance: 0.035
+
+    return_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: True
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 3.15 # 벽 근처 복귀 지점에서 최종 자세는 사실상 무시
 
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
