@@ -29,13 +29,13 @@ controller_server:
     object_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: False
-      xy_goal_tolerance: 0.02
-      yaw_goal_tolerance: 0.035
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.1
 
     return_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: True
-      xy_goal_tolerance: 0.30
+      xy_goal_tolerance: 0.20
       yaw_goal_tolerance: 3.15 # 벽 근처 복귀 지점에서 최종 자세는 사실상 무시
 
     FollowPath:
