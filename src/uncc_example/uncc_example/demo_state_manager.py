@@ -100,10 +100,9 @@ class DemoStateManager(StateManager):
     # =========================================================
 
     def start_mission_callback(self, request, response):
-        was_started = self._mission_started
         response = super().start_mission_callback(request, response)
 
-        if not was_started and response.success:
+        if response.success:
             self._begin_initial_sweep(time.monotonic(), new_round=True)
 
         return response
@@ -506,8 +505,8 @@ class DemoStateManager(StateManager):
         self.active_target = None
         self._publish(None)
 
-    def _reset_demo_after_manual_stop(self):
-        super()._reset_after_manual_stop()
+    def _reset_mission_records(self):
+        super()._reset_mission_records()
 
         # base 는 start_x/y 만 안다 — slam 리셋으로 map 좌표계가 바뀌면
         # 데모가 쓰는 start_yaw 도 같이 버려야 다음 TF 에서 셋이 함께
@@ -525,6 +524,8 @@ class DemoStateManager(StateManager):
         self._spin_pending = False
         self._spin_purpose = None
 
+    def _reset_demo_after_manual_stop(self):
+        super()._reset_after_manual_stop()
         self._event_logger.info('수동 정지: 홈 도착, 데모 시나리오를 처음 상태로 초기화')
 
     def _fail_mission(self, reason):

@@ -158,11 +158,11 @@ class SequenceTestStateManager(DemoStateManager):
         response.success = True
         return response
 
-    def _reset_demo_after_manual_stop(self):
-        """stop_mission 뒤 다시 start_mission 하면 세 좌표를 처음
-        상태(pending)로 되돌려서 반복 테스트가 가능하게 한다."""
+    def _reset_mission_records(self):
+        """start_mission 때마다(그리고 stop 후 홈 도착 시) 두 좌표를
+        처음 상태(pending)로 되돌려서 반복 테스트가 가능하게 한다."""
 
-        super()._reset_demo_after_manual_stop()
+        super()._reset_mission_records()
 
         for entry in (self._fire1, self._person):
             entry['status'] = 'pending'
