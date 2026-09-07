@@ -1,4 +1,4 @@
-"""시나리오 2: 군집 fire → person → 단독 fire → 최종 base 복귀."""
+"""시나리오 2: 확인된 fire 처리 → 필요시 base 재탐색 → 무화재 확인 후 종료."""
 
 # 기존 H/W 체인에 객체 접근 설정과 시나리오 상태 관리자를 적용한다.
 import importlib.util
