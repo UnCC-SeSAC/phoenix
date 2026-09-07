@@ -303,6 +303,7 @@ def generate_launch_description():
                     'input_topic': '/image_enhanced',
                     'detections_topic': '/yolo_result',
                     'class_names': LaunchConfiguration('class_names'),
+                    'start_enabled': True,
                 }],
             ),
             Node(
