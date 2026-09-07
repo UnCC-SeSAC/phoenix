@@ -636,17 +636,20 @@ class StateManager(Node):
         response.success = True
         return response
 
+    def _reset_mission_records(self):
+        self.target_queue = []
+        self.found_targets = []
+        self._pending_candidates = []
+        self._publish_found_targets()
+        self._call_slam_reset()
+
     def _reset_after_manual_stop(self):
         self._event_logger.info(
             'stop_mission: 홈 도착, 미션 기록을 지우고 STANDBY로 전환'
         )
         self._mission_started = False
         self._manual_stop = False
-        self.target_queue = []
-        self.found_targets = []
-        self._pending_candidates = []
-        self._publish_found_targets()
-        self._call_slam_reset()
+        self._reset_mission_records()
 
     # deactivate -> cleanup -> configure -> activate 순서로 반드시 이
     # 순서대로 밟아야 한다(cleanup 은 inactive 상태에서만 허용되는 등,
@@ -713,12 +716,19 @@ class StateManager(Node):
 
     def start_mission_callback(self, request, response):
 
-        was_manual_stop = self._manual_stop
+        was_started = self._mission_started
         self._manual_stop = False
 
-        if self._mission_started and not was_manual_stop:
+        if was_started:
+            # 처음 시작/(stop 후 홈 도착 완료) 둘 다 아니면 — 즉 미션이
+            # 이미 도는 도중(홈 도착 전 stop 포함)이면 START는 재개가
+            # 아니라 리셋 버튼으로 동작한다: 지금 상황 기준으로 초기화.
+            self._reset_mission_records()
+            self._event_logger.info(
+                'Mission reset signal received — 현재 상황 기준으로 초기화'
+            )
             response.success = True
-            response.message = 'Mission already started'
+            response.message = 'Mission reset'
             return response
 
         self._mission_started = True
