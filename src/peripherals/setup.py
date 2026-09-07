@@ -29,6 +29,7 @@ setup(
             'joystick_control = peripherals.joystick_control:main',
             'tf_broadcaster_imu = peripherals.tf_broadcaster_imu:main',
             'teleop_key_control = peripherals.teleop_key_control:main',
+            'lidar_smoke_filter = peripherals.lidar_smoke_filter:main',
         ],
     },
 )
