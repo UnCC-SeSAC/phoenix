@@ -220,7 +220,12 @@ class PhmMonitor(Node):
             ax = core.AXES[mon.axis]
             rel = mon.relative
             st.update(unit="ratio" if rel else ax["unit"],
-                      label=ax["label"] + (" (추종률)" if rel else ""),
+                      # ★ '추종률' 이 아니라 '추종 부족률' 입니다. 값이 클수록
+                      # 나쁩니다(0 = 시킨 대로, 1 = 전혀 안 나감). 라벨을
+                      # '추종률' 로 쓰면 0.6 을 '60% 따라감' 으로 읽게 되는데
+                      # 실제로는 '60% 부족' 이라 정반대입니다. 경보 이름
+                      # (TRACKING_DEFICIT)·문서와도 이 쪽이 맞습니다.
+                      label=ax["label"] + (" (추종 부족률)" if rel else ""),
                       meas=ax["meas"], relative=rel)
             # 실측 토픽이 끊기면 잔차가 '마지막 값' 으로 굳습니다. 조용히 굳은 값을
             # 정상으로 보여주면 안 되므로 신선도를 같이 냅니다.
