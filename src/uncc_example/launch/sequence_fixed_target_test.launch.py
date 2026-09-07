@@ -18,10 +18,10 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     """
-    고정 좌표 3개(불1 -> 사람 -> 불2 -> base)를 실제 Nav2/GPIO로 검증하는
+    고정 좌표 2개(불1 -> 사람 -> base)를 실제 Nav2/GPIO로 검증하는
     테스트 전용 launch. 실제 불을 좌표에 놓고 테스트하므로 카메라/YOLO는
     그대로 띄운다 — 다만 그 결과는 "이동할 좌표"를 정하는 데는 안 쓰고
-    (좌표는 launch 인자 fire1_xy/person_xy/fire2_xy 로 고정 주입),
+    (좌표는 launch 인자 fire1_xy/person_xy 로 고정 주입),
     fire_suppression_node 가 분사 후 "꺼졌는지"를 확인하는 용도로만 쓴다.
 
     frontier_fire_suppression_hw_test.launch.py 와 같은 하드웨어 조합
@@ -38,13 +38,12 @@ def generate_launch_description():
         ros2 launch uncc_example sequence_fixed_target_test.launch.py \\
             model_path:=/home/lemma/Hailo/models/baseline_yolo26_neural_norm.hef \\
             class_names:="['fire','person']" \\
-            fire1_xy:="[1.0, 2.0]" person_xy:="[1.5, 1.5]" \\
-            fire2_xy:="[3.0, 1.0]"
+            fire1_xy:="[1.0, 2.0]" person_xy:="[1.5, 1.5]"
 
     확인할 것:
         ros2 topic echo /mission/state
         # sequence_test_state_manager 로그: INITIAL_SWEEP -> FIRE_DETECTED
-        #   (불1) -> PERSON_DETECTED -> FIRE_DETECTED(불2) ->
+        #   (불1) -> PERSON_DETECTED ->
         #   RETURNING_TO_CHARGE -> MISSION_COMPLETE
         # fire_suppression_node 터미널: 실제 펌프/서보 구동 로그 +
         #   1차 판별 결과: 안꺼짐 -> 2차 판별 결과: 꺼짐
@@ -219,7 +218,6 @@ def generate_launch_description():
             # 넘겨준다.
             'fire1_xy': LaunchConfiguration('fire1_xy'),
             'person_xy': LaunchConfiguration('person_xy'),
-            'fire2_xy': LaunchConfiguration('fire2_xy'),
             'sweep_angle_deg': ParameterValue(
                 LaunchConfiguration('sweep_angle_deg'), value_type=float),
             'sweep_dwell_sec': ParameterValue(
@@ -337,9 +335,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'person_xy', default_value='[1.5, 1.5]',
             description='사람 map 좌표 [x, y]'),
-        DeclareLaunchArgument(
-            'fire2_xy', default_value='[3.0, 1.0]',
-            description='불2 map 좌표 [x, y]'),
         DeclareLaunchArgument(
             'sweep_angle_deg', default_value='15.0',
             description='초기 좌우 스캔 각도(도)'),

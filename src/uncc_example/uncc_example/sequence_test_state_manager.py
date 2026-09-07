@@ -1,11 +1,11 @@
-"""비전 없이 고정 좌표 3개(불1 -> 사람 -> 불2)를 순서대로 도는 테스트 전용
+"""비전 없이 고정 좌표 2개(불1 -> 사람)를 순서대로 도는 테스트 전용
 상태 관리자.
 
 시나리오: start_mission -> 좌우 스캔(DemoStateManager 재사용) -> 불1 진압 ->
-사람 좌표 도착 확인 -> 불2 진압 -> base 복귀.
+사람 좌표 도착 확인 -> base 복귀.
 
 /vision/detections 는 완전히 무시한다 — 좌표는 launch 파라미터
-(fire1_xy/person_xy/fire2_xy)로 고정해서 받고, 거리 기반 클러스터링/우선순위
+(fire1_xy/person_xy)로 고정해서 받고, 거리 기반 클러스터링/우선순위
 로직(target_queue) 없이 위 순서를 그대로 강제한다.
 """
 
@@ -20,32 +20,27 @@ class SequenceTestStateManager(DemoStateManager):
 
     PHASE_FIRE1 = 'test_fire1'
     PHASE_PERSON = 'test_person'
-    PHASE_FIRE2 = 'test_fire2'
 
     def __init__(self):
         super().__init__()
 
         self.declare_parameter('fire1_xy', [1.0, 2.0])
         self.declare_parameter('person_xy', [1.5, 1.5])
-        self.declare_parameter('fire2_xy', [3.0, 1.0])
 
         fire1_xy = self.get_parameter('fire1_xy').value
         person_xy = self.get_parameter('person_xy').value
-        fire2_xy = self.get_parameter('fire2_xy').value
 
         self._fire1 = self._make_test_entry('fire', fire1_xy)
         self._person = self._make_test_entry('person', person_xy)
-        self._fire2 = self._make_test_entry('fire', fire2_xy)
 
         # fire_keepout_node/map_visualizer/UI 가 처음부터 볼 수 있게 미리
         # found_targets 에 채워둔다 (target_queue 는 이 테스트에서 안 씀).
-        self.found_targets = [self._fire1, self._person, self._fire2]
+        self.found_targets = [self._fire1, self._person]
         self._publish_found_targets()
 
         self.get_logger().info(
             'Sequence test ready: sweep -> '
-            f'fire1{tuple(fire1_xy)} -> person{tuple(person_xy)} -> '
-            f'fire2{tuple(fire2_xy)} -> base'
+            f'fire1{tuple(fire1_xy)} -> person{tuple(person_xy)} -> base'
         )
 
     def _make_test_entry(self, target_type, xy):
@@ -67,7 +62,7 @@ class SequenceTestStateManager(DemoStateManager):
         return
 
     # =========================================================
-    # State selection — 고정 순서(fire1 -> person -> fire2 -> base)
+    # State selection — 고정 순서(fire1 -> person -> base)
     # =========================================================
 
     def _refresh_state(self):
@@ -101,8 +96,6 @@ class SequenceTestStateManager(DemoStateManager):
             self._enter_urgent_target(self._fire1)
         elif self.phase == self.PHASE_PERSON:
             self._enter_urgent_target(self._person)
-        elif self.phase == self.PHASE_FIRE2:
-            self._enter_urgent_target(self._fire2)
         elif self.phase == self.PHASE_FINAL_RETURN:
             self._enter_returning_when_pose_ready('sequence complete')
         else:
@@ -159,11 +152,8 @@ class SequenceTestStateManager(DemoStateManager):
             self.phase = self.PHASE_PERSON
             self._event_logger.info('불1 처리 완료: 사람 좌표로 이동')
         elif self.phase == self.PHASE_PERSON:
-            self.phase = self.PHASE_FIRE2
-            self._event_logger.info('사람 좌표 도착 확인: 불2로 이동')
-        elif self.phase == self.PHASE_FIRE2:
             self.phase = self.PHASE_FINAL_RETURN
-            self._event_logger.info('불2 처리 완료: base로 최종 복귀')
+            self._event_logger.info('사람 좌표 도착 확인: base로 최종 복귀')
 
         response.success = True
         return response
@@ -174,12 +164,12 @@ class SequenceTestStateManager(DemoStateManager):
 
         super()._reset_demo_after_manual_stop()
 
-        for entry in (self._fire1, self._person, self._fire2):
+        for entry in (self._fire1, self._person):
             entry['status'] = 'pending'
             entry['extinguished'] = None
             entry['unreachable'] = False
 
-        self.found_targets = [self._fire1, self._person, self._fire2]
+        self.found_targets = [self._fire1, self._person]
         self._publish_found_targets()
 
 
