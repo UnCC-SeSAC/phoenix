@@ -310,7 +310,7 @@ local_costmap:
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           # 0.0m ~ 2.5m 에서 검출된 물체는 장애물로 costmap 에 추가
-          obstacle_max_range: 2.5
+          obstacle_max_range: 0.5   # 기존 2.5
           obstacle_min_range: 0.0
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -349,7 +349,7 @@ global_costmap:
           topic: /scan_raw
           max_obstacle_height: 2.0
           clearing: True
-          marking: True
+          marking: False # 기존 True
           data_type: "LaserScan"
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
