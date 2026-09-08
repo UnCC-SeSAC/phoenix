@@ -35,7 +35,7 @@ controller_server:
     person_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: False
-      xy_goal_tolerance: 0.05
+      xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 3.15  # Person visits do not require final heading.
 
     FollowPath:
@@ -82,7 +82,7 @@ controller_server:
       angular_granularity: 0.025
 
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.32
+      xy_goal_tolerance: 0.10
       trans_stopped_velocity: 0.20
 
       short_circuit_trajectory_evaluation: True
