@@ -80,6 +80,8 @@ class MissionExecutor(Node):
         self.declare_parameter("approach_retry_interval_sec", 2.0)
         self.declare_parameter("approach_timeout_sec", 90.0)
         self.declare_parameter("approach_max_attempts", 3)
+        self.declare_parameter("approach_allow_unknown", False)
+        self._approach_allow_unknown = self.get_parameter("approach_allow_unknown").value
         self.declare_parameter("approach_costmap_max_age_sec", 3.0)
         self._approach_retry_interval = max(
             0.1, float(self.get_parameter("approach_retry_interval_sec").value)
@@ -858,7 +860,10 @@ class MissionExecutor(Node):
         for index, candidate in enumerate(context["candidates"]):
             if index in context["failed"]:
                 continue
-            if footprint_is_free(candidate, self._robot_footprint, grid):
+            if footprint_is_free(
+                candidate, self._robot_footprint, grid,
+                allow_unknown=self._approach_allow_unknown,
+            ):
                 context["selected"] = index
                 self._event_logger.info(
                     f"Approach candidate {index}: pose={candidate}, footprint clear"

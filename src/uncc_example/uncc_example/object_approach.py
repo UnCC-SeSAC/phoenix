@@ -14,13 +14,14 @@ def approach_candidates(robot_x, robot_y, target_x, target_y, wheel_offset,
              heading + math.radians(angle)) for angle in (0, 15, -15, 30, -30)]
 
 
-def footprint_is_free(pose, footprint, costmap, lethal_cost=254):
+def footprint_is_free(pose, footprint, costmap, lethal_cost=254, allow_unknown=False):
     """Check every grid cell intersecting a convex footprint (including interior).
 
     nav2_msgs/Costmap raw costs: 253 inscribed, 254 lethal, 255 unknown.
     The costmap has already expanded 253 for the robot inscribed radius, so
     applying the full footprint to it would count the robot size twice. Accept
-    253 here and reject only lethal/keepout (254) and unknown (255). SAT includes
+    253 here and reject lethal/keepout (254); unknown (255) is rejected unless
+    allow_unknown is enabled. SAT includes
     cell boundaries, conservatively rejecting contact with those rejected cells.
     """
     meta = costmap.metadata
@@ -49,7 +50,10 @@ def footprint_is_free(pose, footprint, costmap, lethal_cost=254):
                     max(ax*x+ay*y for x, y in polygon)) for ax, ay in axes]
     for row in range(max(0, math.floor(min_y)-1), math.floor(max_y)+1):
         for col in range(max(0, math.floor(min_x)-1), math.floor(max_x)+1):
-            if costmap.data[row*meta.size_x+col] < lethal_cost:
+            cost = costmap.data[row*meta.size_x+col]
+            if cost == 255 and allow_unknown:
+                continue
+            if cost < lethal_cost:
                 continue
             square = [(col, row), (col+1, row), (col+1, row+1), (col, row+1)]
             separated = any(

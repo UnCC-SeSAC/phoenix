@@ -35,6 +35,7 @@ def generate_launch_description():
                     # mission_executor converts the object coordinate into a
                     # costmap-validated stand-off pose before calling Nav2.
                     "object_approach_enabled": True,
+                    "approach_allow_unknown": True,
                     "front_wheel_offset_m": 0.12,
                     "object_clearance_m": 0.20,
                     "person_clearance_m": 0.20,
