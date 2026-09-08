@@ -44,6 +44,27 @@
     button { padding:0 20px; background:var(--accent); border-color:var(--accent); color:white; font-weight:800; cursor:pointer; }
     button:disabled { background:#33475c; border-color:#33475c; color:var(--muted); cursor:not-allowed; }
     .mission-note { min-height:20px; margin:8px 0 18px; color:var(--muted); font-size:12px; }
+    .mission-panel-body { display:flex; gap:18px; align-items:stretch; }
+    .mission-panel-main { flex:1; min-width:0; }
+    .pump-control { display:flex; flex-direction:column; align-items:center; gap:8px; padding-top:2px; width:64px; flex-shrink:0; }
+    .pump-control .label { text-align:center; }
+    /* 세로 슬라이더: 가로 input을 고정 박스 안에서 90도 돌리는 방식이 제일 안정적입니다. */
+    .pump-slider-track { width:36px; height:380px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+    /* 기본 range 트랙은 어두운 배경에서 안 보여서 phm-bar와 같은 톤으로 직접 그립니다. */
+    #pumpSlider { width:380px; height:24px; min-height:0; margin:0; padding:0; border:0; flex:none; transform:rotate(-90deg); -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; --pump-fill:0%; }
+    /* 웹킷은 progress 의사요소가 없어 --pump-fill(JS가 갱신)로 트랙 배경을 채운 만큼/안 채운 만큼 나눠 그립니다. */
+    #pumpSlider::-webkit-slider-runnable-track { height:8px; border-radius:4px; background:linear-gradient(to right,var(--accent) var(--pump-fill),var(--line) var(--pump-fill)); }
+    #pumpSlider::-webkit-slider-thumb { -webkit-appearance:none; width:24px; height:24px; margin-top:-8px; border-radius:50%; background:var(--accent); }
+    #pumpSlider::-moz-range-track { height:8px; border-radius:4px; background:var(--line); }
+    #pumpSlider::-moz-range-progress { height:8px; border-radius:4px; background:var(--accent); }
+    #pumpSlider::-moz-range-thumb { width:24px; height:24px; border:0; border-radius:50%; background:var(--accent); }
+    #pumpSlider:disabled { cursor:not-allowed; }
+    #pumpSlider:disabled::-webkit-slider-runnable-track { background:linear-gradient(to right,var(--muted) var(--pump-fill),var(--line) var(--pump-fill)); }
+    #pumpSlider:disabled::-webkit-slider-thumb { background:var(--muted); }
+    #pumpSlider:disabled::-moz-range-progress { background:var(--muted); }
+    #pumpSlider:disabled::-moz-range-thumb { background:var(--muted); }
+    .pump-value { font-variant-numeric:tabular-nums; font-weight:800; font-size:15px; }
+    .pump-note { min-height:14px; color:var(--bad); font-size:10px; text-align:center; }
     .status-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .metric { padding:13px; border:1px solid var(--line); background:#09111b99; }
     .label { color:var(--muted); font-size:10px; letter-spacing:.12em; text-transform:uppercase; }
@@ -129,24 +150,36 @@
 
   <section class="panel">
     <h2>Mission / Robot Status</h2>
-    <form id="missionForm">
-      <input id="missionInput" aria-label="Mission" placeholder="인명을 우선 확인해." required>
-      <button type="submit">실행</button>
-    </form>
-    <div id="ruleControls" class="rule-controls" hidden>
-      <button type="button" data-rule-command="START" disabled>START</button>
-      <button type="button" data-rule-command="RESET" disabled>RESET</button>
-      <button type="button" data-rule-command="STOP" disabled>STOP</button>
+    <div class="mission-panel-body">
+      <div class="mission-panel-main">
+        <form id="missionForm">
+          <input id="missionInput" aria-label="Mission" placeholder="인명을 우선 확인해." required>
+          <button type="submit">실행</button>
+        </form>
+        <div id="ruleControls" class="rule-controls" hidden>
+          <button type="button" data-rule-command="START" disabled>START</button>
+          <button type="button" data-rule-command="RESET" disabled>RESET</button>
+          <button type="button" data-rule-command="STOP" disabled>STOP</button>
+        </div>
+        <p id="missionResult" class="mission-note">VLA mission boundary</p>
+        <p id="ruleReadyHint" class="mission-note" hidden>서비스 준비 중... (start_mission/stop_mission 대기)</p>
+        <p id="currentMission" class="secondary">current mission: -</p>
+        <div class="status-grid">
+          <div class="metric"><span class="label">Robot Status</span><p id="robotState" class="primary">-</p><p id="robotPose" class="secondary">pose: -</p></div>
+          <div class="metric"><span id="actionLabel" class="label">Current Action</span><p id="actionName" class="primary">-</p><p id="actionTarget" class="secondary">target: -</p></div>
+        </div>
+        <div class="reason"><span id="decisionLabel" class="label">VLA Decision / Reason</span><div id="decisionTitle">-</div><div id="decisionReason" class="secondary">판단 근거 없음</div></div>
+        <div class="chips"><span id="validation" class="chip">VALIDATION -</span><span id="submission" class="chip">SUBMISSION -</span></div>
+      </div>
+      <div class="pump-control">
+        <span class="label">Pump</span>
+        <div class="pump-slider-track">
+          <input type="range" id="pumpSlider" min="0" max="1" step="0.01" value="0" disabled aria-label="펌프 세기" aria-orientation="vertical">
+        </div>
+        <span id="pumpValue" class="pump-value">-</span>
+        <p id="pumpNote" class="pump-note"></p>
+      </div>
     </div>
-    <p id="missionResult" class="mission-note">VLA mission boundary</p>
-    <p id="ruleReadyHint" class="mission-note" hidden>서비스 준비 중... (start_mission/stop_mission 대기)</p>
-    <p id="currentMission" class="secondary">current mission: -</p>
-    <div class="status-grid">
-      <div class="metric"><span class="label">Robot Status</span><p id="robotState" class="primary">-</p><p id="robotPose" class="secondary">pose: -</p></div>
-      <div class="metric"><span id="actionLabel" class="label">Current Action</span><p id="actionName" class="primary">-</p><p id="actionTarget" class="secondary">target: -</p></div>
-    </div>
-    <div class="reason"><span id="decisionLabel" class="label">VLA Decision / Reason</span><div id="decisionTitle">-</div><div id="decisionReason" class="secondary">판단 근거 없음</div></div>
-    <div class="chips"><span id="validation" class="chip">VALIDATION -</span><span id="submission" class="chip">SUBMISSION -</span></div>
   </section>
 
   <section class="panel">
@@ -414,6 +447,52 @@ async function toggleVision(){
 }
 $('visionToggle').addEventListener('click',toggleVision);
 refreshVision();setInterval(refreshVision,200);refreshMapLayer();setInterval(refreshMapLayer,200);
+
+// ---------------------------------------------------------------- Pump
+// 드래그 중 응답이 뒤섞이지 않도록, 전송 중이면 최신 값만 쥐고 있다가 이어서 보냅니다.
+let pumpBusy=false,pumpPending=null;
+const pumpPct=v=>`${Math.round(Number(v)*100)}%`;
+async function sendPumpValue(value){
+  pumpBusy=true;
+  try{
+    const response=await fetch('/api/pump',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value})});
+    const data=await response.json().catch(()=>({}));
+    $('pumpNote').textContent=response.ok?'':`오류: ${data.error||'설정 실패'}`;
+  }catch(_error){
+    $('pumpNote').textContent='오류: 펌프 제어 서버에 연결할 수 없습니다.';
+  }finally{
+    pumpBusy=false;
+    if(pumpPending!==null){const next=pumpPending;pumpPending=null;sendPumpValue(next);}
+  }
+}
+function updatePumpFill(value){
+  $('pumpSlider').style.setProperty('--pump-fill',`${Math.max(0,Math.min(1,value))*100}%`);
+}
+function onPumpInput(event){
+  const value=Number(event.target.value);
+  $('pumpValue').textContent=pumpPct(value);
+  updatePumpFill(value);
+  if(pumpBusy){pumpPending=value;return;}
+  sendPumpValue(value);
+}
+async function refreshPumpValue(){
+  try{
+    const response=await fetch('/api/pump',{cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok||!finite(data.value))throw new Error(data.error||'unavailable');
+    $('pumpSlider').disabled=false;
+    $('pumpSlider').value=data.value;
+    $('pumpValue').textContent=pumpPct(data.value);
+    updatePumpFill(data.value);
+    $('pumpNote').textContent='';
+  }catch(_error){
+    $('pumpSlider').disabled=true;
+    $('pumpValue').textContent='-';
+    $('pumpNote').textContent='펌프 노드에 연결할 수 없습니다.';
+  }
+}
+$('pumpSlider').addEventListener('input',onPumpInput);
+refreshPumpValue();
 for(const button of document.querySelectorAll('[data-rule-command]'))button.addEventListener('click',()=>submitMission(button.dataset.ruleCommand));
 $('modeSelector').value=activeMode;
 configureMode();

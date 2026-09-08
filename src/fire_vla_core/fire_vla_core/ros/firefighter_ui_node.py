@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 try:
     import rclpy
     from nav_msgs.msg import OccupancyGrid
+    from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+    from rcl_interfaces.srv import GetParameters, SetParameters
     from rclpy.node import Node
     from rclpy.qos import (
         DurabilityPolicy,
@@ -44,6 +46,11 @@ except ImportError:
     HistoryPolicy = None
     ReliabilityPolicy = None
     DurabilityPolicy = None
+    Parameter = None
+    ParameterType = None
+    ParameterValue = None
+    GetParameters = None
+    SetParameters = None
 
 from fire_vla_core.ros.occupancy_png import (
     downsample_step,
@@ -63,6 +70,8 @@ _RULE_BASED_COMMANDS = {"START", "STOP", "RESET"}
 _STREAM_BOUNDARY = "phoenixframe"
 _STREAM_WAIT_SEC = 1.0
 _STREAM_IDLE_LIMIT = 15      # 프레임 없이 15초 -> 스트림 종료
+
+_PUMP_SERVICE_TIMEOUT_SEC = 2.0
 
 
 def normalize_mode(value: str | None) -> str:
@@ -314,12 +323,16 @@ class FirefighterHTTPServer:
         allow_remote: bool = False,
         max_stream_clients: int = 4,
         set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
+        get_pump_value: Callable[[], dict[str, Any]] | None = None,
+        set_pump_value: Callable[[float], dict[str, Any]] | None = None,
         default_mode: str = _VLA_MODE,
     ) -> None:
         host, port = validate_server_config(host, port, allow_remote=allow_remote)
         self._status_store = status_store
         self._submit_mission = submit_mission
         self._set_vision_enabled = set_vision_enabled
+        self._get_pump_value = get_pump_value
+        self._set_pump_value = set_pump_value
         # 비어 있는 스토어를 기본값으로 둡니다 — 엔드포인트는 항상 존재하고
         # "아직 데이터 없음"을 응답합니다. ui_vision_enabled=false일 때도
         # 프론트엔드가 404가 아니라 available:false를 받습니다.
@@ -428,11 +441,29 @@ class FirefighterHTTPServer:
                 if parsed.path == "/api/map.png":
                     self._send_map_png()
                     return
+                if parsed.path == "/api/pump":
+                    if owner._get_pump_value is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {"error": "펌프 제어를 지원하지 않는 설정입니다."},
+                        )
+                        return
+                    payload = owner._get_pump_value()
+                    status = (
+                        HTTPStatus.SERVICE_UNAVAILABLE
+                        if "error" in payload
+                        else HTTPStatus.OK
+                    )
+                    self._send_json(status, payload)
+                    return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
             def do_POST(self) -> None:
                 if self.path == "/api/vision/enabled":
                     self._handle_vision_enabled_post()
+                    return
+                if self.path == "/api/pump":
+                    self._handle_pump_post()
                     return
                 if self.path != "/api/mission":
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -489,6 +520,40 @@ class FirefighterHTTPServer:
                 self._send_json(
                     HTTPStatus.ACCEPTED, owner._set_vision_enabled(enabled)
                 )
+
+            def _handle_pump_post(self) -> None:
+                if owner._set_pump_value is None:
+                    self._send_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"error": "펌프 제어를 지원하지 않는 설정입니다."},
+                    )
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length <= 0 or length > _MAX_REQUEST_BYTES:
+                        raise ValueError("invalid content length")
+                    data = json.loads(self.rfile.read(length).decode("utf-8"))
+                    if not isinstance(data, dict):
+                        raise ValueError("JSON object가 필요합니다.")
+                    value = data.get("value")
+                    if not isinstance(value, (int, float)) or isinstance(value, bool):
+                        raise ValueError("value는 숫자여야 합니다.")
+                    value = float(value)
+                    if not 0.0 <= value <= 1.0:
+                        raise ValueError(f"value는 0.0~1.0 이어야 합니다: {value}")
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    self._send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": str(exc) or "invalid request"},
+                    )
+                    return
+                payload = owner._set_pump_value(value)
+                status = (
+                    HTTPStatus.SERVICE_UNAVAILABLE
+                    if "error" in payload
+                    else HTTPStatus.ACCEPTED
+                )
+                self._send_json(status, payload)
 
             def log_message(self, format: str, *args) -> None:
                 return
@@ -628,6 +693,9 @@ class FirefighterUINode(Node):
         self.declare_parameter("ui_phm_enabled", True)
         self.declare_parameter("phm_status_topic", "/phm/status")
         self.declare_parameter("phm_stale_sec", 5.0)
+        # 펌프 세기: fire_suppression_node의 pump_value 파라미터를 서비스로 원격 조회·변경
+        self.declare_parameter("ui_pump_enabled", True)
+        self.declare_parameter("fire_suppression_node_name", "/fire_suppression_node")
 
         self._store = StatusStore()
         self._phm = PhmStore()
@@ -718,6 +786,17 @@ class FirefighterUINode(Node):
                 self._poll_robot_pose,
             )
 
+        self._pump_get_client = None
+        self._pump_set_client = None
+        if bool(self.get_parameter("ui_pump_enabled").value):
+            node_name = str(self.get_parameter("fire_suppression_node_name").value)
+            self._pump_get_client = self.create_client(
+                GetParameters, f"{node_name}/get_parameters"
+            )
+            self._pump_set_client = self.create_client(
+                SetParameters, f"{node_name}/set_parameters"
+            )
+
         allow_remote = bool(self.get_parameter("ui_allow_remote").value)
         self._http = FirefighterHTTPServer(
             str(self.get_parameter("ui_host").value),
@@ -737,6 +816,12 @@ class FirefighterUINode(Node):
                 self._set_vision_enabled
                 if self._vision_enabled_pub is not None
                 else None
+            ),
+            get_pump_value=(
+                self._get_pump_value if self._pump_get_client is not None else None
+            ),
+            set_pump_value=(
+                self._set_pump_value if self._pump_set_client is not None else None
             ),
             default_mode=str(self.get_parameter("ui_default_mode").value),
         )
@@ -859,6 +944,47 @@ class FirefighterUINode(Node):
             # 않게 한다.
             self._overlays.clear()
         return {"enabled": enabled}
+
+    def _call_service_sync(self, client, request, timeout: float = _PUMP_SERVICE_TIMEOUT_SEC):
+        # HTTP 스레드는 spin 스레드가 아니므로 spin_until_future_complete 대신 done-callback으로 기다린다.
+        if not client.service_is_ready():
+            return None, "fire_suppression_node에 연결할 수 없습니다."
+        future = client.call_async(request)
+        event = threading.Event()
+        future.add_done_callback(lambda _future: event.set())
+        if not event.wait(timeout):
+            return None, "펌프 노드 응답 시간 초과"
+        return future.result(), None
+
+    def _get_pump_value(self) -> dict[str, Any]:
+        response, error = self._call_service_sync(
+            self._pump_get_client, GetParameters.Request(names=["pump_value"])
+        )
+        if error is not None:
+            return {"error": error}
+        values = response.values
+        if not values or values[0].type != ParameterType.PARAMETER_DOUBLE:
+            return {"error": "pump_value 파라미터를 읽지 못했습니다."}
+        return {"value": values[0].double_value}
+
+    def _set_pump_value(self, value: float) -> dict[str, Any]:
+        request = SetParameters.Request(
+            parameters=[
+                Parameter(
+                    name="pump_value",
+                    value=ParameterValue(
+                        type=ParameterType.PARAMETER_DOUBLE, double_value=value
+                    ),
+                )
+            ]
+        )
+        response, error = self._call_service_sync(self._pump_set_client, request)
+        if error is not None:
+            return {"error": error}
+        result = response.results[0]
+        if not result.successful:
+            return {"error": result.reason or "펌프 세기 설정에 실패했습니다."}
+        return {"value": value}
 
     def destroy_node(self):
         self._http.close()
