@@ -3,8 +3,8 @@
 ## Current HEAD
 
 - Branch: `integration/vla-robot-e2e`
-- Current software checkpoint before this documentation update:
-  `3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`
+- Current integration checkpoint before this documentation update:
+  `0a79c462e770eac4bf2765b701f796d1447d8b12`
 - Software regression: focused `120 PASS`, full `273 PASS`, new failures `0`
 - Firefighter UI 포함 SW-only E2E: `PASS`
 - Issue A integration baseline: `98e1f65ac8b39fd43d3d5f204eaa751f8ec21e77`
@@ -12,12 +12,53 @@
   Remote Qwen, duplicate-goal, Hailo-backend, and perception-downstream work.
 - Model binaries and local runtime artifacts are not tracked.
 
+### 2026-09-10 perception/Nav integration and stationary HW checkpoint (#89)
+
+Directly verified in this session:
+
+- `892b816` selectively integrated the team perception/Nav runtime contract without
+  changing VLA Mission ownership, target lock, WorldModel `map` coordinates, or the
+  single VLA Nav2 goal owner. `321d8b9` and `0a79c46` then aligned the installed Hailo
+  test and delayed OpenCV thread setup until Hailo initialization completed.
+- The active model was `/shared/yolo26s/best_neural.hef`, with class order
+  `fire, person`, `conf=0.75`, and Detection3D floor sampling `point_below=true`,
+  `point_gap=1.0`. The model accepts `uint8 NHWC 640x640x3`; the paired postprocess
+  contract produces `1x300x6` detections.
+- The focused Pi/Humble integration verification already completed before this
+  documentation update: `image_pipeline` 280 tests PASS and focused builds of
+  `image_pipeline`, `navigation`, and `uncc_example` PASS. Do not repeat them without
+  a source/install change.
+- A floor-start perception-only runtime provided Camera, preprocess, Hailo YOLO,
+  Detection3D, SLAM/TF, and the VLA perception bridge. Mission, Nav2 goal,
+  Orchestrator/Qwen, suppression, Servo, and Pump commands were all zero.
+- With production `conf=0.75`, fresh frames containing the staged candle and person
+  produced no published detections. A temporary runtime-only `conf=0.01` diagnostic
+  proved that the model did produce candidates: person reached about `0.704` and fire
+  reached about `0.500` in the latest observation. Lower-score duplicate candidates
+  were also present, so `0.01` is diagnostic-only and not a production-safe decision
+  threshold.
+- Firefighter UI support for `/image_enhanced` plus `/yolo_result` bbox, class, and
+  confidence overlay already exists; no duplicate rqt renderer or production UI change
+  was required. The captured diagnostic image is a local, Git-untracked artifact at
+  `diagnostics/fire_detection/yolo_low_conf_bbox_20260910.jpg`.
+
+Evidence inherited from earlier verified sessions must remain distinct: the older
+nozzle achieved physical suppression and Fire-only/Person-fire SW-only E2E passed, but
+the newly integrated model/Nav configuration has not yet completed Hardware E2E.
+The next ordered work is P0 bbox-confirmed Depth/map and base-frame distance validation,
+then P1 threshold evaluation. Only after those pass may a no-spray approach and final
+suppression E2E be considered.
+
+The new-nozzle wrapper candidates are `navigation_standoff_m=0.35 m` and
+`spray_range_m=0.45 m`; production defaults remain `0.15/0.30 m`. The candidate values
+are not frozen until a terminal Hardware success.
+
 ### 2026-09-04 current presentation checkpoint
 
 - Wrapper는 `VLA_NAVIGATION_STANDOFF_M`과 `VLA_SPRAY_RANGE_M`을 공식 launch
   argument로 Orchestrator의 `WorldModelConfig`까지 전달하고 start/status에 실제
   적용값을 표시한다. 미지정 기본값은 `0.15/0.30 m`다.
-- 다음 새 노즐 시험값 `0.35/0.40 m`는 **Hardware 미검증 후보**다. 실측은 앞바퀴
+- 다음 새 노즐 시험값 `0.35/0.45 m`는 **Hardware 미검증 후보**다. 실측은 앞바퀴
   축–불꽃 `40 cm`, 렌즈–불꽃 `38 cm`, 노즐 끝–불꽃 `36 cm`이고 `36 cm`에서
   중앙 착탄했다. 성공 전 production 기본값으로 동결하지 않는다. Nav2 tolerance는
   `0.05 m`를 유지한다.
@@ -38,7 +79,7 @@
   SIGINT→SIGTERM→최종 SIGKILL 대상으로 삼는다. Orphan Nav2를 남기지 않고 zombie는
   active에서 제외하며 마지막에 Pump와 바퀴 정지를 물리 확인한다.
 - 발표용 단일 명령과 순서는 `docs/VLA_HARDWARE_E2E_HAPPY_PATH.md`만 authoritative로
-  사용한다. 다음 Hardware 검증은 실제 Camera/Map UI, override `0.35/0.40 m`의
+  사용한다. 다음 Hardware 검증은 실제 Camera/Map UI, override `0.35/0.45 m`의
   fire-only terminal SUCCESS이며 PASS 후에만 기본값 동결을 검토한다.
 
 ## Authoritative Production Hardware Test Runtime
@@ -70,7 +111,8 @@ VLA production source/build/install은 팀 workspace와 분리한다.
 - authoritative overlay: `/ros2_ws/phoenix_vla/install`
 - inference module:
   `/ros2_ws/phoenix_vla/install/image_pipeline/lib/python3.10/site-packages/image_pipeline/yolo.py`
-- HEF: `/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef`
+- Historical HEF artifact (pre-`892b816`):
+  `/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef`
   - size: `11288576` bytes
   - SHA-256: `67496fe3eefb710bef56ce9fd30af0102520c234f697f715ed0935a881e75aad`
 - postprocess: `/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx`
@@ -94,16 +136,18 @@ VLA production source/build/install은 팀 workspace와 분리한다.
   `peripherals/launch/lidar.launch.py` → `include/ldlidar_LD19.launch.py`
 - Camera: `ros2 launch peripherals depth_camera.launch.py`
 - preprocessing: `ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough`
-- inference: `ros2 launch image_pipeline yolo.launch.py` with the HEF path above,
-  `backend:=hailo`, `layout:=end2end`, and `class_names:="['fire','person']"`
+- current inference: `ros2 launch image_pipeline yolo.launch.py` with
+  `/shared/yolo26s/best_neural.hef`, paired `best_sim_postprocess.onnx` and
+  `config_onnx_best_sim.json` from the same directory, `backend:=hailo`,
+  `layout:=end2end`, `class_names:="['fire','person']"`, and default `conf:=0.75`
 - depth fusion: `ros2 launch image_pipeline detection_3d.launch.py`
 - SLAM: `uncc_example/launch/slam_mapping.launch.py` (included by the entrypoint)
 - Nav2: `uncc_example/launch/nav2_online.launch.py` (included by the entrypoint)
 - VLA: `ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=http://<CURRENT_PC_IP>:8088/infer remote_qwen_timeout_sec:=10.0` plus `ros2 launch uncc_example vla_navigation_bridge.launch.py`. The last successful stationary suppression test used `192.168.100.124:8088`; confirm the current PC address instead of treating it as a fixed endpoint.
 - suppression bridge/action server: `ros2 launch uncc_example fire_extinguisher.launch.py`; starting it does not actuate Hardware, but an actual suppress goal still requires explicit operator approval
-- current production defaults: fire confidence `>= 0.40`, spray range
+- current production defaults: YOLO publication confidence `>= 0.75`, spray range
   `<= 0.30 m`, navigation stand-off `0.15 m`; 다음 새 노즐 시험만 wrapper override
-  stand-off `0.35 m`, spray range `0.40 m`를 사용한다. `0.80 m`는 historical 값이다.
+  stand-off `0.35 m`, spray range `0.45 m`를 사용한다. `0.80 m`는 historical 값이다.
 
 ### Suppression Hardware runtime contract
 

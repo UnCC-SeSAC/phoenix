@@ -1,7 +1,7 @@
 # VLA Robot Runtime Troubleshooting
 
 현재 적용 기준은
-`integration/vla-robot-e2e@3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`이다.
+`integration/vla-robot-e2e@0a79c462e770eac4bf2765b701f796d1447d8b12`이다.
 과거 SHA와 parameter는 해당 incident의 historical evidence로만 사용한다.
 
 HW validation에서는 iteration 속도를 engineering constraint로 취급하고 다음 순서로
@@ -924,7 +924,7 @@ verification→`EXTINGUISHED`→Mission `COMPLETED` 경계만 고치는 것이�
 위 `0.15/0.30 m`는 기존 노즐의 물리 성공값이다. 새 노즐에서는 앞바퀴 축–불꽃
 `40 cm`, 렌즈–불꽃 `38 cm`, 노즐–불꽃 `36 cm`에서 중앙 착탄을 확인했다. 다음
 Hardware cycle은 production 기본값을 바꾸지 않고 wrapper override
-`navigation_standoff_m=0.35`, `spray_range_m=0.40`만 시험한다. 이 후보는 terminal
+`navigation_standoff_m=0.35`, `spray_range_m=0.45`만 시험한다. 이 후보는 terminal
 SUCCESS 전까지 `NOT_VERIFIED`이며 기존 해결값으로 기록하지 않는다.
 
 ## Reported person이 같은 Mission에서 반복 생성·보고됨
@@ -957,3 +957,20 @@ startup 직후 Pump가 작동했고 사용자가 물리 OFF를 확인한 뒤 run
 확인했다. 따라서 suppression은 현재 disabled blocker가 아니다. 새 SD카드나 배선
 변경 후에는 전체 runtime 전에 동일 무동작 시험을 한 번 수행하며 핀이나 극성을
 추측해 바꾸지 않는다.
+
+## Hailo 추론은 정상이나 production threshold에서 fire/person이 모두 비어 있음
+
+증상: `/image_enhanced` 입력과 Hailo 추론 주기는 정상이고 오류도 없지만
+`/yolo_result`가 계속 `detections: []`이다.
+
+2026-09-10 직접 증거: `/shared/yolo26s/best_neural.hef`, classes `fire, person`,
+`conf=0.75`에서 staged fire/person이 발행되지 않았다. 파일이나 launch를 바꾸지 않은
+runtime-only `conf=0.01` 진단에서는 person 최고 약 `0.704`, fire 최고 약 `0.500`과
+추가 저신뢰 후보가 나타났다. 첫 실패 경계는 Depth/TF가 아니라 YOLO confidence
+filter다.
+
+복구/검증: Firefighter UI Camera overlay에서 bbox, class, confidence가 실제 대상을
+가리키는지 확인하고, P0에서 Depth/map/base-frame 거리까지 기록한 다음 P1에서 여러
+프레임의 대상·배경 score 분포를 평가한다. `0.01`을 production 값으로 고정하거나
+Mission/Nav2/Suppression에 바로 사용하지 않는다. 모델 재학습 환경 차이는 현재
+가능성일 뿐 직접 원인으로 확정하지 않는다. Issue #89를 계속 사용한다.

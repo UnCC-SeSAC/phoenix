@@ -1,7 +1,7 @@
 # Issue #89 Next Session Handoff
 
 Date: 2026-08-22 KST
-Latest software update: 2026-08-29 KST
+Latest software update: 2026-09-10 KST
 
 이 문서는 새 Codex session이 workspace 복원이나 기존 PASS 항목 재진단 없이 Final
 Full E2E를 바로 이어가기 위한 authoritative handoff다. 먼저
@@ -12,7 +12,7 @@ Full E2E를 바로 이어가기 위한 authoritative handoff다. 먼저
 
 - branch: `integration/vla-robot-e2e`
 - current software checkpoint before this documentation update:
-  `3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`
+  `0a79c462e770eac4bf2765b701f796d1447d8b12`
 - historical runtime/model checkpoint (2026-08-22):
   `fc44b2b4cdabce3db4f4675616f479b6b1e068d8`
 - session 시작 시 local HEAD와 `origin/integration/vla-robot-e2e`가 일치하는지만
@@ -41,6 +41,31 @@ root-owned build/install/log artifacts: 0
 
 새 clone이나 rebuild를 반복하지 않는다. 현재 isolated workspace와 build/install/log를
 그대로 사용한다.
+
+## 2026-09-10 next boundary: P0 then P1
+
+Issue: https://github.com/UnCC-SeSAC/phoenix/issues/89
+
+- Team perception/Nav selection is already integrated in `892b816`; installed-Hailo
+  verification and initialization ordering fixes are `321d8b9` and `0a79c46`.
+- Current team model is `/shared/yolo26s/best_neural.hef`, classes `fire, person`.
+  The actual running values were `conf=0.75`, `point_below=true`, `point_gap=1.0`.
+- Direct stationary observation: production `0.75` published no detections. Temporary
+  runtime-only `0.01` exposed person candidates up to about `0.704` and fire candidates
+  up to about `0.500`. This proves threshold filtering, but does not validate `0.01` as
+  a safe production threshold because extra low-score candidates were present.
+- Existing Firefighter UI already renders Camera frames with YOLO bbox, class, and
+  confidence. Local screenshot evidence is Git-untracked at
+  `diagnostics/fire_detection/yolo_low_conf_bbox_20260910.jpg`.
+- P0: visually confirm the intended bbox, then record Detection3D depth/status, VLA
+  map coordinate stability, and measured `base_footprint` planar distance.
+- P1: evaluate repeated intended-target and background score distributions and choose
+  a threshold. Do not alter production files during P0/P1.
+- After P0/P1 only: no-spray approach, then one final suppression E2E. Historical
+  physical suppression and SW-only PASS do not mean the latest model/Nav integration
+  has passed Hardware E2E.
+- New-nozzle trial candidates are stand-off `0.35 m`, spray range `0.45 m`; defaults
+  remain `0.15/0.30 m` until terminal Hardware success.
 
 ## Production model artifacts
 
@@ -609,13 +634,13 @@ WorldModel verification으로 전달하도록 해결했으며 현재 blocker가 
 ## 2026-09-04 presentation and Hardware restart point
 
 현재 software 기준은
-`integration/vla-robot-e2e@3f01e7554177f3f4c5100d8a240f36ac1a6d5b70`이다.
+`integration/vla-robot-e2e@0a79c462e770eac4bf2765b701f796d1447d8b12`이다.
 새 SD카드에서는 `interfaces`를 먼저 build해 `SuppressFire` import를 확인하고,
 workspace-local HEF/ONNX/JSON 및 root `gpiozero`/`lgpio` import를 준비해야 한다.
 
 현재 production 기본값은 stand-off `0.15 m`, spray range `0.30 m`다. 새 노즐은
 앞바퀴 축–불꽃 `40 cm`, 렌즈–불꽃 `38 cm`, 노즐–불꽃 `36 cm`에서 중앙 착탄했으며,
-다음 시험만 아래 공식 override를 사용한다. `0.35/0.40 m`는 아직 Hardware terminal
+다음 시험만 아래 공식 override를 사용한다. `0.35/0.45 m`는 아직 Hardware terminal
 SUCCESS로 검증되지 않았으므로 기본값으로 동결하지 않는다. Nav2 XY tolerance는
 `0.05 m`다.
 
@@ -633,7 +658,7 @@ ssh -CY uncc@<PI_IP>
 cd /ros2_ws/phoenix_vla
 export VLA_QWEN_ENDPOINT=http://<PC_IP>:8088/infer
 export VLA_NAVIGATION_STANDOFF_M=0.35
-export VLA_SPRAY_RANGE_M=0.40
+export VLA_SPRAY_RANGE_M=0.45
 scripts/vla_hardware_e2e.sh start
 scripts/vla_hardware_e2e.sh status
 
@@ -646,7 +671,7 @@ scripts/vla_hardware_e2e.sh stop
 Mission active-action gate와 FIRE_ONLY target lock은 각각 Mission/action ownership 혼합과
 duplicate fire ID suppression을 차단한다. UI는 Camera+bbox overlay와 실제 SLAM Map,
 Robot/person/fire/selected-target를 표시하며 `/map` 부재 시 기존 SVG로 돌아간다.
-다음 실기에서는 이 Camera/Map 표시와 `0.35/0.40 m` fire-only terminal SUCCESS를
+다음 실기에서는 이 Camera/Map 표시와 `0.35/0.45 m` fire-only terminal SUCCESS를
 함께 확인하고, 성공한 뒤에만 production 기본값 동결을 결정한다.
 
 Stop은 wrapper-owned process만 종료하고 orphan Nav2 0, zombie 제외, Pump OFF와 바퀴
