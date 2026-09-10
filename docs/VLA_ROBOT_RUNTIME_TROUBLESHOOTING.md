@@ -567,6 +567,22 @@ observation이 생성되면 일시적 `stalled`만으로 E2E를 중단하지 않
 - WorldModel `fire_0023 ACTIVE`, confidence 0.659
 - `FRESH_FIRE_OBSERVATION: PASS`, `READY_FOR_MISSION: YES`
 
+## Manual perception restart에서 Camera 또는 Hailo가 시작되지 않음
+
+증상: Camera launch가 `KeyError: need_compile` 또는
+`KeyError: DEPTH_CAMERA_TYPE`로 즉시 종료되거나, YOLO가
+`ModuleNotFoundError: hailo_platform`으로 종료된다.
+
+원인: 개별 component를 수동으로 시작하면서 wrapper의 production 환경 계약 일부를
+누락했다. 이는 Camera/model 결함으로 판정하지 않는다.
+
+복구: 부분 명령을 계속 보완하지 말고 해당 VLA-owned 부분 runtime을 종료한 뒤
+canonical wrapper 환경과 overlay 순서를 그대로 사용해 한 번 clean start한다. 필수
+환경에는 `MACHINE_TYPE`, `need_compile`, `DEPTH_CAMERA_TYPE`, `ROS_DOMAIN_ID`,
+`ROS_LOCALHOST_ONLY`, `RMW_IMPLEMENTATION`과 HailoRT가 있는 Python path가 포함된다.
+배터리가 부족하면 재시작하지 않고 전원을 종료한 뒤 다음 cycle을 바닥 배치부터 다시
+시작한다.
+
 ## rosbag이 live perception에 영향을 주는지 구분
 
 `ros2 bag record/play` process, recorder/player node, production launch 자동

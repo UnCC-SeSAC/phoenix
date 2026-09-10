@@ -67,6 +67,26 @@ Issue: https://github.com/UnCC-SeSAC/phoenix/issues/89
 - New-nozzle trial candidates are stand-off `0.35 m`, spray range `0.45 m`; defaults
   remain `0.15/0.30 m` until terminal Hardware success.
 
+Latest P0 follow-up evidence:
+
+- Diagnostic `conf=0.01` visually boxed the staged person and unlit candle/fire
+  target. A representative frame showed person `0.030`, fire `0.013`.
+- That fire observation reached Detection3D as `depth=null`,
+  `depth_status=unknown` and therefore did not produce a VLA map observation. A
+  person candidate reached Depth `0.699 m`, `fallback_bottom`, map position about
+  `(0.761, 0.104) m`; low-score background candidates were also present.
+- The next comparison reference is `base_footprint` floor reference to target support
+  approximately `0.77 m`. Wheel-axis, camera-lens, and nozzle measurements
+  (`0.76/0.66/0.65 m`) are separate frames and must not be substituted for it.
+- Camera publication later stopped. A partial manual restart exposed missing
+  canonical environment and Hailo `PYTHONPATH`; full wrapper-equivalent environment
+  restored RGB/YOLO. Battery depletion then ended the cycle before fresh fire
+  Depth/map capture. The operator confirmed fire OFF and powered off the Robot/Pi.
+
+Resume only after charging: place the Robot on the floor first, perform one canonical
+clean observation start, and finish P0 without Mission/Nav2/suppression. Do not reuse
+the interrupted localization or classify this cycle as a Hardware PASS.
+
 ## Production model artifacts
 
 세 파일은 Git-untracked production artifact이며 `ubuntu:ubuntu` 소유다. 기존 검증

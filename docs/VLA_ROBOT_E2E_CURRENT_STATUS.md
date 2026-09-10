@@ -53,6 +53,34 @@ The new-nozzle wrapper candidates are `navigation_standoff_m=0.35 m` and
 `spray_range_m=0.45 m`; production defaults remain `0.15/0.30 m`. The candidate values
 are not frozen until a terminal Hardware success.
 
+#### 2026-09-10 P0 follow-up observation
+
+- With the diagnostic-only runtime value `conf=0.01`, the UI image visibly enclosed
+  the staged targets. One captured frame reported person `0.030` and fire `0.013`;
+  the fire reached Detection3D but returned `depth=null`, `depth_status=unknown`, so
+  it was correctly absent from `/vla/perception_observation`.
+- A person candidate later reached `0.069`, with Depth `0.699 m`,
+  `fallback_bottom`, and map position approximately `(0.761, 0.104) m`. Because the
+  low threshold also exposed background candidates, the operator's visual bbox
+  confirmation remains necessary and these scores do not justify a production
+  threshold change.
+- The stationary measurement reference for the next P0 comparison is approximately
+  `0.77 m` from the `base_footprint` floor reference to the target support. Separate
+  measurements were wheel-axis reference `0.76 m`, camera lens `0.66 m`, and nozzle
+  tip `0.65 m`; they must not be compared as if they were the same frame.
+- The follow-up capture did not complete. The Camera stream stopped, and a manual
+  partial restart first omitted canonical environment values and then the Hailo
+  Python path. Applying the full wrapper environment restored RGB and YOLO, but the
+  battery was depleted before a fresh fire Depth/map pair was recorded. The operator
+  powered the Robot and Pi off. This cycle is incomplete, not a perception PASS or
+  FAIL.
+
+Next P0 starts from a charged Robot placed on the floor before runtime startup. Use
+the canonical wrapper environment rather than reconstructing component commands,
+confirm the intended bbox, then compare a fresh valid fire Depth/map observation with
+the `base_footprint` planar measurement. Mission, Nav2, and suppression remain out of
+scope until P0 and P1 finish.
+
 ### 2026-09-04 current presentation checkpoint
 
 - Wrapper는 `VLA_NAVIGATION_STANDOFF_M`과 `VLA_SPRAY_RANGE_M`을 공식 launch
