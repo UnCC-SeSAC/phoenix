@@ -25,6 +25,7 @@ from image_pipeline.depth import (  # noqa: E402
     box_center,
     dummy_scene,
     ground_plane_depth,
+    k_from_hfov,
     optical_to_base_link_matrix,
     project_box,
     sample_distance_detail,
@@ -36,6 +37,7 @@ from image_pipeline.detection3d import (  # noqa: E402
     SamplingParams,
     StampMonitor,
     convert_frame,
+    convert_frame_pixels,
 )
 
 CAM_OFFSET = (0.1, 0.0, 0.35)
@@ -133,6 +135,97 @@ class TestDropInsteadOfInvent:
                             sc.k_color, sc.k_depth, _tf())
         assert res.detections == []
         assert res.dropped[0].reason == "box_outside_image"
+
+
+class TestPixelPathKeepsTheReason:
+    """★ JSON 경로에서 **불명의 사유가 살아남는가** (2026-09-05).
+
+    계약이 "불명도 실어 보낸다"로 바뀌면서 `convert_frame_pixels`는 실패한
+    검출을 버리지 않게 됐고, 버리지 않으니 `dropped`에도 안 남아 **사유가
+    통째로 사라져 있었습니다.** `sample.reason`은 `detection_entry`에서
+    `"unknown"` 한 단어로 접히므로 여기서 안 남기면 복구할 방법이 없습니다.
+
+    증상: 노드 로그의 "제외:" 절이 영원히 안 뜹니다. `min_score` 기본이 0.0이라
+    `low_score`도 발생할 수 없어 `_reasons`가 빈 dict로 남기 때문입니다.
+    그래서 현장에서 `no_valid_pixels`(띠가 통째로 무효 — 띠를 옮겨야 함)와
+    `low_valid_ratio`(픽셀은 있는데 비율 미달 — 임계값 문제)를 못 가립니다.
+    """
+
+    def test_불명이어도_발행은_계속한다(self):
+        """★ 이게 `convert_frame`과의 차이입니다. 진단을 추가하면서 이걸
+        깨뜨리면(=`continue`를 넣으면) 메인은 불의 존재조차 모르게 됩니다."""
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert len(res.entries) == 1
+        assert res.entries[0]["depth"] is None
+        assert res.entries[0]["depth_status"] == "unknown"
+
+    def test_불명의_사유가_dropped에_남는다(self):
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert [d.reason for d in res.dropped] == ["no_valid_pixels"]
+
+    def test_entries와_dropped는_배타적이지_않다(self):
+        """`convert_frame`에서는 배타적이었습니다. 여기서는 같은 검출이
+        양쪽에 나타납니다 — dropped가 "폐기"가 아니라 **진단**이라서입니다."""
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert len(res.entries) == 1 and len(res.dropped) == 1
+        assert res.entries[0]["class_name"] == res.dropped[0].class_id
+
+    def test_reason_counts가_노드_로그를_채운다(self):
+        """노드는 이 dict를 그대로 `_reasons`에 누적해 "제외:"로 찍습니다."""
+        sc = dummy_scene(flame_hole=True)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9),
+                                    (sc.box_color, "fire", 0.8)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert res.reason_counts() == {"no_valid_pixels": 2}
+
+    def test_거리를_구했으면_사유가_없다(self):
+        """성공한 프레임까지 진단에 쌓이면 로그가 무의미해집니다."""
+        sc = dummy_scene()
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+
+        assert res.entries[0]["depth"] is not None
+        assert res.dropped == []
+
+    def test_low_score는_여전히_발행되지_않는다(self):
+        """점수 미달은 **진짜 폐기**입니다 — entries에 없어야 합니다."""
+        sc = dummy_scene()
+        p = SamplingParams(min_score=0.5)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.2)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth,
+                                   params=p)
+
+        assert res.entries == []
+        assert [d.reason for d in res.dropped] == ["low_score"]
+
+    def test_사유가_구분된다(self):
+        """대응이 갈리는 두 사유가 실제로 다르게 잡히는지.
+
+        `no_valid_pixels`는 띠를 옮겨야 하고, `low_valid_ratio`는 임계값
+        문제입니다. 둘을 못 가리면 5-1 대응을 고를 수 없습니다.
+        """
+        sc = dummy_scene()
+        far_out = (5000.0, 5000.0, 5100.0, 5100.0)
+        # 유효 픽셀은 있지만 비율이 절대 못 미치는 임계값
+        p = SamplingParams(min_valid_ratio=1.01)
+        res = convert_frame_pixels([(sc.box_color, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth,
+                                   params=p)
+        assert [d.reason for d in res.dropped] == ["low_valid_ratio"]
+
+        res = convert_frame_pixels([(far_out, "fire", 0.9)],
+                                   sc.depth_image(), sc.k_color, sc.k_depth)
+        assert [d.reason for d in res.dropped] == ["box_outside_image"]
 
 
 class TestFallbackPolicy:
@@ -304,3 +397,51 @@ class TestStampMonitor:
         for _ in range(50):
             m.note_camera_stamp((100, 0))
         assert not any(m.check_detection((100, 0)) for _ in range(20))
+
+
+class TestPointBelowMode:
+    """`point_below` 배선 — 어떤 클래스에 걸리고 무엇을 무시하는가."""
+
+    @staticmethod
+    def _k():
+        return k_from_hfov(640, 480, 60.0)
+
+    def test_fire_uses_the_single_point_ignoring_band_params(self):
+        """★ band_offset=3.5 는 화면 밖으로 나가 null 이던 값입니다.
+        한 점 모드에서는 그 파라미터가 아예 안 읽혀야 합니다."""
+        depth = np.zeros((480, 640), dtype=np.uint16)
+        depth[261, 320] = 2500                      # 이 한 칸만 유효
+        p = SamplingParams(point_below=True, band_offset=3.5, band_ratio=3.0,
+                           min_valid_ratio=0.9, z_max=1.0,
+                           region_by_class={"fire": "below"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "fire", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth"] == pytest.approx(2.5)
+        assert r.entries[0]["depth_status"] == "fallback_below"
+
+    def test_person_keeps_the_old_path(self):
+        """`below`로 매핑된 클래스에만 걸립니다 — person은 bottom 그대로."""
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        p = SamplingParams(point_below=True,
+                           region_by_class={"fire": "below", "person": "bottom"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "person", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth_status"] == "fallback_bottom"
+
+    def test_hole_still_publishes_unknown_with_a_reason(self):
+        """★ null 이어도 검출은 나갑니다(계약). 사유는 진단에 남습니다."""
+        depth = np.zeros((480, 640), dtype=np.uint16)
+        p = SamplingParams(point_below=True, region_by_class={"fire": "below"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "fire", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth"] is None
+        assert r.entries[0]["depth_status"] == "unknown"
+        assert r.reason_counts() == {"no_valid_pixels": 1}
+
+    def test_off_restores_the_old_behaviour(self):
+        depth = np.full((480, 640), 2500, dtype=np.uint16)
+        p = SamplingParams(point_below=False, band_offset=3.5, band_ratio=3.0,
+                           region_by_class={"fire": "below"})
+        r = convert_frame_pixels([((300.0, 200.0, 340.0, 260.0), "fire", 0.9)],
+                                 depth, self._k(), self._k(), params=p)
+        assert r.entries[0]["depth"] == pytest.approx(2.5)

@@ -15,7 +15,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.10
-      movement_time_allowance: 15.0
+      movement_time_allowance: 8.0
 
     general_goal_checker:
       stateful: True
@@ -25,16 +25,25 @@ controller_server:
       yaw_goal_tolerance: 0.25
     # DWB parameters
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      angular_dist_threshold: 0.785
+      forward_sampling_distance: 0.25
+      angular_disengage_threshold: 0.08
+      rotate_to_heading_once: true
+      rotate_to_heading_angular_vel: 0.30
+      max_angular_accel: 1.5
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
       debug_trajectory_details: True
-      min_vel_x: -0.20 # 앞뒤 이동
+      min_vel_x: 0.0 # 접근 중 역주행은 recovery BT에만 위임
       min_vel_y: 0.0 # 좌우 이동
       max_vel_x: 0.20 # 앞뒤 이동
       max_vel_y: 0.0 # 좌우 이동
-      max_vel_theta: 1.0
-      min_speed_xy: 0.0
+      max_vel_theta: 0.5
+      min_speed_xy: 0.01
       max_speed_xy: 0.20
-      min_speed_theta: 0.0
+      min_speed_theta: 0.10
       acc_lim_x: 0.8
       acc_lim_y: 0.0 # DWB의 Y축 최대 가속도 (m/s²)
       acc_lim_theta: 1.5
@@ -49,14 +58,14 @@ controller_server:
       angular_granularity: 0.025
       transform_tolerance: 0.2
       xy_goal_tolerance: 0.05
-      trans_stopped_velocity: 0.25
+      trans_stopped_velocity: 0.20
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist", "GoalDist"] # "BaseObstacle" -> ObstacleFootprint
       ObstacleFootprint.scale: 0.02
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 20.0
       GoalDist.scale: 24.0
@@ -64,7 +73,9 @@ controller_server:
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 1.0
-      Oscillation.oscillation_rest_time: 3.0 # Oscillation Invalid 완화를 위해
+      Oscillation.oscillation_reset_dist: 0.10
+      Oscillation.oscillation_reset_angle: 0.25
+      Oscillation.oscillation_reset_time: -1.0
 controller_server_rclcpp_node:
   ros__parameters:
     use_sim_time: False

@@ -12,9 +12,10 @@ STATUS_WAIT_SEC=15
 NAVIGATION_STANDOFF_M="${VLA_NAVIGATION_STANDOFF_M:-0.15}"
 SPRAY_RANGE_M="${VLA_SPRAY_RANGE_M:-0.30}"
 LOCK_FILE="/tmp/vla_hardware_e2e.lock"
-HEF_PATH="/ros2_ws/phoenix_vla/Hailo/models/baseline_yolo26_neural_norm.hef"
-ONNX_PATH="/ros2_ws/phoenix_vla/Hailo/models/best_sim_postprocess.onnx"
-JSON_PATH="/ros2_ws/phoenix_vla/Hailo/models/config_onnx_best_sim.json"
+HEF_PATH="${VLA_YOLO_MODEL_PATH:-/shared/yolo26s/best_neural.hef}"
+ONNX_PATH="${HEF_PATH%/*}/best_sim_postprocess.onnx"
+JSON_PATH="${HEF_PATH%/*}/config_onnx_best_sim.json"
+YOLO_CONF="${VLA_YOLO_CONF:-0.75}"
 
 ENVIRONMENT='source /opt/ros/humble/setup.bash
 source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
@@ -179,14 +180,15 @@ start_runtime() {
     run sleep "$CAMERA_WAIT_SEC"
     launch_component base "ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false"
     launch_component preprocess "ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough"
-    launch_component yolo "ros2 launch image_pipeline yolo.launch.py model_path:=$HEF_PATH postprocess_path:=$ONNX_PATH backend:=hailo layout:=end2end class_names:='[fire,person]'"
-    launch_component detection3d "ros2 launch image_pipeline detection_3d.launch.py"
+    launch_component yolo "ros2 launch image_pipeline yolo.launch.py model_path:=$HEF_PATH backend:=hailo layout:=end2end class_names:='[fire,person]' conf:=$YOLO_CONF threads:=3"
+    launch_component detection3d "ros2 launch image_pipeline detection_3d.launch.py point_below:=true point_gap:=1.0"
     launch_component ui_stream "ros2 run image_pipeline ui_stream_node --ros-args -p class_names:='[fire,person]'"
     launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0 navigation_standoff_m:=$NAVIGATION_STANDOFF_M spray_range_m:=$SPRAY_RANGE_M"
     launch_component ui "ros2 run fire_vla_core firefighter_ui"
     launch_component navigation "ros2 launch uncc_example vla_navigation_bridge.launch.py"
     launch_component suppression "ros2 launch uncc_example fire_extinguisher.launch.py"
     echo "VLA_PARAMETERS: navigation_standoff_m=$NAVIGATION_STANDOFF_M spray_range_m=$SPRAY_RANGE_M"
+    echo "PERCEPTION_PARAMETERS: model_path=$HEF_PATH conf=$YOLO_CONF threads=3 point_below=true point_gap=1.0"
     echo "production runtime 시작 요청 완료. 로그: $RUN_LOG_DIR/e2e_*.log"
 }
 

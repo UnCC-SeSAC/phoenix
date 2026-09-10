@@ -26,6 +26,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 ASCAMERA = '/ascamera/camera_publisher'
 
@@ -54,6 +55,12 @@ def generate_launch_description():
             'region_by_class', default_value='fire:below,person:bottom',
             description='클래스별 영역. fire는 박스가 불로 차서 below, person은 bottom'),
         DeclareLaunchArgument(
+            'point_below', default_value='false',
+            description='받침대까지 검출하는 새 모델: below 클래스는 박스 아래 한 점을 샘플링'),
+        DeclareLaunchArgument(
+            'point_gap', default_value='1.0',
+            description='박스 아래 한 점까지의 간격 (Depth 이미지 픽셀)'),
+        DeclareLaunchArgument(
             'band_offset', default_value='3.5',
             description='below 띠 시작 위치(박스높이 배수). 0=접지점, 3.5=촛대 받침'),
         DeclareLaunchArgument(
@@ -80,6 +87,10 @@ def generate_launch_description():
             'status_topic': LaunchConfiguration('status_topic'),
             'region': LaunchConfiguration('region'),
             'region_by_class': LaunchConfiguration('region_by_class'),
+            'point_below': ParameterValue(
+                LaunchConfiguration('point_below'), value_type=bool),
+            'point_gap': ParameterValue(
+                LaunchConfiguration('point_gap'), value_type=float),
             'band_offset': LaunchConfiguration('band_offset'),
             'band_ratio': LaunchConfiguration('band_ratio'),
             'fallback_regions': LaunchConfiguration('fallback_regions'),
