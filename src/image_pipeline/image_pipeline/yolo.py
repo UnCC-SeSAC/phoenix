@@ -545,8 +545,6 @@ class HailoBackend:
         #   Hailo 경로에서 cv2 가 도는 곳은 letterbox 와 BGR->RGB 뿐인데,
         #   RPi5 실측으로 기본(4스레드) 2.30ms vs 1스레드 0.74ms 였습니다.
         self.threads = int(threads)
-        if self.threads > 0:
-            cv2.setNumThreads(self.threads)
         self.path = str(hef_path)
         self._hef = HEF(self.path)
         self.input_names = [
@@ -560,6 +558,8 @@ class HailoBackend:
         self._mode = "nms" if len(self.output_names) == 1 else "split"
         if self._mode == "split":
             self._init_split(FormatType, VDevice)
+            if self.threads > 0:
+                cv2.setNumThreads(self.threads)
             return
         from hailo_platform import (InferVStreams, InputVStreamParams,
                                     OutputVStreamParams)
@@ -580,6 +580,8 @@ class HailoBackend:
             self._pipeline = InferVStreams(self._network_group, inputs, outputs,
                                            tf_nms_format=True)
             self._pipeline.__enter__()
+            if self.threads > 0:
+                cv2.setNumThreads(self.threads)
         except Exception:
             self.close()
             raise
