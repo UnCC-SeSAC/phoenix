@@ -584,7 +584,12 @@ class TestHailoBackendThreads:
 
         calls = []
         monkeypatch.setattr(cv2, "setNumThreads", lambda n: calls.append(n))
-        with pytest.raises((ImportError, FileNotFoundError)):
+        # A host without HailoRT fails at import/path validation, while the Pi
+        # with HailoRT installed rejects this deliberately non-HEF fixture with
+        # a vendor HailoRTException.  The contract under test is that every
+        # backend-construction failure leaves OpenCV's global thread setting
+        # untouched, independent of the vendor exception class.
+        with pytest.raises(Exception):
             Y.HailoBackend(__file__, threads=2)
         assert calls == []
 
