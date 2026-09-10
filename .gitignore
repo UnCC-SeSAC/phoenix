@@ -8,8 +8,10 @@ __pycache__
 /AGENTS.md
 
 # Local-only development and Hardware operation documents
+/docs/ISSUE89_NEXT_SESSION_HANDOFF.md
 /docs/INTEGRATION_REPORT.md
 /docs/VERIFICATION_REPORT.md
+/docs/VLA_HARDWARE_E2E_HAPPY_PATH.md
 /docs/VLA_HARDWARE_RESUME_RUNBOOK.md
 /docs/VLA_ROBOT_E2E_CURRENT_STATUS.md
 /docs/VLA_ROBOT_RUNTIME_HANDSON.md
