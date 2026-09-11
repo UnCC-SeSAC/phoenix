@@ -15,7 +15,7 @@ LOCK_FILE="/tmp/vla_hardware_e2e.lock"
 HEF_PATH="${VLA_YOLO_MODEL_PATH:-/shared/yolo26s/best_neural.hef}"
 ONNX_PATH="${HEF_PATH%/*}/best_sim_postprocess.onnx"
 JSON_PATH="${HEF_PATH%/*}/config_onnx_best_sim.json"
-YOLO_CONF="${VLA_YOLO_CONF:-0.75}"
+YOLO_CONF="${VLA_YOLO_CONF:-0.25}"
 
 ENVIRONMENT='source /opt/ros/humble/setup.bash
 source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash

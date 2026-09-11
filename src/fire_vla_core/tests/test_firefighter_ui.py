@@ -445,6 +445,7 @@ def test_camera_stream_wiring_stops_processing_and_handles_bad_frames():
     assert "destroy_subscription(self._image_subscription)" in node_source
     assert "except Exception as exc" in node_source
     assert 'launch_component ui_stream "ros2 run image_pipeline ui_stream_node' in wrapper
+    assert '${VLA_YOLO_CONF:-0.25}' in wrapper
 
 
 def test_map_store_and_api_preserve_svg_fallback_without_map():
