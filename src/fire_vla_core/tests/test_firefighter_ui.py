@@ -311,6 +311,7 @@ def test_http_root_serves_required_v2_panels(http_server):
         assert marker_contract in html
     for vision_contract in (
         'id="visionToggle"',
+        'id="visionExpand"',
         'id="visionStream"',
         'id="visionBoxes"',
         "/api/vision/stream",
@@ -318,6 +319,10 @@ def test_http_root_serves_required_v2_panels(http_server):
         "/api/vision/enabled",
     ):
         assert vision_contract in html
+    assert "const VISION_STALE_MS=2000" in html
+    assert "if(now-lastVisionUpdateMs>VISION_STALE_MS)setVisionAvailable(false)" in html
+    assert "`${score.toFixed(3)} (${(score*100).toFixed(1)}%)`" in html
+    assert "frame.requestFullscreen()" in html
     for map_contract in (
         'id="slamMap"',
         'id="semanticMap"',

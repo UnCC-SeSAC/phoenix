@@ -67,7 +67,7 @@ class UiStreamNode(Node):
         self.declare_parameter("enabled_topic", "/ui/camera/enabled")
         self.declare_parameter("start_enabled", False)
         self.declare_parameter("class_names", [""])
-        self.declare_parameter("stream_fps", 8.0)
+        self.declare_parameter("stream_fps", 3.0)
         self.declare_parameter("stream_max_width", 640)
         self.declare_parameter("jpeg_quality", 70)
         self.declare_parameter("slop_sec", 0.1)

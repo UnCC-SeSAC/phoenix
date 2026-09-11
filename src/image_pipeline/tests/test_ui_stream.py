@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from image_pipeline.ui_stream import normalize_boxes, stream_size, throttle
+
+
+def test_ui_stream_runtime_default_is_three_fps():
+    source = (
+        Path(__file__).parents[1]
+        / "image_pipeline" / "ui_stream_node.py"
+    ).read_text(encoding="utf-8")
+    assert 'self.declare_parameter("stream_fps", 3.0)' in source
 
 
 class _Position:
