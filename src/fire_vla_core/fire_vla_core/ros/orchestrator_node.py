@@ -115,6 +115,8 @@ class VLAOrchestratorNode(Node):
             "http://127.0.0.1:8088/infer",
         )
         self.declare_parameter("remote_qwen_timeout_sec", 3.0)
+        self.declare_parameter("person_confidence_threshold", 0.50)
+        self.declare_parameter("fire_confidence_threshold", 0.25)
         self.declare_parameter("person_fire_risk_distance_m", 0.10)
         self.declare_parameter("spray_range_m", 0.30)
         self.declare_parameter("navigation_standoff_m", 0.15)
@@ -146,6 +148,12 @@ class VLAOrchestratorNode(Node):
         )
 
         self.world = WorldModel(WorldModelConfig(
+            person_confidence_threshold=float(
+                self.get_parameter("person_confidence_threshold").value
+            ),
+            fire_confidence_threshold=float(
+                self.get_parameter("fire_confidence_threshold").value
+            ),
             person_fire_risk_distance_m=float(
                 self.get_parameter("person_fire_risk_distance_m").value
             ),

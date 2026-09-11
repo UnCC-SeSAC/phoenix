@@ -40,6 +40,52 @@ def test_observation_creates_entities():
     assert world.fires["fire_01"].robot_within_spray_range is True
 
 
+@pytest.mark.parametrize(
+    ("confidence", "accepted"),
+    [(0.249, False), (0.25, True), (0.30, True)],
+)
+def test_fire_confidence_boundary(confidence, accepted):
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation(
+            "fire_boundary", "fire", confidence, Pose2D(.5, 0), now
+        ),
+    )))
+    assert ("fire_boundary" in world.fires) is accepted
+
+
+@pytest.mark.parametrize(
+    ("confidence", "accepted"),
+    [(0.499, False), (0.50, True)],
+)
+def test_person_confidence_boundary_is_unchanged(confidence, accepted):
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation(
+            "person_boundary", "person", confidence, Pose2D(.5, 0), now
+        ),
+    )))
+    assert ("person_boundary" in world.people) is accepted
+
+
+def test_new_mission_accepts_fresh_thirty_percent_fire_after_boundary():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_old", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    world.set_mission("m2", "새 임무")
+    fresh = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(fresh, (
+        SemanticObservation(
+            "fire_fresh", "fire", .30, Pose2D(.5, 0), fresh
+        ),
+    )))
+    assert set(world.fires) == {"fire_fresh"}
+
+
 def test_new_mission_clears_entities_but_preserves_robot_and_home_pose():
     world = make_world()
     now = utc_now().isoformat()
@@ -191,6 +237,38 @@ def test_fire_requires_valid_negative_observations_to_be_extinguished():
     assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
     world.update_observation_batch(ObservationBatch((start + timedelta(seconds=3)).isoformat(), tuple()))
     assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+
+
+def test_valid_thirty_percent_fire_keeps_fire_active_during_verification():
+    config = WorldModelConfig(
+        verification_required_observations=1,
+        verification_delay_sec=0.0,
+        observation_max_age_sec=10.0,
+    )
+    world = make_world(config)
+    start = utc_now() - timedelta(seconds=1)
+    world.update_observation_batch(ObservationBatch(start.isoformat(), (
+        SemanticObservation(
+            "fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()
+        ),
+    )))
+    action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    world.apply_action_result(ActionResult(
+        "a1", ExecutionSource.SPRAY, ActionResultStatus.SUCCEEDED, "fire_01",
+        timestamp=start.isoformat(),
+    ))
+    observed_at = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(observed_at, (
+        SemanticObservation(
+            "fire_01", "fire", .30, Pose2D(.5, 0), observed_at
+        ),
+    )))
+    fire = world.fires["fire_01"]
+    assert fire.state == FireState.ACTIVE
+    assert fire.verification_valid_observations == 0
 
 
 def test_fire_only_mission_completes_after_three_valid_empty_frames():

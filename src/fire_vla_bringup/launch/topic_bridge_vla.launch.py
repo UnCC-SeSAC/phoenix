@@ -52,6 +52,14 @@ def _create_vla_node(context):
                 LaunchConfiguration("remote_qwen_timeout_sec"),
                 value_type=float,
             ),
+            "person_confidence_threshold": ParameterValue(
+                LaunchConfiguration("person_confidence_threshold"),
+                value_type=float,
+            ),
+            "fire_confidence_threshold": ParameterValue(
+                LaunchConfiguration("fire_confidence_threshold"),
+                value_type=float,
+            ),
             "person_fire_risk_distance_m": ParameterValue(
                 LaunchConfiguration("person_fire_risk_distance_m"),
                 value_type=float,
@@ -106,6 +114,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "remote_qwen_timeout_sec",
             default_value="3.0",
+        ),
+        DeclareLaunchArgument(
+            "person_confidence_threshold",
+            default_value="0.50",
+        ),
+        DeclareLaunchArgument(
+            "fire_confidence_threshold",
+            default_value="0.25",
         ),
         DeclareLaunchArgument(
             "person_fire_risk_distance_m",

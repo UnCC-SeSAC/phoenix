@@ -1,4 +1,5 @@
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -106,3 +107,33 @@ def test_pose_callback_can_run_while_remote_inference_blocks_timer():
     assert "callback_group=self.pose_callback_group" in init_source
     assert "MultiThreadedExecutor(num_threads=2)" in main_source
     assert "executor.spin()" in main_source
+
+
+def test_orchestrator_applies_fire_and_person_confidence_defaults():
+    init_source = inspect.getsource(
+        orchestrator_node.VLAOrchestratorNode.__init__
+    )
+    assert 'self.declare_parameter("fire_confidence_threshold", 0.25)' in init_source
+    assert 'self.declare_parameter("person_confidence_threshold", 0.50)' in init_source
+    assert 'fire_confidence_threshold=float(' in init_source
+    assert 'self.get_parameter("fire_confidence_threshold").value' in init_source
+    assert 'person_confidence_threshold=float(' in init_source
+    assert 'self.get_parameter("person_confidence_threshold").value' in init_source
+
+
+def test_topic_bridge_and_vla_config_match_confidence_contract():
+    repository = Path(__file__).resolve().parents[3]
+    launch_source = (
+        repository
+        / "src/fire_vla_bringup/launch/topic_bridge_vla.launch.py"
+    ).read_text(encoding="utf-8")
+    config_source = (
+        repository / "src/fire_vla_bringup/config/vla.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert 'LaunchConfiguration("fire_confidence_threshold")' in launch_source
+    assert 'default_value="0.25"' in launch_source
+    assert 'LaunchConfiguration("person_confidence_threshold")' in launch_source
+    assert 'default_value="0.50"' in launch_source
+    assert "fire_confidence_threshold: 0.25" in config_source
+    assert "person_confidence_threshold: 0.5" in config_source
