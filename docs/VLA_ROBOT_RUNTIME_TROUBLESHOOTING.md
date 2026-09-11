@@ -990,3 +990,24 @@ filter다.
 프레임의 대상·배경 score 분포를 평가한다. `0.01`을 production 값으로 고정하거나
 Mission/Nav2/Suppression에 바로 사용하지 않는다. 모델 재학습 환경 차이는 현재
 가능성일 뿐 직접 원인으로 확정하지 않는다. Issue #89를 계속 사용한다.
+
+## Nav2는 SUCCEEDED지만 실제 바퀴가 움직이지 않음
+
+증상: Nav2 goal은 `SUCCEEDED`로 끝났지만 Robot은 물리적으로 이동하지 않는다.
+2026-09-11 재현에서는 `ros_robot_controller`가 serial DTR 설정 중
+`OSError: [Errno 71] Protocol error`로 종료됐고 localization 변화만으로 Nav2가
+도착을 판정했다. Nav2 result만으로 실제 주행 성공을 판정하지 않는다.
+
+확인·복구: RRC Lite USB의 `1a86:55d4`, `/dev/ttyACM0`, `/dev/rrc` 존재와
+`ros_robot_controller` 생존을 확인한다. 장치가 없거나 `error -71`이면 반복 실행하지
+말고 전원을 안전하게 끈 뒤 RRC Lite USB를 다시 연결한다. Controller만 정상 build
+사용자로 시작해 startup 무동작과 process 생존을 확인한 뒤 바닥 clean start를 한다.
+실제 바퀴 이동과 정지를 확인해야 physical Nav2 PASS다.
+
+## Wrapper stop 뒤 기록 PID가 zombie임
+
+Stop 이후 기록 PID가 `STAT=Z`이면 active process나 orphan Nav2로 세지 않는다.
+2026-09-11 종료에서는 wrapper가 incomplete를 출력했지만 기록 PID는 zombie였고 active
+Nav2/controller/suppression은 0이었다. PID의 `STAT`, command와 run ownership을
+확인하고 zombie에 추가 signal을 보내지 않는다. Pump와 바퀴의 물리 정지는 별도로
+확인한다.
