@@ -52,6 +52,7 @@ semantic 좌표는 2D `map` frame이다.
 ## 문서
 
 - [공개 문서 안내](docs/README.md)
+- [VLA 입문 가이드](docs/VLA_LEARNING_GUIDE.md)
 - [현재 VLA 데이터 아키텍처](docs/CURRENT_VLA_DATA_ARCHITECTURE.md)
 - [Rule-based UI 계약](docs/RULE_BASED_UI_CONTRACT.md)
 
