@@ -3,8 +3,8 @@
 <package format="3">
   <name>image_pipeline</name>
   <version>0.1.0</version>
-  <description>태스크① RGB 전처리(디헤이즈+CLAHE) + 태스크② 검출 3D 좌표(base_link) — 화재 탐사 로봇</description>
-  <maintainer email="team4@example.com">team4</maintainer>
+  <description>태스크1 RGB 전처리(디헤이즈+CLAHE) + 태스크2 검출 3D 좌표(base_link) - 화재 탐사 로봇</description>
+  <maintainer email="rjh2280@gmail.com">Ryu JiHyeok</maintainer>
   <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>
