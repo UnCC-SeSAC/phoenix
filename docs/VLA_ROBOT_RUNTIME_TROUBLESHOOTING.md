@@ -1011,3 +1011,26 @@ Stop 이후 기록 PID가 `STAT=Z`이면 active process나 orphan Nav2로 세지
 Nav2/controller/suppression은 0이었다. PID의 `STAT`, command와 run ownership을
 확인하고 zombie에 추가 signal을 보내지 않는다. Pump와 바퀴의 물리 정지는 별도로
 확인한다.
+
+## 한글 Mission 첫 RUN이 즉시 접수되지 않음
+
+증상: 입력창에 한글 Mission을 작성하고 RUN을 한 번 눌러도 CURRENT MISSION에 즉시
+반영되지 않아 사용자가 입력과 클릭을 반복한다. 반복 클릭은 중복 Mission 위험이
+있으므로 정상 절차로 취급하지 않는다.
+
+현재 상태: 2026-09-24 화면 녹화에서 재현됐지만 브라우저 request와 server response를
+같이 수집하지 않아 직접 원인은 `미확정`이다. 다음 수정은 Hardware 없이 RUN 시점의
+DOM value/IME composition, 단일 HTTP request, 응답과 submitting 상태 복구만 재현한다.
+Qwen·WorldModel·Nav2 경로는 이 UI 결함의 수정 범위가 아니다.
+
+## Camera ON인데 UI 영상이 간헐적으로 끊김
+
+증상: 실제 불꽃이 계속 보이는 동안 bbox가 나타났다 사라지고, 영상 종료부에는
+`CAMERA STREAM: DISCONNECTED`가 표시된다. Mission과 이전 action/object 표시는 남아
+사용자가 production 전체가 끊긴 것인지 영상 경로만 끊긴 것인지 구분하기 어렵다.
+
+현재 상태: 원인이 `/image_enhanced` 발행, UI stream node 수신/MJPEG 응답, 브라우저
+연결 중 어느 경계인지 `미확정`이다. 다음에는 mock frame으로 stream 지속성과 empty
+detection overlay 제거를 SW-only로 재현하고, Hardware에서는 Camera ON 연속 표시만
+짧게 확인한다. 연결 끊김을 실제 empty fire observation이나 소화 성공으로 해석하지
+않는다.
