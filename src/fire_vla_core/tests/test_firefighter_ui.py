@@ -347,6 +347,15 @@ def test_mission_form_reads_and_trims_current_dom_value(http_server):
     assert "if(!text){$('missionResult').textContent='Error: Mission is empty.';return;}" in html
 
 
+def test_status_poll_does_not_overwrite_live_mission_input(http_server):
+    server, _ = http_server
+    _, _, body = request(server, "/")
+    html = body.decode("utf-8")
+    assignment = 'document.getElementById("missionInput").value=presentation.mission_input||""'
+    assert f"if(replay){assignment}" in html
+    assert html.count(assignment) == 1
+
+
 def test_mission_form_defers_ime_submission_until_compositionend(http_server):
     server, _ = http_server
     _, _, body = request(server, "/")
@@ -446,6 +455,17 @@ def test_camera_stream_wiring_stops_processing_and_handles_bad_frames():
     assert "except Exception as exc" in node_source
     assert 'launch_component ui_stream "ros2 run image_pipeline ui_stream_node' in wrapper
     assert '${VLA_YOLO_CONF:-0.25}' in wrapper
+
+
+def test_camera_stale_overlay_does_not_drop_active_mjpeg_connection(http_server):
+    server, _ = http_server
+    _, _, body = request(server, "/")
+    html = body.decode("utf-8")
+    assert "if(resetStream)stream.removeAttribute('src')" in html
+    assert "if(now-lastVisionUpdateMs>VISION_STALE_MS)setVisionAvailable(false)" in html
+    assert "setVisionAvailable(false,'CAMERA STREAM: DISCONNECTED',true)" in html
+    assert "setVisionAvailable(false,'CAMERA STREAM: OFF',true)" in html
+    assert "else{$('visionFallback').hidden=visionEnabled;}" not in html
 
 
 def test_map_store_and_api_preserve_svg_fallback_without_map():
