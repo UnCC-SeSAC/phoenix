@@ -146,6 +146,11 @@ status가 `SUCCEEDED`이면 물리 분사 루틴 완료로 전달하며, action 
 판정 결과는 메시지 증거로만 보존한다. 실제 소화 여부의 authoritative owner는
 WorldModel의 fresh perception verification이다. 같은 fire는 유효한 재관측을 거쳐
 최대 3회까지 다시 시도한다.
+Verification은 0.5초 delay 후 유효한 fire 미검출을 3회 이상 요구하고,
+5초 관찰 구간이 끝나기 전에는 `EXTINGUISHED`를 확정하지 않는다. 관찰 중
+같은 fire가 한 번이라도 재탐지되면 미검출 count와 관찰 시작 시각을
+초기화하고 `ACTIVE`로 복귀한다. 이로써 간헐적 detector miss 3 frame이
+실제 소화로 오판되는 경계를 차단한다.
 3회 이내 완전 소화가 검증되면 `EXTINGUISHED`/Mission `COMPLETED`, 3회 후 잔불이면
 `SUPPRESSION_FAILED`/Mission `COMPLETED_WITH_ESCALATION`으로 구분해 소방관 대응이
 필요함을 보존한다.

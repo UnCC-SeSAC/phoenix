@@ -226,7 +226,7 @@ def test_fire_requires_valid_negative_observations_to_be_extinguished():
         observation_max_age_sec=10.0,
     )
     world = make_world(config)
-    start = utc_now() - timedelta(seconds=4)
+    start = utc_now() - timedelta(seconds=6)
     world.update_observation_batch(ObservationBatch(start.isoformat(), (SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()),)))
     action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
     world.apply_submission(action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED))
@@ -236,7 +236,52 @@ def test_fire_requires_valid_negative_observations_to_be_extinguished():
     world.update_observation_batch(ObservationBatch((start + timedelta(seconds=2)).isoformat(), tuple()))
     assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
     world.update_observation_batch(ObservationBatch((start + timedelta(seconds=3)).isoformat(), tuple()))
+    assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+    world.update_observation_batch(ObservationBatch((start + timedelta(seconds=5)).isoformat(), tuple()))
     assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+
+
+def test_intermittent_fire_before_verification_window_ends_prevents_extinguished():
+    config = WorldModelConfig(
+        verification_required_observations=3,
+        verification_delay_sec=0.5,
+        verification_timeout_sec=5.0,
+        observation_max_age_sec=10.0,
+    )
+    world = make_world(config)
+    start = utc_now() - timedelta(seconds=6)
+    world.update_observation_batch(ObservationBatch(
+        start.isoformat(),
+        (SemanticObservation("fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()),),
+    ))
+    action = Action("a1", ActionType.EXTINGUISH, "분사", target="fire_01")
+    world.apply_submission(
+        action, ActionSubmission("a1", ActionSubmissionStatus.ACCEPTED)
+    )
+    world.apply_action_result(ActionResult(
+        "a1",
+        ExecutionSource.SPRAY,
+        ActionResultStatus.SUCCEEDED,
+        "fire_01",
+        timestamp=start.isoformat(),
+    ))
+
+    for offset in (1, 2, 3):
+        world.update_observation_batch(ObservationBatch(
+            (start + timedelta(seconds=offset)).isoformat(), tuple()
+        ))
+
+    assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
+    observed_at = (start + timedelta(seconds=4)).isoformat()
+    world.update_observation_batch(ObservationBatch(
+        observed_at,
+        (SemanticObservation(
+            "fire_01", "fire", .30, Pose2D(.5, 0), observed_at
+        ),),
+    ))
+
+    assert world.fires["fire_01"].state == FireState.ACTIVE
+    assert world.fires["fire_01"].verification_valid_observations == 0
 
 
 def test_valid_thirty_percent_fire_keeps_fire_active_during_verification():
@@ -279,7 +324,7 @@ def test_fire_only_mission_completes_after_three_valid_empty_frames():
         observation_max_age_sec=10.0,
     )
     world = make_world(config)
-    start = utc_now() - timedelta(seconds=4)
+    start = utc_now() - timedelta(seconds=6)
     world.update_observation_batch(ObservationBatch(start.isoformat(), (
         SemanticObservation(
             "fire_01", "fire", .9, Pose2D(.5, 0), start.isoformat()
@@ -298,7 +343,7 @@ def test_fire_only_mission_completes_after_three_valid_empty_frames():
         timestamp=start.isoformat(),
     ))
 
-    for offset in (1, 2, 3):
+    for offset in (1, 2, 3, 5):
         world.update_observation_batch(ObservationBatch(
             (start + timedelta(seconds=offset)).isoformat(), tuple()
         ))

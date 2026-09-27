@@ -364,11 +364,12 @@ class WorldModel:
         fire.confidence = observation.confidence
         fire.last_seen = observation.observed_at
         fire.blocks_route_to = observation.blocks_route_to or fire.blocks_route_to
-        if fire.state == FireState.PENDING_VERIFICATION and observation.confidence >= self.config.verification_min_confidence:
+        if fire.state == FireState.PENDING_VERIFICATION:
             fire.state = FireState.ACTIVE
             fire.verification_valid_observations = 0
             fire.verification_started_at = None
-            self._event("SUPPRESSION_VERIFICATION_FAILED", entity_id=fire.id, detail="화점이 재탐지되어 ACTIVE로 복귀")
+            if observation.confidence >= self.config.verification_min_confidence:
+                self._event("SUPPRESSION_VERIFICATION_FAILED", entity_id=fire.id, detail="화점이 재탐지되어 ACTIVE로 복귀")
         elif fire.state != FireState.EXTINGUISHED:
             fire.state = FireState.ACTIVE
 
@@ -383,17 +384,20 @@ class WorldModel:
             elapsed = self._elapsed_seconds(fire.verification_started_at, observed_at)
             if elapsed < self.config.verification_delay_sec:
                 continue
-            if elapsed > self.config.verification_timeout_sec:
-                fire.state = FireState.ACTIVE
-                fire.verification_valid_observations = 0
-                fire.verification_started_at = None
-                self._event("SUPPRESSION_VERIFICATION_TIMED_OUT", entity_id=fire.id)
-                continue
             fire.verification_valid_observations += 1
-            if fire.verification_valid_observations >= self.config.verification_required_observations:
-                fire.state = FireState.EXTINGUISHED
-                fire.verification_started_at = None
-                self._event("FIRE_EXTINGUISHED", entity_id=fire.id)
+            if elapsed >= self.config.verification_timeout_sec:
+                if (
+                    fire.verification_valid_observations
+                    >= self.config.verification_required_observations
+                ):
+                    fire.state = FireState.EXTINGUISHED
+                    fire.verification_started_at = None
+                    self._event("FIRE_EXTINGUISHED", entity_id=fire.id)
+                else:
+                    fire.state = FireState.ACTIVE
+                    fire.verification_valid_observations = 0
+                    fire.verification_started_at = None
+                    self._event("SUPPRESSION_VERIFICATION_TIMED_OUT", entity_id=fire.id)
 
     def _process_verification_timeouts(self, observed_at: str) -> None:
         for fire in self.fires.values():
