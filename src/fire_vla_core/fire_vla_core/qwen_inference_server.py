@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> None:
         "--model-id", default="Qwen/Qwen3-1.7B"
     )
     parser.add_argument("--device", default="xpu:0")
-    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument("--max-new-tokens", type=int, default=96)
     args = parser.parse_args(argv)
     server = create_server(args.host, args.port, build_backend(args))
     try:

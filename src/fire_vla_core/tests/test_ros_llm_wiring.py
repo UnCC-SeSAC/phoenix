@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from fire_vla_core.llm import MockVLABrain, OllamaLLMClient
+from fire_vla_core.llm import (
+    MockVLABrain,
+    OllamaLLMClient,
+    TransformersQwenAdapter,
+)
+from fire_vla_core import qwen_inference_server
 from fire_vla_core.ros import orchestrator_node
 
 
@@ -15,6 +20,39 @@ def backend_kwargs():
         "transformers_device": "xpu:0",
         "transformers_max_new_tokens": 64,
     }
+
+
+def test_transformers_adapter_default_output_budget_is_96_tokens():
+    assert (
+        TransformersQwenAdapter.__dataclass_fields__["max_new_tokens"].default
+        == 96
+    )
+
+
+def test_qwen_server_default_output_budget_is_96_tokens(monkeypatch):
+    captured = {}
+
+    class FakeServer:
+        def serve_forever(self):
+            return None
+
+        def server_close(self):
+            return None
+
+    def fake_build_backend(args):
+        captured["max_new_tokens"] = args.max_new_tokens
+        return object()
+
+    monkeypatch.setattr(qwen_inference_server, "build_backend", fake_build_backend)
+    monkeypatch.setattr(
+        qwen_inference_server,
+        "create_server",
+        lambda host, port, backend: FakeServer(),
+    )
+
+    qwen_inference_server.main([])
+
+    assert captured["max_new_tokens"] == 96
 
 
 def test_mock_backend_is_lazy(monkeypatch):

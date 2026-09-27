@@ -108,7 +108,7 @@ class VLAOrchestratorNode(Node):
             "Qwen/Qwen2.5-1.5B-Instruct",
         )
         self.declare_parameter("transformers_device", "xpu:0")
-        self.declare_parameter("transformers_max_new_tokens", 64)
+        self.declare_parameter("transformers_max_new_tokens", 96)
         self.declare_parameter("navigation_mode", "MOCK")
         self.declare_parameter(
             "remote_qwen_endpoint",

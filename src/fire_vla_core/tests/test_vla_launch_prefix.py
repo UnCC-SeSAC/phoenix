@@ -92,7 +92,7 @@ def test_topic_bridge_distance_defaults_and_overrides_reach_orchestrator():
         "llm_backend": "mock",
         "transformers_model_id": "test-model",
         "transformers_device": "cpu",
-        "transformers_max_new_tokens": "64",
+        "transformers_max_new_tokens": "96",
         "remote_qwen_endpoint": "http://127.0.0.1:8088/infer",
         "remote_qwen_timeout_sec": "3.0",
         "person_fire_risk_distance_m": "0.10",

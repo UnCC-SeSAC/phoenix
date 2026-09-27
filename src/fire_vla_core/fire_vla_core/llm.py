@@ -283,7 +283,7 @@ class TransformersQwenAdapter(LLMPort):
     model_id: str = "Qwen/Qwen3-1.7B"
     device: str = "xpu:0"
     dtype: str = "float32"
-    max_new_tokens: int = 64
+    max_new_tokens: int = 96
     _torch: Any = None
     _tokenizer: Any = None
     _model: Any = None
