@@ -102,6 +102,17 @@ def test_suppression_servo_starts_detached():
     assert "self.servo.detach()" in source
 
 
+def test_suppression_uses_calibrated_fixed_spray_angle():
+    source = (
+        Path(__file__).parents[1]
+        / "uncc_example"
+        / "fire_suppression_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "SERVO_CENTER_ANGLE = 130" in source
+    assert "SERVO_SWEEP_RANGE_DEG = 0" in source
+
+
 def test_invalid_command_never_reaches_action_server():
     calls = []
     logger = FakeLogger()
