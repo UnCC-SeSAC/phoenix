@@ -163,7 +163,7 @@ const timelineEvents=[];
 const eventKeys=new Set();
 let lastRuleSituation=null;
 const PERSON_STATE_COLOR={DETECTED:'#fbbf24',person_unconfirmed:'#fbbf24',REPORTED:'#4ade80',person_confirmed:'#4ade80',LOST:'#64748b',person_unreachable:'#f87171'};
-const FIRE_STATE_COLOR={ACTIVE:'#fb7185',fire_unvisited:'#fb7185',PENDING_VERIFICATION:'#f59e0b',fire_failed:'#f59e0b',EXTINGUISHED:'#94a3b8',fire_extinguished:'#94a3b8',INACCESSIBLE:'#a855f7',fire_unreachable:'#a855f7'};
+const FIRE_STATE_COLOR={ACTIVE:'#fb7185',fire_unvisited:'#fb7185',PENDING_VERIFICATION:'#f59e0b',fire_failed:'#f59e0b',EXTINGUISHED:'#94a3b8',fire_extinguished:'#94a3b8',SUPPRESSION_FAILED:'#f97316',INACCESSIBLE:'#a855f7',fire_unreachable:'#a855f7'};
 const dash=v=>(v===null||v===undefined||v==='')?'-':String(v);
 const finite=n=>Number.isFinite(Number(n));
 const validPose=p=>p&&finite(p.x)&&finite(p.y);

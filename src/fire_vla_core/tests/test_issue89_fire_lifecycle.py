@@ -95,7 +95,7 @@ def test_navigation_success_flows_to_single_suppression_and_ui_status():
     assert len(spray.calls) == 1
 
 
-def test_failed_suppression_marks_fire_inaccessible_after_three_attempts():
+def test_failed_suppression_escalates_after_three_attempts():
     world, results, navigation, spray, orchestrator = make_system(
         spray_result=ActionResultStatus.FAILED
     )
@@ -120,13 +120,13 @@ def test_failed_suppression_marks_fire_inaccessible_after_three_attempts():
     assert world.fires["fire_0001"].spray_count == 3
 
     blocked = orchestrator.decide_once()
-    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert world.fires["fire_0001"].state == FireState.SUPPRESSION_FAILED
     assert blocked.decision.action != ActionType.EXTINGUISH
     assert [call.action for call in navigation.calls] == [ActionType.RETURN_HOME]
     assert len(spray.calls) == 3
 
 
-def test_redetected_fire_retries_then_becomes_inaccessible():
+def test_redetected_fire_retries_then_escalates():
     world, results, navigation, spray, orchestrator = make_system()
     world.update_robot_pose(Pose2D(1.0, 0.0))
 
@@ -146,13 +146,13 @@ def test_redetected_fire_retries_then_becomes_inaccessible():
 
     terminal = orchestrator.decide_once()
 
-    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert world.fires["fire_0001"].state == FireState.SUPPRESSION_FAILED
     assert terminal.decision.action != ActionType.EXTINGUISH
     assert [call.action for call in navigation.calls] == [ActionType.RETURN_HOME]
     assert len(spray.calls) == 3
 
 
-def test_inaccessible_fire_does_not_block_next_fire():
+def test_suppression_failed_fire_does_not_block_next_fire():
     world, results, navigation, spray, orchestrator = make_system(
         spray_result=ActionResultStatus.FAILED
     )
@@ -171,7 +171,7 @@ def test_inaccessible_fire_does_not_block_next_fire():
 
     next_cycle = orchestrator.decide_once()
 
-    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert world.fires["fire_0001"].state == FireState.SUPPRESSION_FAILED
     assert next_cycle.validation.action.target == "fire_0002"
     assert len(spray.calls) == 4
     assert len(navigation.calls) == 0

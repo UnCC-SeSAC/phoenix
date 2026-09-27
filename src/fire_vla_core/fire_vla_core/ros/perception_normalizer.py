@@ -181,6 +181,7 @@ class CanonicalPerceptionNormalizer:
                     FireState.ACTIVE,
                     FireState.PENDING_VERIFICATION,
                     FireState.EXTINGUISHED,
+                    FireState.SUPPRESSION_FAILED,
                     FireState.INACCESSIBLE,
                 }
             )

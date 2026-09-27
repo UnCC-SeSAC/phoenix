@@ -142,7 +142,7 @@ class ControlModeOwner:
                 world = status.get("world_model") or {}
                 mission = world.get("mission") or {}
                 terminal = mission.get("status") in {
-                    "COMPLETED", "FAILED", "ABORTED", "CANCELED"
+                    "COMPLETED", "COMPLETED_WITH_ESCALATION", "FAILED", "ABORTED", "CANCELED"
                 }
                 if terminal and world.get("current_action") is None:
                     self._active = False
@@ -151,7 +151,7 @@ class ControlModeOwner:
                 if mission.get("last_command", {}).get("command") == "STOP":
                     self._active = False
                 elif mission.get("state") in {
-                    "COMPLETED", "FAILED", "ABORTED", "CANCELED", "IDLE"
+                    "COMPLETED", "COMPLETED_WITH_ESCALATION", "FAILED", "ABORTED", "CANCELED", "IDLE"
                 }:
                     self._active = False
 

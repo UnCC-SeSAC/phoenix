@@ -196,7 +196,12 @@ def test_out_of_range_fire_is_corrected_to_navigation_without_spray():
 
 @pytest.mark.parametrize(
     "state",
-    [FireState.PENDING_VERIFICATION, FireState.EXTINGUISHED, FireState.INACCESSIBLE],
+    [
+        FireState.PENDING_VERIFICATION,
+        FireState.EXTINGUISHED,
+        FireState.SUPPRESSION_FAILED,
+        FireState.INACCESSIBLE,
+    ],
 )
 def test_inactive_fire_is_rejected_without_publish(state):
     _, node, _, orchestrator, _ = make_system(state=state)
@@ -206,11 +211,11 @@ def test_inactive_fire_is_rejected_without_publish(state):
     assert node.publishers["/vla/spray_command"].messages == []
 
 
-def test_max_attempts_marks_fire_inaccessible_without_publish():
+def test_max_attempts_marks_fire_suppression_failed_without_publish():
     world, node, _, orchestrator, _ = make_system(spray_count=3)
     cycle = orchestrator.decide_once()
     assert cycle.submission is None
-    assert world.fires["fire_0001"].state == FireState.INACCESSIBLE
+    assert world.fires["fire_0001"].state == FireState.SUPPRESSION_FAILED
     assert "ACTIVE" in cycle.validation.reason
     assert node.publishers["/vla/spray_command"].messages == []
 

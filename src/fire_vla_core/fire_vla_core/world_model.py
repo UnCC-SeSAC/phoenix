@@ -231,6 +231,15 @@ class WorldModel:
         fire.state = FireState.INACCESSIBLE
         self._event("FIRE_INACCESSIBLE", entity_id=fire_id)
 
+    def mark_fire_suppression_failed(self, fire_id: str) -> None:
+        fire = self.fires[fire_id]
+        fire.state = FireState.SUPPRESSION_FAILED
+        self._event(
+            "FIRE_SUPPRESSION_FAILED",
+            entity_id=fire_id,
+            detail="최대 진압 횟수 도달; 잔여 화재 소방관 대응 필요",
+        )
+
     def create_snapshot(self) -> dict[str, Any]:
         return {
             "mission": self._serialize(self.mission),
@@ -250,8 +259,22 @@ class WorldModel:
         if not self.mission_goals_resolved():
             return False
         assert self.mission is not None
-        self.mission.status = MissionStatus.COMPLETED
-        self._event("MISSION_COMPLETED")
+        relevant_fires = self.fires.values()
+        if self.mission.scope in {MissionScope.FIRE_ONLY, MissionScope.PERSON_FIRE}:
+            target = self.fires.get(self.mission.target_fire_id or "")
+            relevant_fires = () if target is None else (target,)
+        if any(
+            fire.state == FireState.SUPPRESSION_FAILED
+            for fire in relevant_fires
+        ):
+            self.mission.status = MissionStatus.COMPLETED_WITH_ESCALATION
+            self._event(
+                "MISSION_COMPLETED_WITH_ESCALATION",
+                detail="부분 진압 완료; 잔여 화재 소방관 대응 필요",
+            )
+        else:
+            self.mission.status = MissionStatus.COMPLETED
+            self._event("MISSION_COMPLETED")
         return True
 
     def mission_goals_resolved(self) -> bool:
@@ -266,7 +289,11 @@ class WorldModel:
             return bool(
                 fire
                 and fire.state
-                in {FireState.EXTINGUISHED, FireState.INACCESSIBLE}
+                in {
+                    FireState.EXTINGUISHED,
+                    FireState.SUPPRESSION_FAILED,
+                    FireState.INACCESSIBLE,
+                }
             )
         if self.mission.scope == MissionScope.PERSON_FIRE:
             person = self.people.get(self.mission.target_person_id or "")
@@ -276,7 +303,11 @@ class WorldModel:
                 and person.state == PersonState.REPORTED
                 and fire
                 and fire.state
-                in {FireState.EXTINGUISHED, FireState.INACCESSIBLE}
+                in {
+                    FireState.EXTINGUISHED,
+                    FireState.SUPPRESSION_FAILED,
+                    FireState.INACCESSIBLE,
+                }
             )
         if self.exploration_status != ExplorationStatus.COMPLETED:
             return False
@@ -284,7 +315,12 @@ class WorldModel:
             p.state == PersonState.REPORTED for p in self.people.values()
         )
         fires_done = all(
-            f.state in {FireState.EXTINGUISHED, FireState.INACCESSIBLE}
+            f.state
+            in {
+                FireState.EXTINGUISHED,
+                FireState.SUPPRESSION_FAILED,
+                FireState.INACCESSIBLE,
+            }
             for f in self.fires.values()
         )
         return people_done and fires_done

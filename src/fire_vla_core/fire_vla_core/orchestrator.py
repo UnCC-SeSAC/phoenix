@@ -69,7 +69,7 @@ class VLAOrchestrator:
                 fire.state == FireState.ACTIVE
                 and fire.spray_count >= self.validator.max_spray_attempts
             ):
-                self.world.mark_fire_inaccessible(fire.id)
+                self.world.mark_fire_suppression_failed(fire.id)
         self.world.complete_mission_if_resolved()
         if self.world.mission.status.value != "RUNNING":
             return DecisionCycle(None, None, None)

@@ -420,6 +420,36 @@ def test_fire_only_scope_ignores_unrelated_entities_and_exploration():
     assert world.mission_goals_resolved() is True
 
 
+def test_fire_only_suppression_failure_completes_with_escalation():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_target", "fire", .9, Pose2D(.5, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_target")
+    world.mark_fire_suppression_failed("fire_target")
+
+    assert world.complete_mission_if_resolved() is True
+    assert world.fires["fire_target"].state == FireState.SUPPRESSION_FAILED
+    assert world.mission.status.value == "COMPLETED_WITH_ESCALATION"
+    assert world.event_log[-1].event_type == "MISSION_COMPLETED_WITH_ESCALATION"
+
+
+def test_fire_only_ignores_unrelated_suppression_failure_for_terminal_status():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_target", "fire", .9, Pose2D(.5, 0), now),
+        SemanticObservation("fire_other", "fire", .9, Pose2D(3, 0), now),
+    )))
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_target")
+    world.fires["fire_target"].state = FireState.EXTINGUISHED
+    world.mark_fire_suppression_failed("fire_other")
+
+    assert world.complete_mission_if_resolved() is True
+    assert world.mission.status.value == "COMPLETED"
+
+
 def test_person_fire_scope_uses_bound_relation_only():
     world = make_world()
     now = utc_now().isoformat()
