@@ -77,6 +77,14 @@ class VLAOrchestrator:
         qwen_selected_navigation = False
         if self.world.current_action is not None:
             decision = ActionDecision(ActionType.WAIT, "물리 행동이 실행 중이므로 완료 결과를 기다린다")
+        elif self.world.mission_goals_resolved():
+            assert self.world.mission is not None
+            assert self.world.mission.scope is not None
+            decision = ActionDecision(
+                ActionType.RETURN_HOME,
+                "현장 목표 해결 후 저장된 home pose로 복귀한다.",
+                mission_scope=self.world.mission.scope,
+            )
         else:
             decision = None
             if self._pending_continuation is not None:

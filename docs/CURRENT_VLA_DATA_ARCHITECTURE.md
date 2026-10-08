@@ -125,6 +125,12 @@ target을 제안해도 현재 action을 중간 취소하지 않고 다음 action
 fire 처리를 계속한다. 사람 위협 fire 우선 후 나머지 fire도 모두 처리하는
 Mission의 scope는 `PERSON_FIRE`가 아니라 `FULL_EXPLORATION`이다.
 
+Mission의 현장 목표가 모두 해결돼도 즉시 terminal로 전환하지 않는다. Core가
+Qwen을 다시 호출하지 않고 `RETURN_HOME`을 선택하며, 저장된 home pose에 대한
+Navigation result가 `SUCCEEDED`일 때만 `COMPLETED` 또는
+`COMPLETED_WITH_ESCALATION`으로 전환한다. 복귀 실패 시 Mission은 `RUNNING`을
+유지하고 기존 Navigation 실패·재시도 계약을 그대로 따른다.
+
 ## Control과 result lifecycle
 
 ```text

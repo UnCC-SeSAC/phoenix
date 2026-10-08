@@ -13,6 +13,7 @@ from .domain import (
     ActionResultStatus,
     ActionSubmission,
     ActionSubmissionStatus,
+    ActionType,
     Event,
     ExecutionSource,
     ExplorationStatus,
@@ -256,7 +257,7 @@ class WorldModel:
         }
 
     def complete_mission_if_resolved(self) -> bool:
-        if not self.mission_goals_resolved():
+        if not self.mission_goals_resolved() or not self.return_home_succeeded():
             return False
         assert self.mission is not None
         relevant_fires = self.fires.values()
@@ -276,6 +277,13 @@ class WorldModel:
             self.mission.status = MissionStatus.COMPLETED
             self._event("MISSION_COMPLETED")
         return True
+
+    def return_home_succeeded(self) -> bool:
+        return bool(
+            self.last_action
+            and self.last_action.action == ActionType.RETURN_HOME
+            and self.last_action.status == ActionLifecycleStatus.SUCCEEDED
+        )
 
     def mission_goals_resolved(self) -> bool:
         if not self.mission or self.mission.status != MissionStatus.RUNNING:

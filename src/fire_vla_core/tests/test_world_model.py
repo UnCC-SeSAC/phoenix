@@ -28,6 +28,25 @@ def make_world(config=None):
     return world
 
 
+def succeed_return_home(world, action_id="return_home"):
+    action = Action(
+        action_id,
+        ActionType.RETURN_HOME,
+        "출발 위치로 복귀",
+        target_pose=world.robot.home_pose,
+    )
+    world.apply_submission(
+        action,
+        ActionSubmission(action_id, ActionSubmissionStatus.ACCEPTED),
+    )
+    world.apply_action_result(ActionResult(
+        action_id,
+        ExecutionSource.NAVIGATION,
+        ActionResultStatus.SUCCEEDED,
+    ))
+    return world.complete_mission_if_resolved()
+
+
 def test_observation_creates_entities():
     world = make_world()
     now = utc_now().isoformat()
@@ -349,6 +368,8 @@ def test_fire_only_mission_completes_after_three_valid_empty_frames():
         ))
 
     assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+    assert world.mission.status.value == "RUNNING"
+    assert succeed_return_home(world) is True
     assert world.mission.status.value == "COMPLETED"
 
 
@@ -474,7 +495,8 @@ def test_fire_only_suppression_failure_completes_with_escalation():
     world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_target")
     world.mark_fire_suppression_failed("fire_target")
 
-    assert world.complete_mission_if_resolved() is True
+    assert world.complete_mission_if_resolved() is False
+    assert succeed_return_home(world) is True
     assert world.fires["fire_target"].state == FireState.SUPPRESSION_FAILED
     assert world.mission.status.value == "COMPLETED_WITH_ESCALATION"
     assert world.event_log[-1].event_type == "MISSION_COMPLETED_WITH_ESCALATION"
@@ -491,7 +513,8 @@ def test_fire_only_ignores_unrelated_suppression_failure_for_terminal_status():
     world.fires["fire_target"].state = FireState.EXTINGUISHED
     world.mark_fire_suppression_failed("fire_other")
 
-    assert world.complete_mission_if_resolved() is True
+    assert world.complete_mission_if_resolved() is False
+    assert succeed_return_home(world) is True
     assert world.mission.status.value == "COMPLETED"
 
 

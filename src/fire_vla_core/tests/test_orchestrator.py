@@ -326,6 +326,53 @@ def test_person_threat_priority_does_not_replace_explicit_fire_only_target():
     assert navigation.calls[-1].target == "fire_b"
 
 
+@pytest.mark.parametrize(
+    ("fire_state", "terminal_status"),
+    (
+        (FireState.EXTINGUISHED, "COMPLETED"),
+        (FireState.SUPPRESSION_FAILED, "COMPLETED_WITH_ESCALATION"),
+    ),
+)
+def test_resolved_fire_mission_returns_home_before_terminal(
+    fire_state,
+    terminal_status,
+):
+    world, queue, orchestrator = make_orchestrator()
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_01")
+    world.fires["fire_01"].state = fire_state
+    orchestrator.llm = StubLLM(error=AssertionError("Qwen must not be called"))
+
+    returning = orchestrator.decide_once()
+
+    assert world.mission.status.value == "RUNNING"
+    assert returning.decision.action == ActionType.RETURN_HOME
+    assert returning.submission is not None
+    assert orchestrator.llm.calls == 0
+
+    assert orchestrator.process_results(queue) == 1
+    assert world.return_home_succeeded() is True
+    assert world.mission.status.value == terminal_status
+
+
+def test_failed_return_home_keeps_mission_running_and_existing_retry_semantics():
+    world, queue, orchestrator = make_orchestrator()
+    world.bind_mission_scope(MissionScope.FIRE_ONLY, "fire_01")
+    world.fires["fire_01"].state = FireState.EXTINGUISHED
+    orchestrator.dispatcher.navigation.next_result = ActionResultStatus.FAILED
+
+    first = orchestrator.decide_once()
+    assert first.decision.action == ActionType.RETURN_HOME
+    assert orchestrator.process_results(queue) == 1
+
+    retry = orchestrator.decide_once()
+
+    assert world.mission.status.value == "RUNNING"
+    assert world.return_home_succeeded() is False
+    assert retry.decision.action == ActionType.RETURN_HOME
+    assert retry.submission is not None
+    assert len(orchestrator.dispatcher.navigation.calls) == 2
+
+
 def test_normal_wait_is_dispatched_to_wait_port():
     _, _, orchestrator = make_orchestrator()
     decision = ActionDecision(ActionType.WAIT, "정상적으로 대기한다", None)

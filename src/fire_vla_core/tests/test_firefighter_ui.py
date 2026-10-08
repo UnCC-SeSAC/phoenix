@@ -772,7 +772,10 @@ def test_existing_launches_do_not_force_start_ui():
         assert "firefighter_ui" not in (launch_dir / name).read_text()
 
 def test_ui_software_e2e_completes_scoped_person_fire_mission():
-    world = WorldModel(WorldModelConfig())
+    world = WorldModel(WorldModelConfig(
+        verification_delay_sec=0.01,
+        verification_timeout_sec=0.05,
+    ))
     world.update_robot_pose(Pose2D(0.0, 0.0))
     store = StatusStore()
     submitted = []
@@ -874,11 +877,21 @@ def test_ui_software_e2e_completes_scoped_person_fire_mission():
         assert orchestrator.process_results(results) == 1
         assert world.fires["fire_01"].state == FireState.PENDING_VERIFICATION
 
-        time.sleep(world.config.verification_delay_sec + 0.05)
-        for _ in range(world.config.verification_required_observations):
+        time.sleep(world.config.verification_delay_sec + 0.01)
+        for _ in range(world.config.verification_required_observations - 1):
             world.update_observation_batch(
                 ObservationBatch(utc_now_iso(), tuple())
             )
+        time.sleep(world.config.verification_timeout_sec)
+        world.update_observation_batch(
+            ObservationBatch(utc_now_iso(), tuple())
+        )
+
+        assert world.fires["fire_01"].state == FireState.EXTINGUISHED
+        assert world.mission.status.value == "RUNNING"
+        return_cycle = orchestrator.decide_once()
+        assert return_cycle.decision.action == ActionType.RETURN_HOME
+        assert orchestrator.process_results(results) == 1
 
         final_payload = tracker.create_payload(world.create_snapshot())
         store.update(final_payload)
@@ -889,7 +902,7 @@ def test_ui_software_e2e_completes_scoped_person_fire_mission():
         assert "world.mission?.status" in html
         assert brain.calls == 1
         assert len(submitted) == 1
-        assert len(navigation.calls) == 1
+        assert len(navigation.calls) == 2
         assert len(spray.calls) == 1
         assert publisher.publish.call_count == 1
     finally:
