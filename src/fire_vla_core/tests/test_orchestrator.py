@@ -227,6 +227,105 @@ def test_residual_fire_outside_range_allows_one_reapproach_per_spray_attempt():
     assert len(orchestrator.dispatcher.navigation.calls) == 2
 
 
+def make_person_two_fire_orchestrator(decision):
+    world = WorldModel()
+    world.update_robot_pose(Pose2D(0, 0))
+    world.set_mission(
+        "mission_ab",
+        "사람 가까이에 있는 화재를 우선 진압하고 나머지 잔불도 전부 꺼줘.",
+    )
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_a", "person", .9, Pose2D(2, 0), now),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(4, 0), now),
+        SemanticObservation("fire_a", "fire", .9, Pose2D(2.05, 0), now),
+    )))
+    queue = MockResultQueue()
+    navigation = MockNavigationAdapter(queue)
+    dispatcher = ActionDispatcher(
+        navigation,
+        MockSprayAdapter(queue),
+        MockReportAdapter(queue),
+        MockWaitAdapter(queue),
+    )
+    orchestrator = VLAOrchestrator(
+        world,
+        StubLLM(decision),
+        TargetResolver(),
+        ActionValidator(),
+        dispatcher,
+    )
+    return world, navigation, orchestrator
+
+
+@pytest.mark.parametrize(
+    "proposed_action",
+    (ActionType.NAVIGATE_TO, ActionType.SEARCH, ActionType.RETURN_HOME),
+)
+def test_full_exploration_prioritizes_person_threatening_fire(proposed_action):
+    target = "fire_b" if proposed_action == ActionType.NAVIGATE_TO else None
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            proposed_action,
+            "다른 행동을 제안",
+            target,
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+
+    cycle = orchestrator.decide_once()
+
+    assert world.fires["fire_a"].threatens_person is True
+    assert world.fires["fire_b"].threatens_person is False
+    assert cycle.decision.action == ActionType.NAVIGATE_TO
+    assert cycle.decision.target == "fire_a"
+    assert cycle.submission is not None
+    assert navigation.calls[-1].target == "fire_a"
+
+
+@pytest.mark.parametrize(
+    "resolved_state",
+    (FireState.EXTINGUISHED, FireState.SUPPRESSION_FAILED),
+)
+def test_full_exploration_continues_to_other_fire_after_priority_fire_resolved(
+    resolved_state,
+):
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "남은 일반 화재 처리",
+            "fire_b",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    world.fires["fire_a"].state = resolved_state
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.target == "fire_b"
+    assert cycle.submission is not None
+    assert navigation.calls[-1].target == "fire_b"
+
+
+def test_person_threat_priority_does_not_replace_explicit_fire_only_target():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "명시적으로 지정된 단일 화재 처리",
+            "fire_b",
+            MissionScope.FIRE_ONLY,
+        )
+    )
+
+    cycle = orchestrator.decide_once()
+
+    assert world.fires["fire_a"].threatens_person is True
+    assert cycle.decision.target == "fire_b"
+    assert world.mission.target_fire_id == "fire_b"
+    assert cycle.submission is not None
+    assert navigation.calls[-1].target == "fire_b"
+
+
 def test_normal_wait_is_dispatched_to_wait_port():
     _, _, orchestrator = make_orchestrator()
     decision = ActionDecision(ActionType.WAIT, "정상적으로 대기한다", None)

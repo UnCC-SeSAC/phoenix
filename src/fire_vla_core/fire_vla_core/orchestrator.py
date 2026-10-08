@@ -117,10 +117,11 @@ class VLAOrchestrator:
                         f"MISSION_SCOPE_INVALID: {exc}",
                     )
                 self._last_decision_input_signature = signature
+                decision = self._enforce_threatened_fire_priority(decision)
+                decision = self._correct_out_of_range_extinguish(decision)
                 qwen_selected_navigation = (
                     decision.action == ActionType.NAVIGATE_TO
                 )
-                decision = self._correct_out_of_range_extinguish(decision)
 
         if self._targets_non_mission_fire(decision):
             return DecisionCycle(
@@ -208,6 +209,49 @@ class VLAOrchestrator:
             ActionType.NAVIGATE_TO,
             "분사거리 밖 ACTIVE 화점으로 접근한다.",
             decision.target,
+            decision.mission_scope,
+        )
+
+    def _enforce_threatened_fire_priority(
+        self, decision: ActionDecision
+    ) -> ActionDecision:
+        if decision.mission_scope != MissionScope.FULL_EXPLORATION:
+            return decision
+        threatened_fires = [
+            fire
+            for fire in self.world.fires.values()
+            if fire.state == FireState.ACTIVE
+            and fire.threatens_person
+            and fire.threatened_person_id in self.world.people
+        ]
+        if not threatened_fires:
+            return decision
+        robot_pose = self.world.robot.pose
+        threatened_by_id = {fire.id: fire for fire in threatened_fires}
+        selected_threatened_fire = threatened_by_id.get(decision.target or "")
+        if (
+            selected_threatened_fire is not None
+            and decision.action in {ActionType.NAVIGATE_TO, ActionType.EXTINGUISH}
+        ):
+            return decision
+        threatened_fire = min(
+            threatened_fires,
+            key=lambda fire: (
+                float("inf")
+                if robot_pose is None
+                else robot_pose.distance_to(fire.position),
+                fire.id,
+            ),
+        )
+        action = (
+            ActionType.EXTINGUISH
+            if threatened_fire.robot_within_spray_range
+            else ActionType.NAVIGATE_TO
+        )
+        return ActionDecision(
+            action,
+            f"사람을 위협하는 ACTIVE 화점 {threatened_fire.id}을 우선 처리한다.",
+            threatened_fire.id,
             decision.mission_scope,
         )
 

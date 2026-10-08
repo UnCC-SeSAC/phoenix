@@ -255,7 +255,10 @@ feasibility, and current robot state; do not invent risk.
 
 Choose mission_scope once from FIRE_ONLY, PERSON_FIRE, FULL_EXPLORATION.
 Use FIRE_ONLY for a target-fire mission, PERSON_FIRE for a threatened-person
-and related-fire mission, and FULL_EXPLORATION only for site-wide exploration.
+and related-fire mission, and FULL_EXPLORATION for site-wide exploration or
+any mission that explicitly asks to handle all or remaining fires. A mission
+that prioritizes a person-threatened fire and then handles other fires is
+FULL_EXPLORATION, not PERSON_FIRE.
 Output exactly one compact single-line JSON object with mission_scope, action,
 target, reason.
 Keep reason at 12 words or fewer.
@@ -413,6 +416,8 @@ WorldModel에 없는 entity를 만들지 마라.
 EXTINGUISH는 대상 화점의 robot_within_spray_range가 true이고 state가 ACTIVE일 때만 선택한다.
 current_action이 존재하면 WAIT를 선택한다.
 mission_scope은 FIRE_ONLY, PERSON_FIRE, FULL_EXPLORATION 중 하나다.
+사람을 위협하는 화재를 우선하되 나머지 또는 모든 화재도 처리하라는 Mission은
+PERSON_FIRE가 아니라 FULL_EXPLORATION을 선택한다.
 필수 키: mission_scope, action, target, reason.
 target이 필요 없는 WAIT와 RETURN_HOME은 target을 null로 출력할 수 있다.
 reason은 현재 상태에 근거한 한국어 한 문장으로 작성한다."""

@@ -118,6 +118,13 @@ spray range를 검사한다. LLM output은 물리 상태의 source of truth가 �
 갱신 좌표로 `NAVIGATE_TO`를 한 번 다시 허용한다. target lock과 동일 회차의
 중복 이동·분사는 계속 유지된다.
 
+`FULL_EXPLORATION`에서 사람을 위협하는 `ACTIVE` fire가 남아 있으면 Core가
+다른 fire, `SEARCH`, `RETURN_HOME`보다 해당 fire를 우선한다. Qwen이 다른
+target을 제안해도 현재 action을 중간 취소하지 않고 다음 action 선택 경계에서
+교정한다. 우선 fire가 `EXTINGUISHED` 또는 `SUPPRESSION_FAILED`가 되면 다른
+fire 처리를 계속한다. 사람 위협 fire 우선 후 나머지 fire도 모두 처리하는
+Mission의 scope는 `PERSON_FIRE`가 아니라 `FULL_EXPLORATION`이다.
+
 ## Control과 result lifecycle
 
 ```text

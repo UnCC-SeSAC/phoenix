@@ -94,6 +94,8 @@ def test_qwen_prompt_states_strict_action_target_contract():
     assert "REPORT_PERSON targets" not in prompt
     assert "12 words or fewer" in prompt
     assert "FIRE_ONLY, PERSON_FIRE, FULL_EXPLORATION" in prompt
+    assert "handle all or remaining fires" in prompt
+    assert "FULL_EXPLORATION, not PERSON_FIRE" in prompt
     assert "mission_scope, action" in prompt
 
 
