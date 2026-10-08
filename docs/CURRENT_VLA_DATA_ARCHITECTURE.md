@@ -113,6 +113,11 @@ Resolver가 target ID를 WorldModel의 pose로 변환한다. Validator는 target
 fresh Robot pose, finite/map bounds, 중복 physical Action, report 상태, fire 상태와
 spray range를 검사한다. LLM output은 물리 상태의 source of truth가 아니다.
 
+동일 Mission의 동일 target에 대한 중복 physical Action은 차단한다. 다만 분사 후
+같은 fire가 `ACTIVE`로 재관측되고 분사거리 밖이면, 해당 `spray_count` 회차에서
+갱신 좌표로 `NAVIGATE_TO`를 한 번 다시 허용한다. target lock과 동일 회차의
+중복 이동·분사는 계속 유지된다.
+
 ## Control과 result lifecycle
 
 ```text

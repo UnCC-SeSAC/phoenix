@@ -45,10 +45,10 @@ class VLAOrchestrator:
     _last_decision_input_signature: tuple[Any, ...] | None = field(
         default=None, init=False, repr=False
     )
-    _semantic_action_keys: dict[str, tuple[str, ActionType, str | None]] = field(
+    _semantic_action_keys: dict[str, tuple[Any, ...]] = field(
         default_factory=dict, init=False, repr=False
     )
-    _non_retryable_semantic_keys: set[tuple[str, ActionType, str | None]] = field(
+    _non_retryable_semantic_keys: set[tuple[Any, ...]] = field(
         default_factory=set, init=False, repr=False
     )
     _navigation_continuations: dict[
@@ -349,9 +349,19 @@ class VLAOrchestrator:
 
     def _semantic_action_key(
         self, action: Any
-    ) -> tuple[str, ActionType, str | None]:
+    ) -> tuple[Any, ...]:
         assert self.world.mission is not None
-        return (self.world.mission.id, action.action, action.target)
+        key: tuple[Any, ...] = (
+            self.world.mission.id,
+            action.action,
+            action.target,
+        )
+        if (
+            action.action == ActionType.NAVIGATE_TO
+            and action.target in self.world.fires
+        ):
+            return (*key, self.world.fires[action.target].spray_count)
+        return key
 
     def _decision_input_signature(self) -> tuple[Any, ...]:
         mission = self.world.mission

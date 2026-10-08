@@ -2,7 +2,7 @@ import pytest
 
 from fire_vla_core.adapters.mock_adapters import MockNavigationAdapter, MockReportAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter
 from fire_vla_core.dispatcher import ActionDispatcher
-from fire_vla_core.domain import ActionDecision, MissionScope, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
+from fire_vla_core.domain import ActionDecision, MissionScope, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, FireState, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
 from fire_vla_core.llm import LLMInferenceError, LLMOutputError, MockVLABrain
 from fire_vla_core.orchestrator import VLAOrchestrator
 from fire_vla_core.resolver import TargetResolver
@@ -201,6 +201,30 @@ def test_corrected_navigation_is_not_duplicated_in_same_mission():
     assert second.submission is None
     assert second.blocked_reason.startswith("DUPLICATE_ACTION_BLOCKED:")
     assert len(orchestrator.dispatcher.navigation.calls) == 1
+
+
+def test_residual_fire_outside_range_allows_one_reapproach_per_spray_attempt():
+    world, queue, orchestrator = make_orchestrator()
+
+    first_navigation = orchestrator.decide_once()
+    assert first_navigation.validation.action.action == ActionType.NAVIGATE_TO
+    assert orchestrator.process_results(queue) == 1
+
+    fire = world.fires["fire_01"]
+    fire.spray_count = 1
+    fire.state = FireState.ACTIVE
+    world.update_robot_pose(Pose2D(0.2, 0))
+
+    reapproach = orchestrator.decide_once()
+    assert reapproach.validation.action.action == ActionType.NAVIGATE_TO
+    assert reapproach.validation.action.target == "fire_01"
+    assert reapproach.submission is not None
+    assert orchestrator.process_results(queue) == 1
+
+    duplicate = orchestrator.decide_once()
+    assert duplicate.submission is None
+    assert duplicate.blocked_reason.startswith("DUPLICATE_ACTION_BLOCKED:")
+    assert len(orchestrator.dispatcher.navigation.calls) == 2
 
 
 def test_normal_wait_is_dispatched_to_wait_port():
