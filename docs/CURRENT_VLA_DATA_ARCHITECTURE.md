@@ -197,3 +197,14 @@ result lifecycle과 Firefighter UI다.
 
 실제 Hardware E2E는 단계적으로 검증 중이다. software-only PASS를 Camera/Robot/Pump
 Hardware PASS로 간주하지 않는다.
+
+현재 software-only 검증은 다음 계약까지 포함한다.
+
+- `FULL_EXPLORATION`에서 사람 위협 fire를 일반 fire보다 우선한다.
+- 우선 fire 해결 뒤 남은 일반 fire 처리를 계속한다.
+- 현장 목표 해결 뒤 `RETURN_HOME` 성공 전까지 Mission은 `RUNNING`이다.
+- 복귀 성공 뒤 완전 해결은 `COMPLETED`, 잔존 fire는
+  `COMPLETED_WITH_ESCALATION`으로 종료한다.
+
+사람+위협 fire A와 일반 fire B를 실제 센서로 관측하고, A→B→home 순서와 최종
+terminal까지 연결하는 Hardware 검증은 아직 남아 있다.
