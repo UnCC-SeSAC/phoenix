@@ -92,6 +92,10 @@ def generate_launch_description():
         'start_frontier'
     )
 
+    frontier_candidate_only = LaunchConfiguration(
+        'frontier_candidate_only'
+    )
+
     start_avoidance = LaunchConfiguration(
         'start_avoidance'
     )
@@ -213,6 +217,11 @@ def generate_launch_description():
                             PythonExpression([
                                 "'", start_mission, "' != 'true'"
                             ]),
+                            value_type=bool,
+                        ),
+
+                        'candidate_only': ParameterValue(
+                            frontier_candidate_only,
                             value_type=bool,
                         ),
 
@@ -407,6 +416,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'start_frontier',
             default_value='true',
+        ),
+
+        DeclareLaunchArgument(
+            'frontier_candidate_only',
+            default_value='false',
         ),
 
         DeclareLaunchArgument(

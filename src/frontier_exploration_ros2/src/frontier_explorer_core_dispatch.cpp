@@ -170,6 +170,13 @@ void FrontierExplorerCore::try_send_next_goal()
     return;
   }
 
+  if (params.candidate_only) {
+    callbacks.publish_selected_frontier_pose(build_dispatch_goal_pose(
+      frontier_sequence.front(), *current_pose, escape_mode_active));
+    callbacks.log_debug("Published frontier candidate without dispatching a Nav2 goal");
+    return;
+  }
+
   send_frontier_goal(
     frontier_sequence,
     *current_pose,

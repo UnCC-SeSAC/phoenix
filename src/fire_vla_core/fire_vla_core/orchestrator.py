@@ -57,12 +57,22 @@ class VLAOrchestrator:
     _pending_continuation: tuple[str, tuple[Any, ...]] | None = field(
         default=None, init=False, repr=False
     )
+    _aligned_fire_target: tuple[str, str] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def decide_once(self) -> DecisionCycle:
         if not self.world.mission:
             return DecisionCycle(None, None, None, "Mission이 없습니다.")
         if self.world.mission.status.value != "RUNNING":
             return DecisionCycle(None, None, None, f"Mission이 {self.world.mission.status.value} 상태입니다.")
+        if not self.world.perception_ready:
+            return DecisionCycle(
+                None,
+                None,
+                None,
+                "MISSION_WAITING_FOR_FRESH_OBSERVATION",
+            )
 
         for fire in self.world.fires.values():
             if (
@@ -126,6 +136,7 @@ class VLAOrchestrator:
                     )
                 self._last_decision_input_signature = signature
                 decision = self._enforce_threatened_fire_priority(decision)
+                decision = self._require_target_facing_navigation(decision)
                 decision = self._correct_out_of_range_extinguish(decision)
                 qwen_selected_navigation = (
                     decision.action == ActionType.NAVIGATE_TO
@@ -220,6 +231,31 @@ class VLAOrchestrator:
             decision.mission_scope,
         )
 
+    def _require_target_facing_navigation(
+        self, decision: ActionDecision
+    ) -> ActionDecision:
+        if (
+            decision.mission_scope != MissionScope.FULL_EXPLORATION
+            or decision.action != ActionType.EXTINGUISH
+            or not decision.target
+        ):
+            return decision
+        fire = self.world.fires.get(decision.target)
+        mission = self.world.mission
+        if fire is None or mission is None or fire.state != FireState.ACTIVE:
+            return decision
+        if self._aligned_fire_target is None:
+            return decision
+        aligned = (mission.id, fire.id)
+        if self._aligned_fire_target == aligned:
+            return decision
+        return ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "새 화점 방향으로 정렬한 뒤 진압한다.",
+            fire.id,
+            decision.mission_scope,
+        )
+
     def _enforce_threatened_fire_priority(
         self, decision: ActionDecision
     ) -> ActionDecision:
@@ -233,6 +269,45 @@ class VLAOrchestrator:
             and fire.threatened_person_id in self.world.people
         ]
         if not threatened_fires:
+            selected_fire = self.world.fires.get(decision.target or "")
+            if (
+                decision.action in {
+                    ActionType.NAVIGATE_TO,
+                    ActionType.EXTINGUISH,
+                }
+                and selected_fire is not None
+                and selected_fire.state != FireState.ACTIVE
+            ):
+                active_fires = [
+                    fire
+                    for fire in self.world.fires.values()
+                    if fire.state == FireState.ACTIVE
+                ]
+                if active_fires:
+                    robot_pose = self.world.robot.pose
+                    active_fire = min(
+                        active_fires,
+                        key=lambda fire: (
+                            float("inf")
+                            if robot_pose is None
+                            else robot_pose.distance_to(fire.position),
+                            fire.id,
+                        ),
+                    )
+                    action = (
+                        ActionType.EXTINGUISH
+                        if active_fire.robot_within_spray_range
+                        else ActionType.NAVIGATE_TO
+                    )
+                    return ActionDecision(
+                        action,
+                        (
+                            f"종료된 화점 대신 남은 ACTIVE 화점 "
+                            f"{active_fire.id}을 처리한다."
+                        ),
+                        active_fire.id,
+                        decision.mission_scope,
+                    )
             return decision
         robot_pose = self.world.robot.pose
         threatened_by_id = {fire.id: fire for fire in threatened_fires}
@@ -303,7 +378,22 @@ class VLAOrchestrator:
                     and action.action == ActionType.NAVIGATE_TO
                     and result.status == ActionResultStatus.SUCCEEDED
                 ):
+                    mission = self.world.mission
+                    fire = self.world.fires.get(action.target or "")
+                    if mission is not None and fire is not None:
+                        self._aligned_fire_target = (mission.id, fire.id)
                     self._pending_continuation = continuation
+                elif (
+                    action is not None
+                    and action.action
+                    in {
+                        ActionType.NAVIGATE_TO,
+                        ActionType.SEARCH,
+                        ActionType.RETURN_HOME,
+                    }
+                    and result.status == ActionResultStatus.SUCCEEDED
+                ):
+                    self._aligned_fire_target = None
         if physical_action_completed:
             self._last_decision_input_signature = None
         self.world.complete_mission_if_resolved()

@@ -115,6 +115,7 @@ private:
   // Parsed QoS policy and startup autodetect configuration.
   TopicQosProfiles topic_qos_profiles_;
   bool autostart_{true};
+  bool candidate_only_{false};
   bool control_service_enabled_{true};
   bool map_qos_autodetect_on_startup_{false};
   double map_qos_autodetect_timeout_s_{2.0};

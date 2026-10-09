@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 
 try:
@@ -8,7 +9,8 @@ try:
     from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
-    from std_msgs.msg import String
+    from geometry_msgs.msg import PoseStamped
+    from std_msgs.msg import Empty, String
 except ImportError:
     rclpy = None
     Node = object
@@ -23,7 +25,7 @@ from ..adapters.mock_adapters import (
     MockWaitAdapter,
 )
 from ..dispatcher import ActionDispatcher
-from ..domain import Pose2D
+from ..domain import ExplorationStatus, Pose2D
 from ..llm import (
     MockVLABrain,
     OllamaLLMClient,
@@ -96,6 +98,7 @@ class VLAOrchestratorNode(Node):
 
     def __init__(self) -> None:
         super().__init__("vla_orchestrator")
+        self._frontier_complete = False
         self.declare_parameter("llm_backend", "mock")
         self.declare_parameter("decision_period_sec", 1.0)
         self.declare_parameter(
@@ -117,7 +120,8 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("remote_qwen_timeout_sec", 3.0)
         self.declare_parameter("person_confidence_threshold", 0.50)
         self.declare_parameter("fire_confidence_threshold", 0.25)
-        self.declare_parameter("person_fire_risk_distance_m", 0.10)
+        self.declare_parameter("person_fire_risk_distance_m", 0.20)
+        self.declare_parameter("entity_merge_distance_m", 0.15)
         self.declare_parameter("spray_range_m", 0.30)
         self.declare_parameter("navigation_standoff_m", 0.15)
         self.declare_parameter("report_mode", "MOCK")
@@ -165,7 +169,12 @@ class VLAOrchestratorNode(Node):
         # Remote inference is synchronous. Keep robot pose processing separate
         # so Validator freshness advances while the timer waits for HTTP.
         self.pose_callback_group = MutuallyExclusiveCallbackGroup()
-        self.perception_normalizer = CanonicalPerceptionNormalizer(self.world)
+        self.perception_normalizer = CanonicalPerceptionNormalizer(
+            self.world,
+            association_radius_m=float(
+                self.get_parameter("entity_merge_distance_m").value
+            ),
+        )
         self.mock_results = MockResultQueue()
         self.status_tracker = VLAStatusTracker()
 
@@ -307,6 +316,18 @@ class VLAOrchestratorNode(Node):
             10,
             callback_group=self.pose_callback_group,
         )
+        self.create_subscription(
+            PoseStamped,
+            "/explore/selected_frontier",
+            self._frontier_candidate_cb,
+            10,
+        )
+        self.create_subscription(
+            Empty,
+            "/exploration_complete",
+            self._exploration_complete_cb,
+            10,
+        )
         self.create_timer(
             float(self.get_parameter("decision_period_sec").value),
             self._tick,
@@ -324,6 +345,8 @@ class VLAOrchestratorNode(Node):
                 str(data.get("mission_id", "mission_001")),
                 str(data["text"]),
             )
+            if self._frontier_complete:
+                self.world.mark_exploration_completed()
             self.perception_normalizer.reset_associations()
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Mission parsing failed: {exc}")
@@ -359,6 +382,29 @@ class VLAOrchestratorNode(Node):
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Robot pose parsing failed: {exc}")
+
+    def _frontier_candidate_cb(self, msg: PoseStamped) -> None:
+        self._frontier_complete = False
+        self.world.exploration_status = ExplorationStatus.RUNNING
+        pose = msg.pose
+        x = float(pose.position.x)
+        y = float(pose.position.y)
+        yaw = 2.0 * math.atan2(
+            float(pose.orientation.z), float(pose.orientation.w)
+        )
+        self.world.unexplored_zones = [{
+            "id": f"frontier_{round(x / 0.1)}_{round(y / 0.1)}",
+            "pose": {
+                "x": x,
+                "y": y,
+                "yaw": yaw,
+            },
+        }]
+
+    def _exploration_complete_cb(self, _msg: Empty) -> None:
+        self._frontier_complete = True
+        self.world.unexplored_zones.clear()
+        self.world.mark_exploration_completed()
 
     def _tick(self) -> None:
         try:

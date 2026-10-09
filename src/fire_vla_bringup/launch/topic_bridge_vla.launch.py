@@ -64,6 +64,10 @@ def _create_vla_node(context):
                 LaunchConfiguration("person_fire_risk_distance_m"),
                 value_type=float,
             ),
+            "entity_merge_distance_m": ParameterValue(
+                LaunchConfiguration("entity_merge_distance_m"),
+                value_type=float,
+            ),
             "navigation_standoff_m": ParameterValue(
                 LaunchConfiguration("navigation_standoff_m"),
                 value_type=float,
@@ -125,7 +129,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "person_fire_risk_distance_m",
-            default_value="0.10",
+            default_value="0.20",
+        ),
+        DeclareLaunchArgument(
+            "entity_merge_distance_m",
+            default_value="0.15",
         ),
         DeclareLaunchArgument(
             "navigation_standoff_m",

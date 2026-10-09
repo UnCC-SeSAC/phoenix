@@ -95,10 +95,7 @@ class VLASprayBridge(Node):
             if wrapped.status == GoalStatus.STATUS_CANCELED:
                 status = 'CANCELED'
             elif wrapped.status == GoalStatus.STATUS_SUCCEEDED:
-                # This action result means the spray routine completed. Fire
-                # disappearance is owned by WorldModel's fresh observations,
-                # not the suppression node's overlapping status check.
-                status = 'SUCCEEDED'
+                status = 'SUCCEEDED' if result.success else 'ABORTED'
             else:
                 status = 'ABORTED'
             message = str(result.message)

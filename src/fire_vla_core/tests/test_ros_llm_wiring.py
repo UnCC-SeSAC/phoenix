@@ -1,5 +1,6 @@
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,7 +10,9 @@ from fire_vla_core.llm import (
     TransformersQwenAdapter,
 )
 from fire_vla_core import qwen_inference_server
+from fire_vla_core.domain import ExplorationStatus
 from fire_vla_core.ros import orchestrator_node
+from fire_vla_core.world_model import WorldModel
 
 
 def backend_kwargs():
@@ -159,6 +162,64 @@ def test_orchestrator_applies_fire_and_person_confidence_defaults():
     assert 'self.get_parameter("person_confidence_threshold").value' in init_source
 
 
+def test_orchestrator_applies_person_fire_risk_distance_default():
+    init_source = inspect.getsource(
+        orchestrator_node.VLAOrchestratorNode.__init__
+    )
+    assert 'self.declare_parameter("person_fire_risk_distance_m", 0.20)' in init_source
+    assert 'self.get_parameter("person_fire_risk_distance_m").value' in init_source
+
+
+def test_orchestrator_applies_entity_merge_distance_default():
+    init_source = inspect.getsource(
+        orchestrator_node.VLAOrchestratorNode.__init__
+    )
+    assert 'self.declare_parameter("entity_merge_distance_m", 0.15)' in init_source
+    assert 'self.get_parameter("entity_merge_distance_m").value' in init_source
+
+
+def test_frontier_candidate_wiring_keeps_vla_as_navigation_owner():
+    repository = Path(__file__).resolve().parents[3]
+    wrapper = (repository / "scripts/vla_hardware_e2e.sh").read_text(
+        encoding="utf-8"
+    )
+    launch = (
+        repository / "src/uncc_example/launch/uncc_frontier.launch.py"
+    ).read_text(encoding="utf-8")
+    node_source = inspect.getsource(orchestrator_node.VLAOrchestratorNode)
+
+    assert "start_frontier:=true frontier_candidate_only:=true" in wrapper
+    assert "frontier_candidate_only = LaunchConfiguration" in launch
+    assert "'candidate_only': ParameterValue(" in launch
+    assert '"/explore/selected_frontier"' in node_source
+    assert '"/exploration_complete"' in node_source
+    assert 'f"frontier_{round(x / 0.1)}_{round(y / 0.1)}"' in node_source
+
+
+def test_frontier_candidate_and_completion_update_world_without_dispatch():
+    node = object.__new__(orchestrator_node.VLAOrchestratorNode)
+    node.world = WorldModel()
+    node._frontier_complete = False
+    candidate = SimpleNamespace(pose=SimpleNamespace(
+        position=SimpleNamespace(x=2.0, y=-1.0),
+        orientation=SimpleNamespace(z=0.0, w=1.0),
+    ))
+
+    node._frontier_candidate_cb(candidate)
+
+    assert node.world.exploration_status == ExplorationStatus.RUNNING
+    assert node.world.unexplored_zones == [{
+        "id": "frontier_20_-10",
+        "pose": {"x": 2.0, "y": -1.0, "yaw": 0.0},
+    }]
+
+    node._exploration_complete_cb(object())
+
+    assert node._frontier_complete is True
+    assert node.world.exploration_status == ExplorationStatus.COMPLETED
+    assert node.world.unexplored_zones == []
+
+
 def test_topic_bridge_and_vla_config_match_confidence_contract():
     repository = Path(__file__).resolve().parents[3]
     launch_source = (
@@ -173,5 +234,11 @@ def test_topic_bridge_and_vla_config_match_confidence_contract():
     assert 'default_value="0.25"' in launch_source
     assert 'LaunchConfiguration("person_confidence_threshold")' in launch_source
     assert 'default_value="0.50"' in launch_source
+    assert 'LaunchConfiguration("entity_merge_distance_m")' in launch_source
+    assert 'default_value="0.15"' in launch_source
+    assert 'LaunchConfiguration("person_fire_risk_distance_m")' in launch_source
+    assert 'default_value="0.20"' in launch_source
     assert "fire_confidence_threshold: 0.25" in config_source
     assert "person_confidence_threshold: 0.5" in config_source
+    assert "entity_merge_distance_m: 0.15" in config_source
+    assert "person_fire_risk_distance_m: 0.20" in config_source

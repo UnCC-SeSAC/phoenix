@@ -42,6 +42,50 @@ def test_running_physical_action_produces_wait_decision():
     assert cycle.decision.action == ActionType.WAIT
 
 
+def test_new_mission_waits_for_first_valid_post_boundary_observation():
+    world = WorldModel()
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_old", "fire", .9, Pose2D(1, 0), now),
+    )))
+    world.set_mission("m_fresh", "현장의 불을 모두 꺼줘")
+    queue = MockResultQueue()
+    llm = StubLLM(ActionDecision(
+        ActionType.RETURN_HOME,
+        "관측 없이 잘못 복귀",
+        mission_scope=MissionScope.FULL_EXPLORATION,
+    ))
+    orchestrator = VLAOrchestrator(
+        world,
+        llm,
+        TargetResolver(),
+        ActionValidator(),
+        ActionDispatcher(
+            MockNavigationAdapter(queue),
+            MockSprayAdapter(queue),
+            MockReportAdapter(queue),
+            MockWaitAdapter(queue),
+        ),
+    )
+
+    waiting = orchestrator.decide_once()
+
+    assert waiting.blocked_reason == "MISSION_WAITING_FOR_FRESH_OBSERVATION"
+    assert llm.calls == 0
+    assert world.fires == {}
+
+    observed_at = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(observed_at, (
+        SemanticObservation(
+            "fire_new", "fire", .9, Pose2D(1, 0), observed_at
+        ),
+    )))
+
+    orchestrator.decide_once()
+    assert llm.calls == 1
+    assert set(world.fires) == {"fire_new"}
+
+
 class StubLLM:
     def __init__(self, decision=None, error=None):
         self.decision = decision
@@ -307,6 +351,171 @@ def test_full_exploration_continues_to_other_fire_after_priority_fire_resolved(
     assert navigation.calls[-1].target == "fire_b"
 
 
+def test_full_exploration_aligns_to_new_in_range_fire_before_extinguish():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "사람 위협 화재 접근",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    first = orchestrator.decide_once()
+    assert first.decision.target == "fire_a"
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    world.fires["fire_a"].state = FireState.EXTINGUISHED
+    world.fires["fire_b"].position = Pose2D(.25, .10)
+    world.update_robot_pose(Pose2D(0, 0))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "거리 안의 남은 일반 화재 처리",
+        "fire_b",
+        MissionScope.FULL_EXPLORATION,
+    ))
+
+    align = orchestrator.decide_once()
+
+    assert world.fires["fire_b"].robot_within_spray_range is True
+    assert align.decision.action == ActionType.NAVIGATE_TO
+    assert align.decision.target == "fire_b"
+    assert align.submission is not None
+    assert navigation.calls[-1].target == "fire_b"
+
+
+def test_full_exploration_extinguishes_same_target_after_alignment():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "사람 위협 화재 접근",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    first = orchestrator.decide_once()
+    assert first.decision.target == "fire_a"
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    world.fires["fire_a"].state = FireState.EXTINGUISHED
+    world.fires["fire_b"].position = Pose2D(.25, .10)
+    world.update_robot_pose(Pose2D(0, 0))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "거리 안의 남은 일반 화재 처리",
+        "fire_b",
+        MissionScope.FULL_EXPLORATION,
+    ))
+
+    align = orchestrator.decide_once()
+    assert align.decision.action == ActionType.NAVIGATE_TO
+    assert orchestrator.process_results(navigation.result_queue) == 1
+
+    extinguish = orchestrator.decide_once()
+
+    assert extinguish.decision.action == ActionType.EXTINGUISH
+    assert extinguish.decision.target == "fire_b"
+    assert extinguish.submission is not None
+
+
+def test_full_exploration_does_not_renavigate_aligned_fire_after_pose_jitter():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "사람 위협 화재 접근",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    orchestrator.decide_once()
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    world.fires["fire_a"].state = FireState.SUPPRESSION_FAILED
+    world.fires["fire_b"].position = Pose2D(.25, .10)
+    world.update_robot_pose(Pose2D(0, 0))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "거리 안의 남은 일반 화재 처리",
+        "fire_b",
+        MissionScope.FULL_EXPLORATION,
+    ))
+
+    align = orchestrator.decide_once()
+    assert align.decision.action == ActionType.NAVIGATE_TO
+    assert orchestrator.process_results(navigation.result_queue) == 1
+
+    # The same static fire can jitter across the 0.1 m observation signature
+    # boundary after Nav2 succeeds.  That must not create a duplicate goal.
+    world.fires["fire_b"].position = Pose2D(.31, .10)
+    world.update_robot_pose(Pose2D(.06, 0))
+
+    extinguish = orchestrator.decide_once()
+
+    assert extinguish.decision.action == ActionType.EXTINGUISH
+    assert extinguish.decision.target == "fire_b"
+    assert extinguish.submission is not None
+    assert len(navigation.calls) == 2
+
+
+def test_full_exploration_retargets_stale_qwen_choice_to_active_fire():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.EXTINGUISH,
+            "이미 종료된 A 화재를 다시 선택",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    world.fires["fire_a"].state = FireState.EXTINGUISHED
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.action == ActionType.NAVIGATE_TO
+    assert cycle.decision.target == "fire_b"
+    assert cycle.submission is not None
+    assert navigation.calls[-1].target == "fire_b"
+
+
+def test_full_exploration_searches_frontier_then_accepts_new_fire():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.SEARCH,
+            "남은 미탐색 구역을 확인",
+            "frontier_30_0",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    world.fires["fire_a"].state = FireState.EXTINGUISHED
+    world.fires.pop("fire_b")
+    world.unexplored_zones = [{
+        "id": "frontier_30_0",
+        "pose": {"x": 3.0, "y": 0.0, "yaw": 0.0},
+    }]
+
+    search = orchestrator.decide_once()
+
+    assert search.decision.action == ActionType.SEARCH
+    assert search.submission is not None
+    assert navigation.calls[-1].action == ActionType.SEARCH
+    assert navigation.calls[-1].target == "frontier_30_0"
+    assert orchestrator.process_results(navigation.result_queue) == 1
+
+    observed_at = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(observed_at, (
+        SemanticObservation(
+            "fire_b_new", "fire", .9, Pose2D(3.1, 0.0), observed_at
+        ),
+    )))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.NAVIGATE_TO,
+        "탐색 중 발견한 화재 처리",
+        "fire_b_new",
+        MissionScope.FULL_EXPLORATION,
+    ))
+
+    next_fire = orchestrator.decide_once()
+
+    assert next_fire.decision.target == "fire_b_new"
+    assert next_fire.submission is not None
+    assert navigation.calls[-1].target == "fire_b_new"
+
+
 def test_person_threat_priority_does_not_replace_explicit_fire_only_target():
     world, navigation, orchestrator = make_person_two_fire_orchestrator(
         ActionDecision(
@@ -430,6 +639,7 @@ def test_semantic_observation_and_mission_change_trigger_new_decisions():
     assert orchestrator.llm.calls == 2
     assert orchestrator.process_results(queue) == 1
     world.set_mission("m2", "새로운 임무")
+    world.update_observation_batch(ObservationBatch(utc_now_iso(), tuple()))
     orchestrator.decide_once()
     assert orchestrator.llm.calls == 3
 

@@ -125,6 +125,11 @@ target을 제안해도 현재 action을 중간 취소하지 않고 다음 action
 fire 처리를 계속한다. 사람 위협 fire 우선 후 나머지 fire도 모두 처리하는
 Mission의 scope는 `PERSON_FIRE`가 아니라 `FULL_EXPLORATION`이다.
 
+다중 화점 처리에서 첫 화점과 다른 fire ID를 분사하려면 해당 Mission에서 그 ID에
+대한 Navigation 성공을 먼저 확인한다. 정렬 완료 식별자는 `(mission_id, fire_id)`이며,
+정적 화점의 관측 좌표 흔들림만으로 동일 target의 Nav2 goal을 다시 만들지 않는다.
+거리와 freshness Validator는 이 정렬 기록과 별개로 계속 적용한다.
+
 Mission의 현장 목표가 모두 해결돼도 즉시 terminal로 전환하지 않는다. Core가
 Qwen을 다시 호출하지 않고 `RETURN_HOME`을 선택하며, 저장된 home pose에 대한
 Navigation result가 `SUCCEEDED`일 때만 `COMPLETED` 또는
@@ -160,10 +165,10 @@ terminal result는 `SUCCEEDED`, `FAILED`, `ABORTED`, `CANCELED`,
 `TIMED_OUT`으로 correlation한다. report는 correlated `SUCCEEDED`에서만
 reported 상태가 된다. spray `SUCCEEDED`는 `PENDING_VERIFICATION` 전이이며
 그 자체로 `EXTINGUISHED`를 의미하지 않는다. `SuppressFire` action의 ROS terminal
-status가 `SUCCEEDED`이면 물리 분사 루틴 완료로 전달하며, action 내부의 중복 화재
-판정 결과는 메시지 증거로만 보존한다. 실제 소화 여부의 authoritative owner는
-WorldModel의 fresh perception verification이다. 같은 fire는 유효한 재관측을 거쳐
-최대 3회까지 다시 시도한다.
+status가 `SUCCEEDED`여도 action result의 `success=false`이면 Bridge는 `ABORTED`로
+전달한다. `success=true`인 분사 루틴 완료만 WorldModel의 fresh perception
+verification을 시작하며, 실제 소화 여부의 authoritative owner는 계속 WorldModel이다.
+같은 fire는 유효한 재관측을 거쳐 최대 3회까지 다시 시도한다.
 Verification은 0.5초 delay 후 유효한 fire 미검출을 3회 이상 요구하고,
 5초 관찰 구간이 끝나기 전에는 `EXTINGUISHED`를 확정하지 않는다. 관찰 중
 같은 fire가 한 번이라도 재탐지되면 미검출 count와 관찰 시작 시각을

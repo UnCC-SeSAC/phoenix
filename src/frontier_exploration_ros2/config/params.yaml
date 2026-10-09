@@ -63,6 +63,9 @@ frontier_explorer:
     # Start exploration immediately at launch.
     autostart: true
 
+    # Publish frontier candidates without owning /navigate_to_pose.
+    candidate_only: false
+
     # Keep the optional runtime control service available for manual stop/start flows.
     control_service_enabled: false
 

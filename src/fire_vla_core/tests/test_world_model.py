@@ -96,6 +96,7 @@ def test_new_mission_accepts_fresh_thirty_percent_fire_after_boundary():
         SemanticObservation("fire_old", "fire", .9, Pose2D(.5, 0), now),
     )))
     world.set_mission("m2", "새 임무")
+    assert world.perception_ready is False
     fresh = utc_now().isoformat()
     world.update_observation_batch(ObservationBatch(fresh, (
         SemanticObservation(
@@ -195,6 +196,23 @@ def test_active_fire_outside_demo_boundary_has_no_person_risk_relation():
     fire = world.fires["fire_01"]
     assert fire.threatens_person is False
     assert fire.threatened_person_id is None
+
+
+@pytest.mark.parametrize(
+    ("distance", "expected"),
+    [(0.168, True), (0.20, True), (0.201, False)],
+)
+def test_default_person_fire_risk_boundary(distance, expected):
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("person_01", "person", .9, Pose2D(1, 0), now),
+        SemanticObservation(
+            "fire_01", "fire", .9, Pose2D(1 + distance, 0), now
+        ),
+    )))
+
+    assert world.fires["fire_01"].threatens_person is expected
 
 
 def test_each_active_fire_uses_nearest_person_without_changing_route_relation():

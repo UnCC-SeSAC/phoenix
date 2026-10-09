@@ -1450,6 +1450,64 @@ TEST(PreemptionFlowTests, GoalSucceededWaitsForCooldownAndMapUpdateBeforeProgres
   EXPECT_EQ(dispatch_calls, 1);
 }
 
+TEST(PreemptionFlowTests, CandidateOnlyPublishesSelectedFrontierWithoutDispatch)
+{
+  FrontierExplorerCoreParams params;
+  params.candidate_only = true;
+  params.return_to_start_on_complete = false;
+
+  FrontierExplorerCoreCallbacks callbacks;
+  callbacks.now_ns = []() {return int64_t{1'000'000'000};};
+  callbacks.get_current_pose = []() {
+      return std::optional<geometry_msgs::msg::Pose>(make_pose(1.0, 1.0));
+    };
+  callbacks.log_info = [](const std::string &) {};
+  callbacks.log_warn = [](const std::string &) {};
+  callbacks.log_debug = [](const std::string &) {};
+  callbacks.log_error = [](const std::string &) {};
+  callbacks.wait_for_action_server = [](double) {
+      ADD_FAILURE() << "candidate-only mode must not wait for Nav2";
+      return false;
+    };
+
+  int dispatch_calls = 0;
+  int selected_pose_calls = 0;
+  callbacks.dispatch_goal_request = [&dispatch_calls](const GoalDispatchRequest &) {
+      dispatch_calls += 1;
+    };
+  callbacks.publish_selected_frontier_pose = [&selected_pose_calls](
+    const geometry_msgs::msg::PoseStamped &)
+    {
+      selected_pose_calls += 1;
+    };
+  callbacks.frontier_search = [](
+    const geometry_msgs::msg::Pose &,
+    const OccupancyGrid2d &,
+    const OccupancyGrid2d &,
+    const std::optional<OccupancyGrid2d> &,
+    double,
+    bool)
+    {
+      FrontierSearchResult result;
+      result.frontiers = {FrontierCandidate{{2.0, 2.0}, {2.0, 2.0}, 10}};
+      result.robot_map_cell = {1, 1};
+      return result;
+    };
+
+  FrontierExplorerCore core(params, callbacks);
+  auto grid = build_grid(20, 20, 0);
+  core.map = OccupancyGrid2d(grid);
+  core.costmap = OccupancyGrid2d(grid);
+  core.map_generation = 1;
+  core.costmap_generation = 1;
+
+  core.try_send_next_goal();
+
+  EXPECT_EQ(selected_pose_calls, 1);
+  EXPECT_EQ(dispatch_calls, 0);
+  EXPECT_FALSE(core.goal_in_progress);
+}
+
 TEST(PreemptionFlowTests, GoalSucceededRedispatchesImmediatelyWhenPostGoalSettleDisabled)
 {
   FrontierExplorerCoreParams params;

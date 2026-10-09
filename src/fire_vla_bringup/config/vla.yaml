@@ -8,8 +8,8 @@ vla:
     fire_confidence_threshold: 0.25
     spray_range_m: 0.30
     navigation_standoff_m: 0.15
-    person_fire_risk_distance_m: 0.10
-    entity_merge_distance_m: 0.5
+    person_fire_risk_distance_m: 0.20
+    entity_merge_distance_m: 0.15
     event_log_max_entries: 500
     mission_topic: "/vla/mission"
     perception_topic: "/vla/perception_observation"

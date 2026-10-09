@@ -117,6 +117,32 @@ SSH timeout/slow response는 remote side-effect command가 실행되지 않았�
 launch, restart, goal 전송 같은 side-effect command는 timeout 후 blind retry하지
 않는다.
 
+## 복합 Mission에서 Qwen JSON이 중간에 잘림
+
+증상: A 화점 suppression 실패 뒤 다음 판단에서 Qwen HTTP 503과
+`Unterminated string` 또는 JSON delimiter 오류가 발생한다.
+
+직접 원인: 실제 PC Qwen process가 저장소의 96-token 계약이 아니라
+`--max-new-tokens 64`로 실행돼 JSON 객체가 닫히기 전에 생성이 끝났다.
+
+검증된 복구: 동일 GPU host와 모델에서 Qwen server를 `--max-new-tokens 96`으로 한 번
+시작한다. 동일 A/B WorldModel 요청이 완전한 단일 JSON을 반환하는지 확인한 뒤에만
+Hardware Mission을 진행한다. Parser repair, retry 또는 잘린 JSON 추출을 추가하지
+않는다.
+
+## 다중 화점 전환에서 `DUPLICATE_ACTION_BLOCKED`
+
+증상: A 화점이 3회 실패 후 `SUPPRESSION_FAILED`가 되고 Qwen과 Validator가 B 화점의
+`NAVIGATE_TO`를 승인했지만, B가 이미 한 번 Navigation 성공한 뒤 동일 target 이동이
+다시 생성돼 중복 방지에 차단된다.
+
+직접 원인: B 정렬 완료 기록에 0.1 m 단위 fire position signature를 포함해 정지 화점의
+관측 흔들림을 새 정렬 위치로 오인했다. 중복 차단 자체는 정상 동작했다.
+
+수정·검증: 다중 화점 정렬 완료를 `(mission_id, fire_id)`로 유지한다. 동일 ID의 위치
+흔들림은 재이동을 만들지 않지만, 새 fire ID는 기존처럼 Navigation 성공 후 분사한다.
+SW focused 회귀는 PASS했으며 실제 A→B Hardware terminal 검증은 아직 `PENDING`이다.
+
 ### 미확정 사항
 
 SSH 지연 자체의 root cause는 이 항목에서 다루지 않는다.

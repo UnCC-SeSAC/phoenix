@@ -85,6 +85,7 @@ def test_topic_bridge_distance_defaults_and_overrides_reach_orchestrator():
     }
     assert defaults["navigation_standoff_m"] == "0.15"
     assert defaults["spray_range_m"] == "0.30"
+    assert defaults["entity_merge_distance_m"] == "0.15"
 
     context = LaunchContext()
     context.launch_configurations.update({
@@ -95,7 +96,10 @@ def test_topic_bridge_distance_defaults_and_overrides_reach_orchestrator():
         "transformers_max_new_tokens": "96",
         "remote_qwen_endpoint": "http://127.0.0.1:8088/infer",
         "remote_qwen_timeout_sec": "3.0",
-        "person_fire_risk_distance_m": "0.10",
+        "person_confidence_threshold": "0.50",
+        "fire_confidence_threshold": "0.25",
+        "person_fire_risk_distance_m": "0.20",
+        "entity_merge_distance_m": "0.15",
         "navigation_standoff_m": "0.35",
         "spray_range_m": "0.40",
     })
@@ -104,6 +108,7 @@ def test_topic_bridge_distance_defaults_and_overrides_reach_orchestrator():
 
     assert parameters["navigation_standoff_m"] == pytest.approx(0.35)
     assert parameters["spray_range_m"] == pytest.approx(0.40)
+    assert parameters["entity_merge_distance_m"] == pytest.approx(0.15)
 
 
 def test_hardware_wrapper_exposes_only_distance_overrides():

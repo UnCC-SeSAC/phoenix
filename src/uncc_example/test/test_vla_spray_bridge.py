@@ -65,7 +65,7 @@ def test_unavailable_action_server_returns_correlated_failure():
     assert bridge._active_action_id is None
 
 
-def test_completed_spray_enters_world_model_verification_despite_local_check():
+def test_completed_spray_with_negative_fire_check_is_aborted():
     bridge = bridge_stub()
     bridge._active_action_id = 'action_0001'
     bridge._active_fire_id = 'fire_0001'
@@ -85,7 +85,7 @@ def test_completed_spray_enters_world_model_verification_despite_local_check():
     assert bridge._result_pub.messages == [{
         'action_id': 'action_0001',
         'fire_id': 'fire_0001',
-        'status': 'SUCCEEDED',
+        'status': 'ABORTED',
         'message': '관찰 구간 내 YOLO 감지 기록 없음',
     }]
 

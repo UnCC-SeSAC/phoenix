@@ -68,7 +68,7 @@ def test_person_outside_radius_gets_new_id():
     normalizer = CanonicalPerceptionNormalizer(world)
     apply(normalizer, world, payload(detection(x=2.0, y=1.0)))
 
-    apply(normalizer, world, payload(detection(x=2.6, y=1.0)))
+    apply(normalizer, world, payload(detection(x=2.16, y=1.0)))
 
     assert list(world.people) == ["person_0001", "person_0002"]
 
@@ -124,6 +124,21 @@ def test_same_batch_nearby_fire_ids_collapse_to_one_observation():
 
     assert [item.entity_id for item in batch.observations] == ["fire-camera-1"]
     assert list(world.fires) == ["fire-camera-1"]
+
+
+def test_same_batch_fire_ids_over_fifteen_centimeters_remain_separate():
+    world = WorldModel()
+    normalizer = CanonicalPerceptionNormalizer(world)
+
+    batch = apply(normalizer, world, payload(
+        detection("fire", 2.0, 1.0, entity_id="fire-camera-1"),
+        detection("fire", 2.16, 1.0, entity_id="fire-camera-2"),
+    ))
+
+    assert [item.entity_id for item in batch.observations] == [
+        "fire-camera-1",
+        "fire-camera-2",
+    ]
 
 
 def test_batch_association_is_one_to_one():
@@ -207,7 +222,7 @@ def test_reported_person_outside_radius_gets_new_id_after_ttl():
     )
     normalizer = CanonicalPerceptionNormalizer(world)
 
-    batch = normalizer.normalize(payload(detection(x=2.6, y=1.0)))
+    batch = normalizer.normalize(payload(detection(x=2.16, y=1.0)))
 
     assert batch.observations[0].entity_id == "person_0002"
 
@@ -233,7 +248,7 @@ def test_distant_fire_remains_separate_after_association_ttl():
     )
     normalizer = CanonicalPerceptionNormalizer(world)
 
-    batch = normalizer.normalize(payload(detection("fire", 2.6, 1.0)))
+    batch = normalizer.normalize(payload(detection("fire", 2.16, 1.0)))
 
     assert batch.observations[0].entity_id == "fire_0002"
 

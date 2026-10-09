@@ -105,6 +105,7 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("local_costmap_qos_depth", -1);
   this->declare_parameter<double>("frontier_marker_scale", 0.15);
   this->declare_parameter<bool>("autostart", true);
+  this->declare_parameter<bool>("candidate_only", false);
   this->declare_parameter<bool>("control_service_enabled", true);
   this->declare_parameter<bool>("frontier_map_optimization_enabled", true);
   this->declare_parameter<double>("sigma_s", 2.0);
@@ -165,6 +166,8 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   params_.optimized_map_topic = this->get_parameter("optimized_map_topic").as_string();
   params_.frontier_marker_scale = this->get_parameter("frontier_marker_scale").as_double();
   autostart_ = this->get_parameter("autostart").as_bool();
+  candidate_only_ = this->get_parameter("candidate_only").as_bool();
+  params_.candidate_only = candidate_only_;
   control_service_enabled_ = this->get_parameter("control_service_enabled").as_bool();
   if (!autostart_ && !control_service_enabled_) {
     control_service_enabled_ = true;
@@ -1251,7 +1254,7 @@ void FrontierExplorerNode::publishFrontierMarkers(const FrontierSequence & front
 
 void FrontierExplorerNode::publishSelectedFrontierPose(const geometry_msgs::msg::PoseStamped & pose)
 {
-  if (!debugOutputsEnabled() || !selected_frontier_pub_) {
+  if ((!candidate_only_ && !debugOutputsEnabled()) || !selected_frontier_pub_) {
     return;
   }
   selected_frontier_pub_->publish(pose);

@@ -39,7 +39,7 @@ class WorldModelConfig:
     fire_confidence_threshold: float = 0.25
     spray_range_m: float = 0.30
     navigation_standoff_m: float = 0.15
-    person_fire_risk_distance_m: float = 0.10
+    person_fire_risk_distance_m: float = 0.20
     max_event_log_entries: int = 500
     verification_required_observations: int = 3
     verification_timeout_sec: float = 5.0
@@ -72,6 +72,7 @@ class WorldModel:
             raise ValueError("MISSION_REJECTED_ACTIVE_ACTION")
         self.people.clear()
         self.fires.clear()
+        self.perception_ready = False
         self.mission = Mission(id=mission_id, text=text, status=MissionStatus.RUNNING)
         self.exploration_status = ExplorationStatus.RUNNING
         if self.robot.pose and self.robot.home_pose is None:

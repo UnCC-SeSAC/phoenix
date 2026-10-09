@@ -16,7 +16,7 @@ from ..domain import (
 from ..world_model import WorldModel
 
 
-DEFAULT_ASSOCIATION_RADIUS_M = 0.5
+DEFAULT_ASSOCIATION_RADIUS_M = 0.15
 DEFAULT_ASSOCIATION_TTL_SEC = 2.0
 _SUPPORTED_CLASSES = {"person", "fire"}
 

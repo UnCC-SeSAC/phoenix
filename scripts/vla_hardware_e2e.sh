@@ -178,7 +178,7 @@ start_runtime() {
     prepare_run_log_directory
     launch_component camera "ros2 launch peripherals depth_camera.launch.py"
     run sleep "$CAMERA_WAIT_SEC"
-    launch_component base "ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=false start_mission:=false start_vision:=false"
+    launch_component base "ros2 launch uncc_example uncc_frontier.launch.py start_frontier:=true frontier_candidate_only:=true start_mission:=false start_vision:=false"
     launch_component preprocess "ros2 run image_pipeline preprocess_node --ros-args -r __node:=rgb_preprocess_node -p input_topic:=/ascamera/camera_publisher/rgb0/image -p camera_info_topic:=/ascamera/camera_publisher/rgb0/camera_info -p output_topic:=/image_enhanced -p output_camera_info_topic:=/image_enhanced/camera_info -p mode:=passthrough"
     launch_component yolo "ros2 launch image_pipeline yolo.launch.py model_path:=$HEF_PATH backend:=hailo layout:=end2end class_names:='[fire,person]' conf:=$YOLO_CONF threads:=3"
     launch_component detection3d "ros2 launch image_pipeline detection_3d.launch.py point_below:=true point_gap:=1.0"
