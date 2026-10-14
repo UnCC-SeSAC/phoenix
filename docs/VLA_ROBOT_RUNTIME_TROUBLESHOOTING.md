@@ -136,12 +136,89 @@ Hardware Mission을 진행한다. Parser repair, retry 또는 잘린 JSON 추출
 `NAVIGATE_TO`를 승인했지만, B가 이미 한 번 Navigation 성공한 뒤 동일 target 이동이
 다시 생성돼 중복 방지에 차단된다.
 
-직접 원인: B 정렬 완료 기록에 0.1 m 단위 fire position signature를 포함해 정지 화점의
-관측 흔들림을 새 정렬 위치로 오인했다. 중복 차단 자체는 정상 동작했다.
+직접 원인: 정렬 완료를 position signature로 구분하던 문제를 `(mission_id, fire_id)`로
+수정한 뒤에도, 다른 화점 A를 처리하면서 현재 정렬 소유가 A로 바뀌면 이미 방문한 B의
+재정렬이 기존 semantic duplicate guard에 차단됐다. 실패 snapshot의 B 거리는
+`0.384 m`로 spray range `0.45 m` 안이었으므로 좌표 변화나 재접근 거리가 직접 원인은
+아니었다.
 
-수정·검증: 다중 화점 정렬 완료를 `(mission_id, fire_id)`로 유지한다. 동일 ID의 위치
-흔들림은 재이동을 만들지 않지만, 새 fire ID는 기존처럼 Navigation 성공 후 분사한다.
-SW focused 회귀는 PASS했으며 실제 A→B Hardware terminal 검증은 아직 `PENDING`이다.
+검증된 해결: `FULL_EXPLORATION`에서 B가 fresh ACTIVE·in-range이고 현재 정렬 대상이
+다른 fire일 때만 B 재정렬 Navigation을 한 번 허용한다. stale/invalid target,
+`FIRE_ONLY`, 일반 중복 이동에는 적용하지 않는다. 2026-10-14 Hardware에서
+A→B→`RETURN_HOME`과 `COMPLETED_WITH_ESCALATION` terminal을 확인했다.
+
+## 후속 Qwen 판단이 Mission scope를 바꿈
+
+증상: “사람 위협 화재 우선 후 나머지 전부 진압” Mission이 처음에는
+`FULL_EXPLORATION`이지만, 후속 판단이 `PERSON_FIRE`를 제안해 B가 Mission 범위에서
+빠질 수 있다.
+
+직접 원인: 최초 Mission 분류와 후속 physical action 선택에서 Qwen의
+`mission_scope`를 동일하게 authoritative 값으로 취급했다.
+
+검증된 해결: 최초 Qwen 판단에서만 scope를 확정한다. 이후 Qwen 판단은
+action/target/reason을 사용하고 WorldModel에 잠긴 scope를 유지한다. 기존 scope 변경
+거절과 action validation은 유지한다. SW 반복 검증과 A→B Hardware 완주에서
+`FULL_EXPLORATION` 유지가 확인됐다.
+
+## Mission boundary 뒤 B 화점이 WorldModel에서 사라짐
+
+증상: Mission 시작 시 기존 entity를 초기화한 뒤 Robot이 A로 이동하면 카메라 화각에서
+B가 사라져, A terminal 뒤 남은 ACTIVE fire가 0개로 보인다.
+
+직접 원인: Mission boundary의 entity 초기화는 정상 계약이지만, 좁은 화각에서 B의
+fresh observation이 재생성되지 않으면 Qwen이 선택할 B target이 없다.
+
+검증된 해결: Mission 직전 ACTIVE fire의 고정 `map` 좌표만 제한적 search hint로
+보존한다. Mission 뒤 같은 위치의 fresh fire가 재관측되면 hint를 제거하고, 사라진
+후보만 한 번 `SEARCH`한다. 후보 도착 후 fresh observation으로 재생성된 fire만 기존
+진압 계약에 넣는다. 일반 Frontier와 `FIRE_ONLY`에는 이 fallback을 적용하지 않는다.
+
+## 사람 위협 A보다 일반 B가 먼저 선택됨
+
+증상: A에 person과 fire, B에 일반 fire가 함께 관측돼도 Qwen 출력에 따라 B가 먼저
+선택될 수 있거나 `PERSON_FIRE` scope가 B 처리를 끝낼 수 있다.
+
+검증된 해결: “사람 근처 화재 우선 후 나머지 전부 진압”은
+`FULL_EXPLORATION`으로 분류한다. Core는 `person_fire_risk_distance_m=0.30` 안의
+위협 fire를 일반 fire, `SEARCH`, `RETURN_HOME`보다 우선한다. A가
+`EXTINGUISHED` 또는 `SUPPRESSION_FAILED`가 된 뒤 B를 처리한다. 30 cm는 현재 demo
+관계 기준이며 일반 현장 안전거리로 해석하지 않는다.
+
+## 분사 실행을 실제 소화 성공으로 오판함
+
+증상: Suppression routine은 종료됐지만 불이 남았는데 fire가 `EXTINGUISHED`, Mission이
+`COMPLETED`로 표시된다.
+
+직접 원인: ROS action terminal 성공과 action result의 `success`, 이후 perception
+verification의 의미가 분리되지 않았다.
+
+검증된 해결: `success=false`는 Bridge에서 `ABORTED`로 전달한다. 정상 분사 뒤에도
+WorldModel의 fresh verification을 통과해야 `EXTINGUISHED`가 된다. 동일 fire는 최대
+3회 시도하고 계속 관측되면 `SUPPRESSION_FAILED`로 남겨 다른 fire 처리를 계속한다.
+2026-10-14 A/B 모두 실제 잔불이 남았을 때 거짓 성공 없이 최종
+`COMPLETED_WITH_ESCALATION`이 확인됐다.
+
+## 현장 target 처리 뒤 복귀 전에 Mission이 완료됨
+
+증상: 마지막 fire가 해결되거나 인계 상태가 되자 home 복귀 결과 없이 Mission terminal이
+표시된다.
+
+검증된 해결: 현장 대상이 모두 해결되면 Qwen을 다시 호출하지 않고 deterministic
+`RETURN_HOME`을 제출한다. 저장한 home pose의 Navigation `SUCCEEDED` 뒤에만 완전
+해결은 `COMPLETED`, 잔불 인계는 `COMPLETED_WITH_ESCALATION`으로 전환한다. 실제
+A→B→home Hardware run에서 복귀 성공 뒤 terminal 전환을 확인했다.
+
+## Active action 중 운영자가 즉시 정지하기 어려움
+
+증상: UI mode 변경은 active-action gate에 차단되고, 운영자가 별도 터미널을 통해
+cancel과 motor zero를 순차 실행해야 한다.
+
+검증된 해결: UI `EMERGENCY STOP`은 mode gate를 우회해 control mode를 `NONE`으로
+바꾸고 `/vla/emergency_stop`을 발행한다. Navigation Bridge는 Nav2 cancel과 four-motor
+zero를, Spray Bridge는 active suppression cancel을 요청한다. Wrapper stop도 이 HTTP
+경계를 먼저 호출한 뒤 기존 bounded cancel·motor-zero·소유 process 종료를 유지한다.
+정상 완료 여부와 무관하게 실제 바퀴·Pump·Servo 정지는 운영자가 확인한다.
 
 ### 미확정 사항
 
@@ -1060,17 +1137,3 @@ Qwen·WorldModel·Nav2 경로는 이 UI 결함의 수정 범위가 아니다.
 detection overlay 제거를 SW-only로 재현하고, Hardware에서는 Camera ON 연속 표시만
 짧게 확인한다. 연결 끊김을 실제 empty fire observation이나 소화 성공으로 해석하지
 않는다.
-
-## Runtime 부하에서 battery raw 급락 후 Pi SSH 단절
-
-증상: 충전 직후 startup 무동작은 정상이지만 `/ros_robot_controller/battery`가 기존
-저전압 기준 `7000`보다 낮고 계속 하락하며, 이후 Pi가 `No route to host`로 끊긴다.
-
-2026-10-14 직접 증거: 같은 run에서 raw가 `6780`, `6742`, `6742`, `6730`, `6365`로
-하락했다. Nav2 ACTIVE, action server와 TF는 확인됐지만 Mission/Nav2 goal/Spray 전에
-네트워크가 끊겼다. 원격 wrapper stop terminal은 확인하지 못했으며 원인은 배터리 열화,
-충전 불완전 또는 부하 전압 강하 중 하나로 `미확정`이다.
-
-복구: 불 OFF와 실제 바퀴·Pump·Servo 정지를 먼저 확인하고 메인 전원을 끈 뒤 충분히
-충전한다. 다음 부팅에서 이전 runtime을 재사용하지 말고 잔존 process 0을 확인해 clean
-start한다. 배터리 값은 잔량 %가 아닌 controller raw이므로 퍼센트로 환산하지 않는다.
