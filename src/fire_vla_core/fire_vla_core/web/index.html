@@ -40,6 +40,7 @@
     input,button { min-height:42px; border-radius:5px; border:1px solid var(--line); font:inherit; }
     input { flex:1; min-width:0; padding:0 12px; background:#080f18; color:var(--text); }
     button { padding:0 20px; background:var(--accent); border-color:var(--accent); color:white; font-weight:800; cursor:pointer; }
+    .emergency-stop { background:#b91c1c; border-color:#fb7185; box-shadow:0 0 0 1px #7f1d1d,0 0 16px #ef444455; }
     .mission-note { min-height:20px; margin:8px 0 18px; color:var(--muted); font-size:12px; }
     .status-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .metric { padding:10px; border:1px solid var(--line); background:#09111b99; }
@@ -84,6 +85,7 @@
   <h1>PHOENIX FIRE RESPONSE CONTROL CENTER</h1>
   <div class="header-tools">
     <span id="replayBadge" class="replay-badge" hidden>MOCK / REPLAY</span>
+    <button type="button" id="emergencyStop" class="emergency-stop">EMERGENCY STOP</button>
     <label class="mode-picker">MODE
       <select id="modeSelector" aria-label="Operation mode">
         <option value="NONE">Select mode</option>
@@ -201,6 +203,8 @@ function configureMode(){const rule=activeMode==='RULE_BASED';$('missionForm').h
 async function refresh(){if(activeMode==='NONE'){setConnection(false);return;}const requestedMode=activeMode;try{const response=await fetch(`/api/status?mode=${encodeURIComponent(requestedMode)}`,{cache:'no-store'});if(!response.ok)throw new Error();const status=await response.json();if(requestedMode!==activeMode)return;render(status);setConnection(Boolean(status.timestamp));}catch(_error){if(requestedMode===activeMode)setConnection(false);}}
 async function refreshControlMode(){try{const response=await fetch('/api/control-mode',{cache:'no-store'});if(!response.ok)return;const data=await response.json();if(data.active_control_mode!==activeMode){activeMode=data.active_control_mode;$('modeSelector').value=activeMode;configureMode();}}catch(_error){}}
 async function selectControlMode(mode){const previous=activeMode;try{const response=await fetch('/api/control-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});const data=await response.json();if(!response.ok)throw new Error(data.error||'CONTROL_MODE_MISMATCH');activeMode=data.active_control_mode;configureMode();refresh();}catch(error){activeMode=previous;$('modeSelector').value=previous;$('missionResult').textContent=`Error: ${error.message}`;}}
+async function emergencyStop(){const button=$('emergencyStop');if(button.disabled)return;button.disabled=true;try{const response=await fetch('/api/emergency-stop',{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'EMERGENCY_STOP_FAILED');activeMode='NONE';$('modeSelector').value='NONE';configureMode();$('missionResult').textContent='EMERGENCY STOP requested. Confirm physical motion stopped.';}catch(error){$('missionResult').textContent=`Emergency stop error: ${error.message}`;}finally{button.disabled=false;}}
+$('emergencyStop').addEventListener('click',emergencyStop);
 async function submitMission(text){const requestedMode=activeMode;try{const response=await fetch('/api/mission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mode:requestedMode})});const data=await response.json();if(requestedMode!==activeMode)return;$('missionResult').textContent=response.ok?`Sent: ${data.mission_id}`:`Error: ${data.error}`;if(response.ok&&requestedMode==='VLA')$('missionInput').value='';}catch(_error){if(requestedMode===activeMode)$('missionResult').textContent='Error: mission boundary is unavailable.';}}
 $('modeSelector').addEventListener('change',event=>selectControlMode(event.target.value));
 let missionComposing=false,missionSubmitPending=false,missionSubmitting=false;

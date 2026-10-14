@@ -356,6 +356,8 @@ stop_runtime() {
     local cancel_request="{goal_info: {goal_id: {uuid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, stamp: {sec: 0, nanosec: 0}}}"
     load_current_run_directory
     if [[ "$DRY_RUN" == "1" ]]; then
+        run curl -fsS --max-time 2 -X POST \
+            http://127.0.0.1:8080/api/emergency-stop
         run docker exec -u root -w / "$CONTAINER" bash -lc "$ENVIRONMENT
 timeout -k 1s 3s ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true
 timeout -k 1s 3s ros2 service call /suppress_fire/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' || true"
@@ -365,14 +367,14 @@ timeout -k 1s 3s ros2 topic pub --once -w 1 /ros_robot_controller/set_motor ros_
     fi
     exec 9>"$LOCK_FILE"
     flock -w 2 9 || true
-    curl -fsS --max-time 2 -X POST -H 'Content-Type: application/json' \
-        -d '{"mode":"NONE"}' http://127.0.0.1:8080/api/control-mode \
+    curl -fsS --max-time 2 -X POST \
+        http://127.0.0.1:8080/api/emergency-stop \
         >/dev/null 2>&1 || true
     container_shell "timeout -k 1s 3s ros2 service call /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' >/dev/null 2>&1 || true
 timeout -k 1s 3s ros2 service call /suppress_fire/_action/cancel_goal action_msgs/srv/CancelGoal '$cancel_request' >/dev/null 2>&1 || true"
     sleep 1
     container_shell "timeout -k 1s 3s ros2 topic pub --once -w 1 /ros_robot_controller/set_motor ros_robot_controller_msgs/msg/MotorsState \"{data: [{id: 1, rps: 0.0}, {id: 2, rps: 0.0}, {id: 3, rps: 0.0}, {id: 4, rps: 0.0}]}\" >/dev/null 2>&1 || true"
-    echo "Robot stop: active goal cancel + explicit four-motor zero 전송"
+    echo "Robot stop: emergency gate + active goal cancel + explicit four-motor zero 요청"
     if [[ -n "$RUN_LOG_DIR" ]]; then
         docker exec -e RUN_LOG_DIR="$RUN_LOG_DIR" "$CONTAINER" bash -lc '
 : >"$RUN_LOG_DIR/owned_processes.snapshot"

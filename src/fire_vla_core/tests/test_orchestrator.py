@@ -2,7 +2,7 @@ import pytest
 
 from fire_vla_core.adapters.mock_adapters import MockNavigationAdapter, MockReportAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter
 from fire_vla_core.dispatcher import ActionDispatcher
-from fire_vla_core.domain import ActionDecision, MissionScope, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, FireState, ObservationBatch, Pose2D, SemanticObservation, utc_now_iso
+from fire_vla_core.domain import ActionDecision, MissionScope, ActionResult, ActionResultStatus, ActionType, Event, ExecutionSource, FireState, ObservationBatch, PersonState, Pose2D, SemanticObservation, utc_now_iso
 from fire_vla_core.llm import LLMInferenceError, LLMOutputError, MockVLABrain
 from fire_vla_core.orchestrator import VLAOrchestrator
 from fire_vla_core.resolver import TargetResolver
@@ -351,6 +351,26 @@ def test_full_exploration_continues_to_other_fire_after_priority_fire_resolved(
     assert navigation.calls[-1].target == "fire_b"
 
 
+def test_bound_mission_scope_overrides_later_qwen_scope_change():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "사람 위협 화재로 이동",
+            "fire_a",
+            MissionScope.PERSON_FIRE,
+        )
+    )
+    world.bind_mission_scope(MissionScope.FULL_EXPLORATION, None)
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.blocked_reason == ""
+    assert cycle.decision.mission_scope == MissionScope.FULL_EXPLORATION
+    assert world.mission.scope == MissionScope.FULL_EXPLORATION
+    assert cycle.submission is not None
+    assert navigation.calls[-1].target == "fire_a"
+
+
 def test_full_exploration_aligns_to_new_in_range_fire_before_extinguish():
     world, navigation, orchestrator = make_person_two_fire_orchestrator(
         ActionDecision(
@@ -415,6 +435,82 @@ def test_full_exploration_extinguishes_same_target_after_alignment():
     assert extinguish.submission is not None
 
 
+def test_full_exploration_allows_one_realign_to_previously_visited_fire():
+    world = WorldModel()
+    world.update_robot_pose(Pose2D(0, 0))
+    world.set_mission("mission_realign", "모든 화재를 진압해")
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.2, .1), now),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(.2, -.1), now),
+    )))
+    queue = MockResultQueue()
+    navigation = MockNavigationAdapter(queue)
+    llm = StubLLM(ActionDecision(
+        ActionType.NAVIGATE_TO,
+        "B 화점 정렬",
+        "fire_b",
+        MissionScope.FULL_EXPLORATION,
+    ))
+    orchestrator = VLAOrchestrator(
+        world,
+        llm,
+        TargetResolver(),
+        ActionValidator(),
+        ActionDispatcher(
+            navigation,
+            MockSprayAdapter(queue),
+            MockReportAdapter(queue),
+            MockWaitAdapter(queue),
+        ),
+    )
+
+    first_b = orchestrator.decide_once()
+    assert first_b.submission is not None
+    assert orchestrator.process_results(queue) == 1
+    orchestrator._pending_continuation = None
+
+    llm.decision = ActionDecision(
+        ActionType.NAVIGATE_TO,
+        "A 화점 정렬",
+        "fire_a",
+        MissionScope.FULL_EXPLORATION,
+    )
+    align_a = orchestrator.decide_once()
+    assert align_a.submission is not None
+    assert orchestrator.process_results(queue) == 1
+    orchestrator._pending_continuation = None
+
+    llm.decision = ActionDecision(
+        ActionType.EXTINGUISH,
+        "B 화점으로 돌아가 진압",
+        "fire_b",
+        MissionScope.FULL_EXPLORATION,
+    )
+    realign_b = orchestrator.decide_once()
+
+    assert realign_b.blocked_reason == ""
+    assert realign_b.decision.action == ActionType.NAVIGATE_TO
+    assert realign_b.decision.target == "fire_b"
+    assert realign_b.submission is not None
+    assert [call.target for call in navigation.calls] == [
+        "fire_b",
+        "fire_a",
+        "fire_b",
+    ]
+
+    assert orchestrator.process_results(queue) == 1
+    orchestrator._aligned_fire_target = (world.mission.id, "fire_a")
+    orchestrator._pending_continuation = None
+
+    # The bounded exception is consumed; even if alignment later changes
+    # again, the same B navigation cannot be submitted a third time.
+    duplicate = orchestrator.decide_once()
+    assert duplicate.submission is None
+    assert duplicate.blocked_reason.startswith("DUPLICATE_ACTION_BLOCKED:")
+    assert len(navigation.calls) == 3
+
+
 def test_full_exploration_does_not_renavigate_aligned_fire_after_pose_jitter():
     world, navigation, orchestrator = make_person_two_fire_orchestrator(
         ActionDecision(
@@ -470,6 +566,167 @@ def test_full_exploration_retargets_stale_qwen_choice_to_active_fire():
     assert cycle.decision.target == "fire_b"
     assert cycle.submission is not None
     assert navigation.calls[-1].target == "fire_b"
+
+
+def test_full_exploration_retargets_terminal_fire_to_saved_fire_hint():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.EXTINGUISH,
+            "이미 종료된 A 화재를 다시 선택",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    world.fires["fire_a"].state = FireState.SUPPRESSION_FAILED
+    world.fires["fire_b"].state = FireState.SUPPRESSION_FAILED
+    world.bounded_fire_search = True
+    world.fire_search_hints = [{
+        "id": "fire_hint_fire_b",
+        "source_fire_id": "fire_b",
+        "pose": {"x": -1.9, "y": 0.0, "yaw": 3.14},
+    }]
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.action == ActionType.SEARCH
+    assert cycle.decision.target == "fire_hint_fire_b"
+    assert cycle.submission is not None
+    assert navigation.calls[-1].action == ActionType.SEARCH
+    assert navigation.calls[-1].target == "fire_hint_fire_b"
+
+
+def test_bounded_fire_search_then_returns_home_after_fresh_empty_observation():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.EXTINGUISH,
+            "이미 종료된 A 화재를 다시 선택",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    world.people["person_a"].reported = True
+    world.people["person_a"].state = PersonState.REPORTED
+    world.fires["fire_a"].state = FireState.SUPPRESSION_FAILED
+    world.fires["fire_b"].state = FireState.SUPPRESSION_FAILED
+    world.bounded_fire_search = True
+    world.fire_search_hints = [{
+        "id": "fire_hint_fire_b",
+        "source_fire_id": "fire_b",
+        "pose": {"x": -1.9, "y": 0.0, "yaw": 3.14},
+    }]
+
+    search = orchestrator.decide_once()
+    assert search.decision.action == ActionType.SEARCH
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    assert world.perception_ready is False
+
+    observed_at = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(observed_at, ()))
+    returning = orchestrator.decide_once()
+    assert returning.decision.action == ActionType.RETURN_HOME
+    assert returning.submission is not None
+    assert orchestrator.process_results(navigation.result_queue) == 1
+
+    assert world.mission.status.value == "COMPLETED_WITH_ESCALATION"
+    assert [call.action for call in navigation.calls] == [
+        ActionType.SEARCH,
+        ActionType.RETURN_HOME,
+    ]
+
+
+def test_bounded_fire_search_does_not_dispatch_generic_frontier():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.SEARCH,
+            "일반 frontier 탐색 제안",
+            "frontier_12_28",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    world.fires["fire_a"].state = FireState.SUPPRESSION_FAILED
+    world.fires["fire_b"].state = FireState.SUPPRESSION_FAILED
+    world.bounded_fire_search = True
+    world.fire_search_hints = [{
+        "id": "fire_hint_fire_b",
+        "source_fire_id": "fire_b",
+        "pose": {"x": 0.8, "y": -0.2, "yaw": 0.0},
+    }]
+    world.unexplored_zones = [{
+        "id": "frontier_12_28",
+        "pose": {"x": 1.2, "y": 2.8, "yaw": 0.8},
+    }]
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.action == ActionType.SEARCH
+    assert cycle.decision.target == "fire_hint_fire_b"
+    assert navigation.calls[-1].target == "fire_hint_fire_b"
+
+
+def test_bounded_fire_search_reacquires_missing_b_fire_after_mission_boundary():
+    world = WorldModel()
+    world.update_robot_pose(Pose2D(0, 0))
+    before = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(before, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.8, .2), before),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(.8, -.2), before),
+    )))
+    world.set_mission("mission_ab", "사람 근처 화재부터 나머지 화재까지 진압")
+    after = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(after, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.8, .2), after),
+    )))
+    world.fires["fire_a"].state = FireState.SUPPRESSION_FAILED
+
+    queue = MockResultQueue()
+    navigation = MockNavigationAdapter(queue)
+    llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "종료된 A를 다시 선택",
+        "fire_a",
+        MissionScope.FULL_EXPLORATION,
+    ))
+    orchestrator = VLAOrchestrator(
+        world,
+        llm,
+        TargetResolver(),
+        ActionValidator(),
+        ActionDispatcher(
+            navigation,
+            MockSprayAdapter(queue),
+            MockReportAdapter(queue),
+            MockWaitAdapter(queue),
+        ),
+    )
+
+    search = orchestrator.decide_once()
+    assert search.decision.action == ActionType.SEARCH
+    assert search.decision.target == "fire_hint_fire_b"
+    assert search.validation.action.target_pose == Pose2D(.8, -.2)
+    assert orchestrator.process_results(queue) == 1
+    assert world.perception_ready is False
+
+    reacquired_at = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(reacquired_at, (
+        SemanticObservation(
+            "fire_b", "fire", .9, Pose2D(.81, -.2), reacquired_at
+        ),
+    )))
+    llm.decision = ActionDecision(
+        ActionType.NAVIGATE_TO,
+        "재관측한 B 화재로 이동",
+        "fire_b",
+        MissionScope.FULL_EXPLORATION,
+    )
+
+    reacquired = orchestrator.decide_once()
+    assert reacquired.decision.action == ActionType.NAVIGATE_TO
+    assert reacquired.decision.target == "fire_b"
+    assert reacquired.submission is not None
+    assert [call.target for call in navigation.calls] == [
+        "fire_hint_fire_b",
+        "fire_b",
+    ]
 
 
 def test_full_exploration_searches_frontier_then_accepts_new_fire():

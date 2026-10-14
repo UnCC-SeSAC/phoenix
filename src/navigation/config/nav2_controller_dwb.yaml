@@ -22,7 +22,7 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       # Semantic fire/person goals stop near the detected object.
       xy_goal_tolerance: 0.05
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.05
     # DWB parameters
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"

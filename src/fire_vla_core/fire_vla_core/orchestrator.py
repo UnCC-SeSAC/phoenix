@@ -51,6 +51,9 @@ class VLAOrchestrator:
     _non_retryable_semantic_keys: set[tuple[Any, ...]] = field(
         default_factory=set, init=False, repr=False
     )
+    _realigned_navigation_keys: set[tuple[Any, ...]] = field(
+        default_factory=set, init=False, repr=False
+    )
     _navigation_continuations: dict[
         str, tuple[str, tuple[Any, ...]]
     ] = field(default_factory=dict, init=False, repr=False)
@@ -80,6 +83,17 @@ class VLAOrchestrator:
                 and fire.spray_count >= self.validator.max_spray_attempts
             ):
                 self.world.mark_fire_suppression_failed(fire.id)
+        if (
+            self.world.mission.scope == MissionScope.FULL_EXPLORATION
+            and self.world.bounded_fire_search
+            and not self.world.fire_search_hints
+            and self.world.exploration_status.value != "COMPLETED"
+            and not any(
+                fire.state == FireState.ACTIVE
+                for fire in self.world.fires.values()
+            )
+        ):
+            self.world.mark_exploration_completed()
         self.world.complete_mission_if_resolved()
         if self.world.mission.status.value != "RUNNING":
             return DecisionCycle(None, None, None)
@@ -124,6 +138,13 @@ class VLAOrchestrator:
                     return DecisionCycle(
                         decision, None, None,
                         "MISSION_SCOPE_INVALID: mission_scope가 필요합니다.",
+                    )
+                if self.world.mission.scope is not None:
+                    decision = ActionDecision(
+                        action=decision.action,
+                        reason=decision.reason,
+                        target=decision.target,
+                        mission_scope=self.world.mission.scope,
                     )
                 try:
                     self.world.bind_mission_scope(
@@ -180,6 +201,25 @@ class VLAOrchestrator:
             < self.validator.max_spray_attempts
         ):
             self._non_retryable_semantic_keys.discard(semantic_key)
+        if (
+            semantic_key in self._non_retryable_semantic_keys
+            and validation.action.action == ActionType.NAVIGATE_TO
+            and validation.action.target in self.world.fires
+            and self.world.mission.scope == MissionScope.FULL_EXPLORATION
+            and semantic_key not in self._realigned_navigation_keys
+        ):
+            fire = self.world.fires[validation.action.target]
+            aligned = (self.world.mission.id, fire.id)
+            if (
+                fire.state == FireState.ACTIVE
+                and fire.robot_within_spray_range
+                and self._entity_is_fresh(fire.last_seen)
+                and self._robot_pose_is_fresh_and_valid()
+                and self._aligned_fire_target is not None
+                and self._aligned_fire_target != aligned
+            ):
+                self._non_retryable_semantic_keys.discard(semantic_key)
+                self._realigned_navigation_keys.add(semantic_key)
         if semantic_key in self._non_retryable_semantic_keys:
             return DecisionCycle(
                 decision,
@@ -261,6 +301,27 @@ class VLAOrchestrator:
     ) -> ActionDecision:
         if decision.mission_scope != MissionScope.FULL_EXPLORATION:
             return decision
+        active_fires = [
+            fire
+            for fire in self.world.fires.values()
+            if fire.state == FireState.ACTIVE
+        ]
+        if (
+            self.world.bounded_fire_search
+            and not active_fires
+            and self.world.fire_search_hints
+        ):
+            hint_id = str(self.world.fire_search_hints[0].get("id") or "")
+            if hint_id:
+                return ActionDecision(
+                    ActionType.SEARCH,
+                    (
+                        "Mission 시작 시 관측한 화점 후보를 "
+                        f"한 번 재확인한다: {hint_id}."
+                    ),
+                    hint_id,
+                    decision.mission_scope,
+                )
         threatened_fires = [
             fire
             for fire in self.world.fires.values()
@@ -278,11 +339,6 @@ class VLAOrchestrator:
                 and selected_fire is not None
                 and selected_fire.state != FireState.ACTIVE
             ):
-                active_fires = [
-                    fire
-                    for fire in self.world.fires.values()
-                    if fire.state == FireState.ACTIVE
-                ]
                 if active_fires:
                     robot_pose = self.world.robot.pose
                     active_fire = min(
@@ -394,6 +450,12 @@ class VLAOrchestrator:
                     and result.status == ActionResultStatus.SUCCEEDED
                 ):
                     self._aligned_fire_target = None
+                    if (
+                        action.action == ActionType.SEARCH
+                        and action.target
+                        and self.world.consume_fire_search_hint(action.target)
+                    ):
+                        self.world.perception_ready = False
         if physical_action_completed:
             self._last_decision_input_signature = None
         self.world.complete_mission_if_resolved()

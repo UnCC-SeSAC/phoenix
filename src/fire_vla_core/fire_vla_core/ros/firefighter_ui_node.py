@@ -127,6 +127,18 @@ class ControlModeOwner:
             self._publish(mode)
             return {"active_control_mode": self._mode, "active_action": self._active}
 
+    def emergency_stop(self) -> dict[str, Any]:
+        """Force command ownership to NONE even while an action is active."""
+        with self._lock:
+            self._mode = _NONE_MODE
+            self._active = False
+            self._publish(_NONE_MODE)
+            return {
+                "active_control_mode": self._mode,
+                "active_action": self._active,
+                "emergency_stop": True,
+            }
+
     def begin(self, mode: str, *, stop: bool = False) -> None:
         mode = normalize_mode(mode)
         with self._lock:
@@ -280,6 +292,7 @@ class FirefighterHTTPServer:
         overlay_store: OverlayStore | None = None,
         map_store: MapStore | None = None,
         set_vision_enabled: Callable[[bool], dict[str, Any]] | None = None,
+        emergency_stop: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         host, port = validate_server_config(host, port)
         self._status_store = status_store
@@ -289,6 +302,7 @@ class FirefighterHTTPServer:
         self._overlays = overlay_store or OverlayStore()
         self._maps = map_store or MapStore()
         self._set_vision_enabled = set_vision_enabled
+        self._emergency_stop = emergency_stop
         self._index_html = index_html or (
             files("fire_vla_core.web").joinpath("index.html").read_bytes()
         )
@@ -372,6 +386,15 @@ class FirefighterHTTPServer:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
             def do_POST(self) -> None:
+                if self.path == "/api/emergency-stop":
+                    if owner._emergency_stop is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {"error": "emergency stop is unavailable"},
+                        )
+                        return
+                    self._send_json(HTTPStatus.OK, owner._emergency_stop())
+                    return
                 if self.path == "/api/vision/enabled":
                     self._handle_vision_enabled()
                     return
@@ -560,6 +583,9 @@ class FirefighterUINode(Node):
         self._control_mode_pub = self.create_publisher(
             String, "/vla/control_mode", control_qos
         )
+        self._emergency_stop_pub = self.create_publisher(
+            Bool, "/vla/emergency_stop", 10
+        )
         self._control_owner = ControlModeOwner(self._publish_control_mode)
         self._publish_control_mode(_NONE_MODE)
         self.create_subscription(
@@ -616,6 +642,7 @@ class FirefighterUINode(Node):
             overlay_store=self._overlays,
             map_store=self._maps,
             set_vision_enabled=self._set_vision_enabled,
+            emergency_stop=self._publish_emergency_stop,
         )
         self._http.start()
         host, port = self._http.address
@@ -701,6 +728,13 @@ class FirefighterUINode(Node):
         msg = String()
         msg.data = mode
         self._control_mode_pub.publish(msg)
+
+    def _publish_emergency_stop(self) -> dict[str, Any]:
+        result = self._control_owner.emergency_stop()
+        msg = Bool()
+        msg.data = True
+        self._emergency_stop_pub.publish(msg)
+        return result
 
     def _set_vision_enabled(self, enabled: bool) -> dict[str, Any]:
         msg = Bool()

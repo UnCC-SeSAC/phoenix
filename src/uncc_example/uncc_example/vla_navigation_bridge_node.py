@@ -13,7 +13,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
-from std_msgs.msg import String
+from ros_robot_controller_msgs.msg import MotorState, MotorsState
+from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from .nav2_navigator import NavigationOutcome, Nav2Navigator
@@ -91,6 +92,12 @@ class VLANavigationBridgeNode(Node):
         self.create_subscription(
             String, "/vla/control_mode", self._control_mode_callback, control_qos
         )
+        self.create_subscription(
+            Bool, "/vla/emergency_stop", self._emergency_stop_callback, 10
+        )
+        self._motor_pub = self.create_publisher(
+            MotorsState, "/ros_robot_controller/set_motor", 10
+        )
         self.completed_results: dict[str, dict] = {}
         self._last_feedback_pose: tuple[float, float] | None = None
         self._last_distance_remaining: float | None = None
@@ -165,6 +172,16 @@ class VLANavigationBridgeNode(Node):
     def _control_mode_callback(self, msg: String) -> None:
         self._control_mode = msg.data.strip().upper()
 
+    def _emergency_stop_callback(self, msg: Bool) -> None:
+        if not msg.data:
+            return
+        self._control_mode = "NONE"
+        if self.pending is not None and not self.navigator.cancel_navigation():
+            self.get_logger().warning("Nav2 emergency cancel could not be submitted")
+        zero = MotorsState()
+        zero.data = [MotorState(id=motor_id, rps=0.0) for motor_id in range(1, 5)]
+        self._motor_pub.publish(zero)
+
     def _cancel_callback(self, msg: String) -> None:
         try:
             requested = str(json.loads(msg.data)["action_id"])
@@ -187,6 +204,11 @@ class VLANavigationBridgeNode(Node):
             f"target_pose=({pending.x:.3f}, {pending.y:.3f}, {pending.yaw:.3f}), "
             f"accepted={accepted}"
         )
+        if accepted and self._control_mode != "VLA":
+            if not self.navigator.cancel_navigation():
+                self.get_logger().warning(
+                    "Nav2 late-accepted goal could not be canceled after emergency stop"
+                )
 
     def _navigation_feedback(self, current_pose, distance_remaining: float) -> None:
         self._last_feedback_pose = (

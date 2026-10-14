@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from uncc_example.vla_spray_bridge_node import VLASprayBridge
 
@@ -175,3 +175,41 @@ def test_none_mode_blocks_new_suppression_goal():
 
     assert calls == []
     assert bridge._result_pub.messages[-1]['message'] == 'CONTROL_MODE_MISMATCH'
+
+
+def test_emergency_stop_cancels_active_suppression_once():
+    cancellations = []
+    bridge = bridge_stub()
+    bridge._active_action_id = 'action_0003'
+    bridge._goal_handle = SimpleNamespace(
+        cancel_goal_async=lambda: cancellations.append(True)
+    )
+    bridge._cancel_active_goal = lambda: VLASprayBridge._cancel_active_goal(bridge)
+    msg = Bool()
+    msg.data = True
+
+    VLASprayBridge._emergency_stop_callback(bridge, msg)
+
+    assert bridge._control_mode == 'NONE'
+    assert cancellations == [True]
+
+
+def test_suppression_goal_accepted_after_emergency_stop_is_canceled():
+    cancellations = []
+    result_future = SimpleNamespace(add_done_callback=lambda _callback: None)
+    goal_handle = SimpleNamespace(
+        accepted=True,
+        cancel_goal_async=lambda: cancellations.append(True),
+        get_result_async=lambda: result_future,
+    )
+    bridge = bridge_stub()
+    bridge._control_mode = 'NONE'
+    bridge._active_action_id = 'action_0004'
+    bridge._active_fire_id = 'fire_0001'
+    bridge._on_result = lambda _future: None
+
+    VLASprayBridge._on_goal_response(
+        bridge, SimpleNamespace(result=lambda: goal_handle)
+    )
+
+    assert cancellations == [True]

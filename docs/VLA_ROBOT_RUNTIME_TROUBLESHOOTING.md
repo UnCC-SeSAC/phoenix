@@ -1060,3 +1060,17 @@ Qwen·WorldModel·Nav2 경로는 이 UI 결함의 수정 범위가 아니다.
 detection overlay 제거를 SW-only로 재현하고, Hardware에서는 Camera ON 연속 표시만
 짧게 확인한다. 연결 끊김을 실제 empty fire observation이나 소화 성공으로 해석하지
 않는다.
+
+## Runtime 부하에서 battery raw 급락 후 Pi SSH 단절
+
+증상: 충전 직후 startup 무동작은 정상이지만 `/ros_robot_controller/battery`가 기존
+저전압 기준 `7000`보다 낮고 계속 하락하며, 이후 Pi가 `No route to host`로 끊긴다.
+
+2026-10-14 직접 증거: 같은 run에서 raw가 `6780`, `6742`, `6742`, `6730`, `6365`로
+하락했다. Nav2 ACTIVE, action server와 TF는 확인됐지만 Mission/Nav2 goal/Spray 전에
+네트워크가 끊겼다. 원격 wrapper stop terminal은 확인하지 못했으며 원인은 배터리 열화,
+충전 불완전 또는 부하 전압 강하 중 하나로 `미확정`이다.
+
+복구: 불 OFF와 실제 바퀴·Pump·Servo 정지를 먼저 확인하고 메인 전원을 끈 뒤 충분히
+충전한다. 다음 부팅에서 이전 runtime을 재사용하지 말고 잔존 process 0을 확인해 clean
+start한다. 배터리 값은 잔량 %가 아닌 controller raw이므로 퍼센트로 환산하지 않는다.

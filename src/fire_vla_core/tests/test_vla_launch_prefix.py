@@ -98,7 +98,7 @@ def test_topic_bridge_distance_defaults_and_overrides_reach_orchestrator():
         "remote_qwen_timeout_sec": "3.0",
         "person_confidence_threshold": "0.50",
         "fire_confidence_threshold": "0.25",
-        "person_fire_risk_distance_m": "0.20",
+        "person_fire_risk_distance_m": "0.30",
         "entity_merge_distance_m": "0.15",
         "navigation_standoff_m": "0.35",
         "spray_range_m": "0.40",

@@ -128,6 +128,43 @@ def test_new_mission_clears_entities_but_preserves_robot_and_home_pose():
     assert world.unexplored_zones == map_zones
 
 
+def test_new_mission_preserves_active_fire_positions_as_search_hints():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.5, .1), now),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(.8, -.2), now),
+    )))
+
+    world.set_mission("m_hints", "사람 근처 화재부터 모두 진압")
+
+    assert world.bounded_fire_search is True
+    assert [hint["source_fire_id"] for hint in world.fire_search_hints] == [
+        "fire_a",
+        "fire_b",
+    ]
+    assert world.fires == {}
+
+
+def test_fresh_fire_consumes_only_matching_saved_search_hint():
+    world = make_world()
+    now = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.5, .1), now),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(.8, -.2), now),
+    )))
+    world.set_mission("m_hints", "사람 근처 화재부터 모두 진압")
+
+    fresh = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(fresh, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.51, .1), fresh),
+    )))
+
+    assert [hint["source_fire_id"] for hint in world.fire_search_hints] == [
+        "fire_b",
+    ]
+
+
 def test_new_mission_rejects_current_action_and_preserves_existing_state():
     world = make_world()
     now = utc_now().isoformat()
@@ -200,7 +237,7 @@ def test_active_fire_outside_demo_boundary_has_no_person_risk_relation():
 
 @pytest.mark.parametrize(
     ("distance", "expected"),
-    [(0.168, True), (0.20, True), (0.201, False)],
+    [(0.168, True), (0.30, True), (0.301, False)],
 )
 def test_default_person_fire_risk_boundary(distance, expected):
     world = make_world()

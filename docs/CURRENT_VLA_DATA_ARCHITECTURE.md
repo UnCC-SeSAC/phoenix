@@ -77,7 +77,7 @@ upstream ID가 있으면 그대로 보존한다. 없으면 같은 class, 0.5 m r
 full tracker가 아니므로 긴 occlusion이나 process restart 뒤 영구 ID를 보장하지 않는다.
 
 RUNNING Mission에서는 각 ACTIVE fire와 가장 가까운 person의 `map(x,y)` 거리를
-계산한다. Demo 기본값 `person_fire_risk_distance_m=0.10` 이내이면 fire에
+계산한다. Demo 기본값 `person_fire_risk_distance_m=0.30` 이내이면 fire에
 `threatens_person=true`와 `threatened_person_id`를 기록해 Qwen context에 제공한다.
 이 값은 demo-scale 관계 parameter이며 실제 배포 안전거리 기준이 아니다.
 `blocks_route_to`의 수동/observation route 의미와는 독립적이다.
@@ -130,6 +130,12 @@ Mission의 scope는 `PERSON_FIRE`가 아니라 `FULL_EXPLORATION`이다.
 정적 화점의 관측 좌표 흔들림만으로 동일 target의 Nav2 goal을 다시 만들지 않는다.
 거리와 freshness Validator는 이 정렬 기록과 별개로 계속 적용한다.
 
+Mission boundary 직전 관측한 ACTIVE fire의 `map` 좌표는 `FULL_EXPLORATION`의 제한적
+재확인 후보로 보존한다. Mission 뒤 같은 위치의 fresh fire가 재관측되면 후보를
+제거하고, 화면에서 사라진 후보만 한 번 `SEARCH`한다. 일반 Frontier 좌표나
+`FIRE_ONLY`에는 이 후보를 사용하지 않는다. 다른 fire 처리로 정렬 소유가 바뀐
+fresh/in-range target은 동일 Mission에서 한 번만 재정렬할 수 있다.
+
 Mission의 현장 목표가 모두 해결돼도 즉시 terminal로 전환하지 않는다. Core가
 Qwen을 다시 호출하지 않고 `RETURN_HOME`을 선택하며, 저장된 home pose에 대한
 Navigation result가 `SUCCEEDED`일 때만 `COMPLETED` 또는
@@ -154,6 +160,7 @@ Navigation action
 | Navigation | `/vla/navigation_goal`, `/vla/navigation_result`, `/vla/navigation_cancel` |
 | Person report | `/vla/person_report`, `/vla/person_report_result` |
 | Suppression | `/vla/spray_command`, `/vla/spray_result`, `/vla/spray_cancel` |
+| Emergency stop | `POST /api/emergency-stop`, `/vla/emergency_stop` |
 
 Pi의 `vla_spray_bridge`는 validated `/vla/spray_command`를 기존
 `SuppressFire` action으로 변환하고 terminal result를 동일한 `action_id`와
@@ -181,6 +188,11 @@ Verification은 0.5초 delay 후 유효한 fire 미검출을 3회 이상 요구�
 Navigation goal owner는 하나만 활성화한다. DETERMINISTIC mode는
 Frontier/StateManager/MissionExecutor가, VLA mode는 VLA Brain과 Navigation Bridge가
 goal을 소유한다.
+
+UI emergency stop은 active-action mode gate를 우회해 control mode를 `NONE`으로
+전환하고 Navigation/Suppression cancel 및 four-motor zero 경로를 요청한다. Wrapper
+stop도 이 HTTP boundary를 먼저 호출한 뒤 기존 bounded cancel·motor-zero·소유 process
+종료 순서를 유지한다. 물리 정지는 운영자가 별도로 확인한다.
 
 ## Firefighter UI
 
@@ -211,5 +223,7 @@ Hardware PASS로 간주하지 않는다.
 - 복귀 성공 뒤 완전 해결은 `COMPLETED`, 잔존 fire는
   `COMPLETED_WITH_ESCALATION`으로 종료한다.
 
-사람+위협 fire A와 일반 fire B를 실제 센서로 관측하고, A→B→home 순서와 최종
-terminal까지 연결하는 Hardware 검증은 아직 남아 있다.
+2026-10-14 Hardware에서는 사람+위협 fire A와 일반 fire B를 실제 센서로 관측하고
+A→B→home 순서와 최종 `COMPLETED_WITH_ESCALATION`까지 연결했다. A/B 모두 물 부족으로
+실제 불이 남아 각 3회 뒤 `SUPPRESSION_FAILED`였으므로, 이는 다중 대상 처리·인계·복귀
+계약의 Hardware PASS이며 물리 완전 소화/`COMPLETED` PASS와는 구분한다.

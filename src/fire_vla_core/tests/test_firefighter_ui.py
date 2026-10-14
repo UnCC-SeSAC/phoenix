@@ -238,7 +238,12 @@ def http_server():
     owner = ControlModeOwner(lambda _mode: None)
     owner.select("VLA")
     server = FirefighterHTTPServer(
-        "127.0.0.1", 0, store, submit, control_owner=owner
+        "127.0.0.1",
+        0,
+        store,
+        submit,
+        control_owner=owner,
+        emergency_stop=owner.emergency_stop,
     )
     server.start()
     yield server, missions
@@ -273,6 +278,7 @@ def test_http_root_serves_required_v2_panels(http_server):
         "Recent Result", "VLA Decision / Reason", "CONNECTED", "DISCONNECTED",
         "VLA Brain", "Rule-based", "modeSelector",
         'data-rule-command="START"', 'data-rule-command="STOP"',
+        'id="emergencyStop"', "/api/emergency-stop",
     ):
         assert text in html
     for excluded in ("cmd_vel", "NavigateToPose", "Pump", "motor control"):
@@ -703,6 +709,24 @@ def test_active_mission_blocks_mode_change(http_server):
         select_mode(server, "RULE_BASED")
     assert error.value.code == 409
     assert "MODE_CHANGE_BLOCKED_ACTIVE_ACTION" in error.value.read().decode()
+
+
+def test_emergency_stop_bypasses_active_action_mode_gate(http_server):
+    server, _ = http_server
+    request(server, "/api/mission", body=json.dumps({"text": "화재를 진압해"}))
+
+    status, _, body = request(server, "/api/emergency-stop", body="")
+
+    assert status == 200
+    assert json.loads(body) == {
+        "active_control_mode": "NONE",
+        "active_action": False,
+        "emergency_stop": True,
+    }
+    assert server._control_owner.get() == {
+        "active_control_mode": "NONE",
+        "active_action": False,
+    }
 
 
 def test_terminal_and_stop_allow_mode_change(http_server):

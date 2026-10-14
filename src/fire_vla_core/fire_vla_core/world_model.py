@@ -39,7 +39,7 @@ class WorldModelConfig:
     fire_confidence_threshold: float = 0.25
     spray_range_m: float = 0.30
     navigation_standoff_m: float = 0.15
-    person_fire_risk_distance_m: float = 0.20
+    person_fire_risk_distance_m: float = 0.30
     max_event_log_entries: int = 500
     verification_required_observations: int = 3
     verification_timeout_sec: float = 5.0
@@ -48,6 +48,7 @@ class WorldModelConfig:
     observation_max_age_sec: float = 1.0
     robot_pose_max_age_sec: float = 0.5
     processed_result_cache_size: int = 256
+    fire_search_hint_match_distance_m: float = 0.15
 
 
 @dataclass
@@ -64,12 +65,28 @@ class WorldModel:
     pending_actions: dict[str, Action] = field(default_factory=dict)
     event_log: list[Event] = field(default_factory=list)
     unexplored_zones: list[dict[str, Any]] = field(default_factory=list)
+    fire_search_hints: list[dict[str, Any]] = field(default_factory=list)
+    bounded_fire_search: bool = False
     _processed_terminal_action_ids: deque[str] = field(default_factory=deque, repr=False)
     _processed_terminal_action_id_set: set[str] = field(default_factory=set, repr=False)
 
     def set_mission(self, mission_id: str, text: str) -> None:
         if self.current_action is not None or self.pending_actions:
             raise ValueError("MISSION_REJECTED_ACTIVE_ACTION")
+        self.fire_search_hints = [
+            {
+                "id": f"fire_hint_{fire.id}",
+                "source_fire_id": fire.id,
+                "pose": {
+                    "x": fire.position.x,
+                    "y": fire.position.y,
+                    "yaw": fire.position.yaw,
+                },
+            }
+            for fire in self.fires.values()
+            if fire.state == FireState.ACTIVE
+        ]
+        self.bounded_fire_search = bool(self.fire_search_hints)
         self.people.clear()
         self.fires.clear()
         self.perception_ready = False
@@ -150,6 +167,7 @@ class WorldModel:
             elif class_name == "fire" and observation.confidence >= self.config.fire_confidence_threshold:
                 seen_fires.add(observation.entity_id)
                 self._upsert_fire(observation)
+                self._consume_matching_fire_search_hint(observation.position)
 
         self._update_fire_verification(seen_fires, batch.observed_at)
         self._refresh_spatial_flags()
@@ -336,8 +354,43 @@ class WorldModel:
 
     def find_unexplored_zone(self, zone_id: str | None) -> dict[str, Any] | None:
         if zone_id is not None:
+            hint = next(
+                (z for z in self.fire_search_hints if z.get("id") == zone_id),
+                None,
+            )
+            if hint is not None:
+                return hint
+        if zone_id is not None:
             return next((z for z in self.unexplored_zones if z.get("id") == zone_id), None)
         return self.unexplored_zones[0] if self.unexplored_zones else None
+
+    def consume_fire_search_hint(self, hint_id: str) -> bool:
+        remaining = [
+            hint for hint in self.fire_search_hints
+            if hint.get("id") != hint_id
+        ]
+        if len(remaining) == len(self.fire_search_hints):
+            return False
+        self.fire_search_hints = remaining
+        self._event("FIRE_SEARCH_HINT_CONSUMED", entity_id=hint_id)
+        return True
+
+    def _consume_matching_fire_search_hint(self, position: Pose2D) -> None:
+        for hint in tuple(self.fire_search_hints):
+            pose = hint.get("pose")
+            if not isinstance(pose, dict):
+                continue
+            hint_pose = Pose2D(
+                float(pose["x"]),
+                float(pose["y"]),
+                float(pose.get("yaw", 0.0)),
+            )
+            if (
+                position.distance_to(hint_pose)
+                <= self.config.fire_search_hint_match_distance_m
+            ):
+                self.consume_fire_search_hint(str(hint.get("id") or ""))
+                return
 
     def _upsert_person(self, observation: SemanticObservation) -> None:
         if observation.entity_id not in self.people:

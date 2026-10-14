@@ -129,7 +129,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "person_fire_risk_distance_m",
-            default_value="0.20",
+            default_value="0.30",
         ),
         DeclareLaunchArgument(
             "entity_merge_distance_m",

@@ -40,7 +40,7 @@ sys.modules.setdefault("frontier_exploration_ros2", frontier_package)
 sys.modules.setdefault("frontier_exploration_ros2.srv", frontier_srv)
 
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from uncc_example.mission_executor import MissionExecutor
 from action_msgs.msg import GoalStatus
@@ -147,6 +147,50 @@ def test_vla_mode_allows_only_vla_navigation():
     MissionExecutor._send_nav_goal(executor, pose())
     assert len(vla_goals) == 1
     assert fsm_client.goals == []
+
+
+def test_navigation_emergency_stop_cancels_once_and_publishes_motor_zero():
+    canceled = []
+    motor_messages = []
+    bridge = SimpleNamespace(
+        _control_mode="VLA",
+        pending=PendingGoal("action_1", "fire_1"),
+        navigator=SimpleNamespace(
+            cancel_navigation=lambda: canceled.append(True) or True
+        ),
+        _motor_pub=SimpleNamespace(publish=motor_messages.append),
+        get_logger=lambda: SimpleNamespace(warning=lambda *_args: None),
+    )
+    msg = Bool()
+    msg.data = True
+
+    VLANavigationBridgeNode._emergency_stop_callback(bridge, msg)
+
+    assert bridge._control_mode == "NONE"
+    assert canceled == [True]
+    assert len(motor_messages) == 1
+    assert [(motor.id, motor.rps) for motor in motor_messages[0].data] == [
+        (1, 0.0), (2, 0.0), (3, 0.0), (4, 0.0)
+    ]
+
+
+def test_navigation_goal_accepted_after_emergency_stop_is_canceled():
+    cancellations = []
+    bridge = SimpleNamespace(
+        _control_mode="NONE",
+        pending=PendingGoal("action_1", "fire_1"),
+        navigator=SimpleNamespace(
+            cancel_navigation=lambda: cancellations.append(True) or True
+        ),
+        get_logger=lambda: SimpleNamespace(
+            warning=lambda *_args: None,
+            info=lambda *_args: None,
+        ),
+    )
+
+    VLANavigationBridgeNode._navigation_goal_response(bridge, True, "goal-uuid")
+
+    assert cancellations == [True]
 
 
 def test_rule_based_mode_allows_fsm_and_frontier_gate_only():

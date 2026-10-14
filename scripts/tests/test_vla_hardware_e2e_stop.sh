@@ -19,6 +19,13 @@ trap cleanup EXIT
 mkdir -p "$test_root/bin" "$test_root/log/run"
 printf '%s\n' "$test_root/log/run" >"$test_root/log/current_run"
 
+cat >"$test_root/bin/curl" <<'FAKE_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$VLA_TEST_CURL_LOG"
+FAKE_CURL
+chmod +x "$test_root/bin/curl"
+
 cat >"$test_root/bin/docker" <<'FAKE_DOCKER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -61,6 +68,7 @@ printf '%s\n' "$zombie_owner_pid" >"$test_root/log/run/zombie_owner.pgid"
 
 started_at="$(date +%s)"
 PATH="$test_root/bin:$PATH" VLA_E2E_LOG_ROOT="$test_root/log" \
+    VLA_TEST_CURL_LOG="$test_root/curl.log" \
     bash "$repo_root/scripts/vla_hardware_e2e.sh" stop >/dev/null
 elapsed=$(( $(date +%s) - started_at ))
 
@@ -76,5 +84,6 @@ zombie_pid="$(cat "$test_root/zombie.pid")"
 grep -qx "$stubborn_pid" "$test_root/log/run/final_kill.pids"
 ! grep -qx "$zombie_pid" "$test_root/log/run/final_kill.pids"
 kill -0 "$unrelated_pid"
+grep -q -- '/api/emergency-stop' "$test_root/curl.log"
 
 echo "wrapper owned-process stop test: PASS"

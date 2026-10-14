@@ -166,7 +166,7 @@ def test_orchestrator_applies_person_fire_risk_distance_default():
     init_source = inspect.getsource(
         orchestrator_node.VLAOrchestratorNode.__init__
     )
-    assert 'self.declare_parameter("person_fire_risk_distance_m", 0.20)' in init_source
+    assert 'self.declare_parameter("person_fire_risk_distance_m", 0.30)' in init_source
     assert 'self.get_parameter("person_fire_risk_distance_m").value' in init_source
 
 
@@ -237,8 +237,8 @@ def test_topic_bridge_and_vla_config_match_confidence_contract():
     assert 'LaunchConfiguration("entity_merge_distance_m")' in launch_source
     assert 'default_value="0.15"' in launch_source
     assert 'LaunchConfiguration("person_fire_risk_distance_m")' in launch_source
-    assert 'default_value="0.20"' in launch_source
+    assert 'default_value="0.30"' in launch_source
     assert "fire_confidence_threshold: 0.25" in config_source
     assert "person_confidence_threshold: 0.5" in config_source
     assert "entity_merge_distance_m: 0.15" in config_source
-    assert "person_fire_risk_distance_m: 0.20" in config_source
+    assert "person_fire_risk_distance_m: 0.30" in config_source
