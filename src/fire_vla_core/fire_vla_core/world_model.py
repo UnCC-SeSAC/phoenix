@@ -45,10 +45,11 @@ class WorldModelConfig:
     verification_timeout_sec: float = 5.0
     verification_delay_sec: float = 0.5
     verification_min_confidence: float = 0.5
-    observation_max_age_sec: float = 1.0
+    observation_max_age_sec: float = 5.0
     robot_pose_max_age_sec: float = 0.5
     processed_result_cache_size: int = 256
     fire_search_hint_match_distance_m: float = 0.15
+    ab_demo_mode: bool = False
 
 
 @dataclass
@@ -77,6 +78,16 @@ class WorldModel:
             {
                 "id": f"fire_hint_{fire.id}",
                 "source_fire_id": fire.id,
+                "threatens_person": any(
+                    fire.position.distance_to(person.position)
+                    <= self.config.person_fire_risk_distance_m
+                    or isclose(
+                        fire.position.distance_to(person.position),
+                        self.config.person_fire_risk_distance_m,
+                        abs_tol=1e-9,
+                    )
+                    for person in self.people.values()
+                ),
                 "pose": {
                     "x": fire.position.x,
                     "y": fire.position.y,
@@ -97,6 +108,10 @@ class WorldModel:
         self._event("MISSION_STARTED", detail=text)
 
     def abort_mission(self, detail: str = "운영자 중단") -> None:
+        if self.mission and self.mission.status in {
+            MissionStatus.COMPLETED, MissionStatus.COMPLETED_WITH_ESCALATION,
+        }:
+            return
         if self.mission:
             self.mission.status = MissionStatus.ABORTED
         self._event("MISSION_ABORTED", detail=detail)
@@ -165,6 +180,19 @@ class WorldModel:
                 seen_people.add(observation.entity_id)
                 self._upsert_person(observation)
             elif class_name == "fire" and observation.confidence >= self.config.fire_confidence_threshold:
+                if (
+                    self.config.ab_demo_mode
+                    and observation.entity_id not in self.fires
+                    and (
+                        len(self.fires) >= 2
+                        or any(
+                            observation.position.distance_to(fire.position)
+                            <= self.config.fire_search_hint_match_distance_m
+                            for fire in self.fires.values()
+                        )
+                    )
+                ):
+                    continue
                 seen_fires.add(observation.entity_id)
                 self._upsert_fire(observation)
                 self._consume_matching_fire_search_hint(observation.position)
@@ -227,8 +255,11 @@ class WorldModel:
 
         if result.source == ExecutionSource.SPRAY and result.target_id in self.fires:
             fire = self.fires[result.target_id]
-            fire.spray_count += 1
-            if result.status == ActionResultStatus.SUCCEEDED:
+            fire.spray_count += result.attempts
+            if result.status == ActionResultStatus.SUCCEEDED or (
+                result.status == ActionResultStatus.ABORTED
+                and result.verification_required
+            ):
                 fire.state = FireState.PENDING_VERIFICATION
                 fire.verification_started_at = result.timestamp
                 fire.verification_valid_observations = 0
@@ -271,7 +302,10 @@ class WorldModel:
             "current_action": self._serialize(self.current_action),
             "last_action": self._serialize(self.last_action),
             "pending_action_ids": sorted(self.pending_actions),
-            "unexplored_zones": self.unexplored_zones,
+            "unexplored_zones": (
+                self.fire_search_hints if self.config.ab_demo_mode
+                else self.unexplored_zones
+            ),
             "recent_events": [self._serialize(e) for e in self.event_log[-20:]],
         }
 
@@ -360,6 +394,8 @@ class WorldModel:
             )
             if hint is not None:
                 return hint
+        if self.config.ab_demo_mode:
+            return None
         if zone_id is not None:
             return next((z for z in self.unexplored_zones if z.get("id") == zone_id), None)
         return self.unexplored_zones[0] if self.unexplored_zones else None

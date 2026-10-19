@@ -17,7 +17,7 @@ from std_msgs.msg import Bool, String
 class VLASprayBridge(Node):
     def __init__(self) -> None:
         super().__init__('vla_spray_bridge')
-        self.declare_parameter('max_attempts_per_command', 1)
+        self.declare_parameter('max_attempts_per_command', 3)
         self._max_attempts = int(
             self.get_parameter('max_attempts_per_command').value
         )
@@ -49,6 +49,9 @@ class VLASprayBridge(Node):
             fire_id = str(payload['fire_id'])
             if payload.get('command') != 'SPRAY':
                 raise ValueError('command must be SPRAY')
+            requested_attempts = int(payload.get('max_attempts', self._max_attempts))
+            if requested_attempts < 1:
+                raise ValueError('max_attempts must be positive')
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f'invalid VLA spray command: {exc}')
             return
@@ -69,7 +72,7 @@ class VLASprayBridge(Node):
             return
 
         goal = SuppressFire.Goal()
-        goal.max_attempts = max(1, min(255, self._max_attempts))
+        goal.max_attempts = min(3, self._max_attempts, requested_attempts)
         self._active_action_id = action_id
         self._active_fire_id = fire_id
         future = self._client.send_goal_async(goal)
@@ -114,10 +117,16 @@ class VLASprayBridge(Node):
             else:
                 status = 'ABORTED'
             message = str(result.message)
+            attempts = int(getattr(result, 'attempts', 1))
+            verification_required = (
+                wrapped.status == GoalStatus.STATUS_SUCCEEDED and attempts > 0
+            )
         except Exception as exc:
             status = 'FAILED'
             message = f'suppress_fire result failed: {exc}'
-        self._finish(status, message)
+            attempts = 0
+            verification_required = False
+        self._finish(status, message, attempts, verification_required)
 
     def _on_cancel(self, msg: String) -> None:
         if self._goal_handle is None or self._active_action_id is None:
@@ -129,13 +138,18 @@ class VLASprayBridge(Node):
         if requested == self._active_action_id:
             self._goal_handle.cancel_goal_async()
 
-    def _finish(self, status: str, message: str) -> None:
+    def _finish(
+        self, status: str, message: str,
+        attempts: int | None = None, verification_required: bool = False,
+    ) -> None:
         if self._active_action_id is not None and self._active_fire_id is not None:
             self._publish_result(
                 self._active_action_id,
                 self._active_fire_id,
                 status,
                 message,
+                attempts,
+                verification_required,
             )
         self._active_action_id = None
         self._active_fire_id = None
@@ -147,17 +161,20 @@ class VLASprayBridge(Node):
         fire_id: str,
         status: str,
         message: str,
+        attempts: int | None = None,
+        verification_required: bool = False,
     ) -> None:
         msg = String()
-        msg.data = json.dumps(
-            {
-                'action_id': action_id,
-                'fire_id': fire_id,
-                'status': status,
-                'message': message,
-            },
-            ensure_ascii=False,
-        )
+        payload = {
+            'action_id': action_id,
+            'fire_id': fire_id,
+            'status': status,
+            'message': message,
+        }
+        if attempts is not None:
+            payload['attempts'] = attempts
+            payload['verification_required'] = verification_required
+        msg.data = json.dumps(payload, ensure_ascii=False)
         self._result_pub.publish(msg)
 
 

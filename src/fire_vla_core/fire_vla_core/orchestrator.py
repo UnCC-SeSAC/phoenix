@@ -14,6 +14,7 @@ from .domain import (
     ActionType,
     FireState,
     MissionScope,
+    Pose2D,
     utc_now,
 )
 from .llm import LLMError, LLMInferenceError, LLMOutputError
@@ -55,9 +56,9 @@ class VLAOrchestrator:
         default_factory=set, init=False, repr=False
     )
     _navigation_continuations: dict[
-        str, tuple[str, tuple[Any, ...]]
+        str, tuple[str, str, Pose2D]
     ] = field(default_factory=dict, init=False, repr=False)
-    _pending_continuation: tuple[str, tuple[Any, ...]] | None = field(
+    _pending_continuation: tuple[str, str] | None = field(
         default=None, init=False, repr=False
     )
     _aligned_fire_target: tuple[str, str] | None = field(
@@ -82,6 +83,15 @@ class VLAOrchestrator:
                 None,
                 "MISSION_WAITING_FOR_FRESH_OBSERVATION",
             )
+        if (
+            self.world.mission.scope == MissionScope.FULL_EXPLORATION
+            and self.world.current_action is None
+            and any(
+                fire.state == FireState.PENDING_VERIFICATION
+                for fire in self.world.fires.values()
+            )
+        ):
+            return DecisionCycle(None, None, None, "SUPPRESSION_PENDING_VERIFICATION")
 
         for fire in self.world.fires.values():
             if (
@@ -118,10 +128,10 @@ class VLAOrchestrator:
         else:
             decision = None
             if self._pending_continuation is not None:
-                target, scene_signature = self._pending_continuation
+                target, mission_id = self._pending_continuation
                 self._pending_continuation = None
                 decision = self._build_extinguish_continuation(
-                    target, scene_signature
+                    target, mission_id
                 )
             if decision is None:
                 signature = self._decision_input_signature()
@@ -244,7 +254,8 @@ class VLAOrchestrator:
             ):
                 self._navigation_continuations[validation.action.action_id] = (
                     validation.action.target,
-                    self._continuation_scene_signature(),
+                    self.world.mission.id,
+                    self.world.fires[validation.action.target].position,
                 )
         return DecisionCycle(decision, validation, submission)
 
@@ -313,12 +324,18 @@ class VLAOrchestrator:
             for fire in self.world.fires.values()
             if fire.state == FireState.ACTIVE
         ]
+        priority_hint = next(
+            (hint for hint in self.world.fire_search_hints
+             if hint.get("threatens_person")),
+            None,
+        )
         if (
             self.world.bounded_fire_search
-            and not active_fires
+            and (not active_fires or priority_hint is not None)
             and self.world.fire_search_hints
         ):
-            hint_id = str(self.world.fire_search_hints[0].get("id") or "")
+            hint = priority_hint or self.world.fire_search_hints[0]
+            hint_id = str(hint.get("id") or "")
             if hint_id:
                 return ActionDecision(
                     ActionType.SEARCH,
@@ -445,9 +462,9 @@ class VLAOrchestrator:
                     fire = self.world.fires.get(action.target or "")
                     if mission is not None and fire is not None:
                         self._aligned_fire_target = (mission.id, fire.id)
-                        self._aligned_fire_position = fire.position
+                        self._aligned_fire_position = continuation[2]
                         self._fire_hint_alignment_required = False
-                    self._pending_continuation = continuation
+                    self._pending_continuation = continuation[:2]
                 elif (
                     action is not None
                     and action.action
@@ -463,10 +480,11 @@ class VLAOrchestrator:
                     if (
                         action.action == ActionType.SEARCH
                         and action.target
-                        and self.world.consume_fire_search_hint(action.target)
+                        and action.target.startswith("fire_hint_")
                     ):
                         self._fire_hint_alignment_required = True
-                        self.world.perception_ready = False
+                        if self.world.consume_fire_search_hint(action.target):
+                            self.world.perception_ready = False
         if physical_action_completed:
             self._last_decision_input_signature = None
         self.world.complete_mission_if_resolved()
@@ -483,15 +501,14 @@ class VLAOrchestrator:
         )
 
     def _build_extinguish_continuation(
-        self, target: str, scene_signature: tuple[Any, ...]
+        self, target: str, mission_id: str
     ) -> ActionDecision | None:
-        if scene_signature != self._continuation_scene_signature():
-            return None
         fire = self.world.fires.get(target)
         mission = self.world.mission
         robot_pose = self.world.robot.pose
         if (
             mission is None
+            or mission.id != mission_id
             or (
                 mission.scope == MissionScope.FIRE_ONLY
                 and mission.target_fire_id != target
@@ -499,7 +516,7 @@ class VLAOrchestrator:
             or fire is None
             or fire.state != FireState.ACTIVE
             or robot_pose is None
-            or not self._entity_is_fresh(fire.last_seen)
+            or not self._fire_alignment_is_current(fire)
             or not self._robot_pose_is_fresh_and_valid()
             or not all(isfinite(value) for value in (
                 fire.position.x,
@@ -517,33 +534,6 @@ class VLAOrchestrator:
             ActionType.EXTINGUISH,
             "Nav2 접근 성공 후 안전 조건을 확인해 화점을 진압한다.",
             target,
-        )
-
-    def _continuation_scene_signature(self) -> tuple[Any, ...]:
-        return (
-            self.world.mission.id if self.world.mission else None,
-            tuple(sorted(
-                (
-                    person.id,
-                    self._pose_signature(person.position),
-                    person.state.value,
-                    person.reported,
-                )
-                for person in self.world.people.values()
-            )),
-            tuple(sorted(
-                (
-                    fire.id,
-                    self._pose_signature(fire.position),
-                    fire.size,
-                    fire.state.value,
-                    fire.blocks_route_to,
-                    fire.threatens_person,
-                    fire.threatened_person_id,
-                    fire.spray_count,
-                )
-                for fire in self.world.fires.values()
-            )),
         )
 
     def _entity_is_fresh(self, timestamp: str) -> bool:
@@ -620,6 +610,7 @@ class VLAOrchestrator:
                     fire.threatened_person_id,
                     fire.robot_within_spray_range,
                     fire.spray_count,
+                    self._entity_is_fresh(fire.last_seen),
                 )
                 for fire in self.world.fires.values()
             )),

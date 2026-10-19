@@ -11,6 +11,7 @@ from fire_vla_core.domain import (
     ActionType,
     ExecutionSource,
     MissionScope,
+    MissionStatus,
     FireState,
     ObservationBatch,
     PersonState,
@@ -45,6 +46,94 @@ def succeed_return_home(world, action_id="return_home"):
         ActionResultStatus.SUCCEEDED,
     ))
     return world.complete_mission_if_resolved()
+
+
+@pytest.mark.parametrize("completed_status", [
+    MissionStatus.COMPLETED, MissionStatus.COMPLETED_WITH_ESCALATION,
+])
+def test_stop_preserves_completed_mission_and_its_result_events(completed_status):
+    world = make_world()
+    world.mission.status = completed_status
+    mission = world.mission
+    events = list(world.event_log)
+
+    world.abort_mission("운영자 비상정지")
+
+    assert world.mission is mission
+    assert world.mission.status == completed_status
+    assert world.event_log == events
+
+
+def test_stop_still_aborts_running_mission_without_marking_it_completed():
+    world = make_world()
+    world.abort_mission("운영자 비상정지")
+    assert world.mission.status == MissionStatus.ABORTED
+    assert world.event_log[-1].event_type == "MISSION_ABORTED"
+    assert world.event_log[-1].detail == "운영자 비상정지"
+
+
+def test_ab_demo_accepts_two_separated_fires_then_ignores_additional_targets():
+    world = make_world(WorldModelConfig(ab_demo_mode=True))
+    stamp = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("a", "fire", .9, Pose2D(.8, .16), stamp),
+        SemanticObservation("b", "fire", .9, Pose2D(.8, -.16), stamp),
+        SemanticObservation("ghost", "fire", .9, Pose2D(1.66, .16), stamp),
+        SemanticObservation("person", "person", .9, Pose2D(.7, .3), stamp),
+    )))
+    assert set(world.fires) == {"a", "b"}
+    assert set(world.people) == {"person"}
+    stamp = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("a", "fire", .8, Pose2D(.81, .16), stamp),
+        SemanticObservation("new_c", "fire", .9, Pose2D(2, 0), stamp),
+    )))
+    assert set(world.fires) == {"a", "b"}
+    assert world.fires["a"].position == Pose2D(.81, .16)
+    assert world.fires["a"].last_seen == stamp
+
+
+@pytest.mark.parametrize("distance, count", [(.149, 1), (.15, 1), (.151, 2), (.32, 2)])
+def test_ab_demo_preserves_existing_fifteen_cm_association_boundary(distance, count):
+    world = make_world(WorldModelConfig(ab_demo_mode=True))
+    stamp = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("a", "fire", .9, Pose2D(0, 0), stamp),
+        SemanticObservation("b", "fire", .9, Pose2D(distance, 0), stamp),
+    )))
+    assert len(world.fires) == count
+
+
+def test_ab_demo_does_not_replace_terminal_targets_and_new_mission_resets_admission():
+    world = make_world(WorldModelConfig(ab_demo_mode=True))
+    stamp = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("a", "fire", .9, Pose2D(.8, .2), stamp),
+        SemanticObservation("b", "fire", .9, Pose2D(.8, -.2), stamp),
+    )))
+    world.fires["a"].state = FireState.EXTINGUISHED
+    world.fires["b"].state = FireState.SUPPRESSION_FAILED
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("c", "fire", .9, Pose2D(2, 0), stamp),
+    )))
+    assert set(world.fires) == {"a", "b"}
+    world.set_mission("next", "다음 화재 확인")
+    stamp = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("c", "fire", .9, Pose2D(2, 0), stamp),
+        SemanticObservation("d", "fire", .9, Pose2D(3, 0), stamp),
+    )))
+    assert set(world.fires) == {"c", "d"}
+
+
+def test_default_world_does_not_limit_five_distinct_fires():
+    world = make_world()
+    stamp = utc_now().isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, tuple(
+        SemanticObservation(f"f{i}", "fire", .9, Pose2D(i, 0), stamp)
+        for i in range(5)
+    )))
+    assert len(world.fires) == 5
 
 
 def test_observation_creates_entities():

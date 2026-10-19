@@ -170,6 +170,12 @@ def test_orchestrator_applies_person_fire_risk_distance_default():
     assert 'self.get_parameter("person_fire_risk_distance_m").value' in init_source
 
 
+def test_orchestrator_applies_ab_demo_mode_only_when_enabled():
+    init_source = inspect.getsource(orchestrator_node.VLAOrchestratorNode.__init__)
+    assert 'self.declare_parameter("ab_demo_mode", False)' in init_source
+    assert 'ab_demo_mode=bool(self.get_parameter("ab_demo_mode").value)' in init_source
+
+
 def test_orchestrator_applies_entity_merge_distance_default():
     init_source = inspect.getsource(
         orchestrator_node.VLAOrchestratorNode.__init__

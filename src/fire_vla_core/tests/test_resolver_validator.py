@@ -71,6 +71,43 @@ def test_generic_search_zone_keeps_its_configured_pose():
     assert action.target_pose == Pose2D(1.0, 2.0, 0.7)
 
 
+@pytest.mark.parametrize("target", [None, "frontier_wrong_way"])
+def test_ab_demo_excludes_frontier_from_snapshot_and_search_resolution(target):
+    from fire_vla_core.resolver import TargetResolutionError
+    world = make_world()
+    world.config.ab_demo_mode = True
+    world.unexplored_zones = [{
+        "id": "frontier_wrong_way", "pose": {"x": -.649, "y": 1.453},
+    }]
+    assert world.create_snapshot()["unexplored_zones"] == []
+    with pytest.raises(TargetResolutionError):
+        TargetResolver().resolve(ActionDecision(ActionType.SEARCH, "탐사", target), world)
+
+
+def test_ab_demo_still_resolves_saved_fire_search_with_standoff():
+    world = make_world()
+    world.config.ab_demo_mode = True
+    world.fire_search_hints = [{
+        "id": "fire_hint_b", "source_fire_id": "b",
+        "pose": {"x": 1.0, "y": 0.0},
+    }]
+    assert world.create_snapshot()["unexplored_zones"] == world.fire_search_hints
+    action = TargetResolver().resolve(
+        ActionDecision(ActionType.SEARCH, "B 재확인", "fire_hint_b"), world,
+    )
+    assert action.target_pose == Pose2D(.85, 0, 0)
+
+
+def test_ab_demo_does_not_navigate_to_person_but_allows_reporting():
+    world = make_world()
+    world.config.ab_demo_mode = True
+    resolver = TargetResolver()
+    navigation = resolver.resolve(ActionDecision(ActionType.NAVIGATE_TO, "사람", "person_01"), world)
+    assert not ActionValidator().validate(navigation, world).approved
+    report = resolver.resolve(ActionDecision(ActionType.REPORT_PERSON, "보고", "person_01"), world)
+    assert ActionValidator().validate(report, world).approved
+
+
 def test_validator_rejects_new_physical_action_while_one_is_running():
     world = make_world()
     resolver = TargetResolver()

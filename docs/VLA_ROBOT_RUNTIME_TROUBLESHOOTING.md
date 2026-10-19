@@ -1,7 +1,6 @@
 # VLA Robot Runtime Troubleshooting
 
-현재 적용 기준은
-`integration/vla-robot-e2e@0a79c462e770eac4bf2765b701f796d1447d8b12`이다.
+현재 작업 브랜치는 `integration/vla-robot-e2e`다.
 과거 SHA와 parameter는 해당 incident의 historical evidence로만 사용한다.
 
 HW validation에서는 iteration 속도를 engineering constraint로 취급하고 다음 순서로
@@ -43,13 +42,43 @@ HEF/ONNX/JSON과 root 환경의 `gpiozero`/`lgpio` import도 runtime 시작 전�
 SIGINT→SIGTERM을 적용하고 그래도 남은 정확한 owned process에만 최종 SIGKILL을
 사용한다. Zombie는 active로 세지 않고 다른 run이나 팀 process는 보존한다. 종료
 판정에는 orphan Nav2 0, Pump OFF와 바퀴 정지의 물리 확인이 포함된다. 이 항목은 최신
-wrapper에 반영됐으며 현재 blocker가 아니다.
+wrapper에 반영돼 있다. 다만 아래 종료 판정 불일치는 별도 미해결 항목이다.
 명확한 direct error부터 처리하고, known problem에는 documented recovery를 정확히 1회
 적용한다. side-effect command가 SSH timeout을 냈다고 blind retry하지 않고 process
 존재 여부를 한 번 확인한다. 정상 iteration은 수십 초~수분 안에 끝내며, recovery가
 실패할 때만 새 root-cause 진단을 시작한다.
 일시적 복구와 root cause 해결을 구분하며, 원인이 확정되지 않았으면 `미확정`으로
 기록한다.
+
+## Humble에서 status observer import 실패
+
+증상과 원인: stderr를 숨겼던 status 조회에서 `rclpy.parameter_client` import가
+`ModuleNotFoundError`로 종료됐다. 이는 Base 또는 Nav2 실패 자체를 증명하지 않는다.
+
+조치·검증: Humble의 `rcl_interfaces/srv/GetParameters` service 호출로 대체하고
+stderr, exit code와 현재 run의 Base/VLA 로그 끝부분을 표시하도록 수정했다. 관련
+SW 테스트를 통과했고 실제 조회에서 import 오류는 사라졌다. 이후 timeout은 여전히
+`UNKNOWN`이며 Base 기동 문제의 해결로 기록하지 않는다.
+
+## Base가 SLAM/IMU 이후 Nav2를 기동하지 않고 map TF가 없음
+
+증상: Base 로그가 SLAM/IMU process 시작 이후 진행되지 않고 Nav2 component 기동이
+확인되지 않는다. VLA에는 `map ... target_frame does not exist`가 반복된다.
+
+확인·대응: 정확한 canonical overlay/domain/RMW로 현재 run 로그와 TF를 대조한다.
+기존 clean start를 적용해도 재발했으며 내부 원인은 미확정, 확정 복구법은 없다.
+과거 독립 Nav2 분리 실험은 원복된 상태다. 이를 다시 도입하거나 status timeout만으로
+반복 재시작하지 않는다. 필수 TF·Nav2 준비가 없으면 Mission 전에 중단한다.
+
+## stop 종료 미완료 출력과 실제 active process 0의 불일치
+
+증상·증거: wrapper stop이 소유 process group 종료 미완료를 보고했으나, 후속 조회에서
+해당 run에 기록된 모든 PGID의 non-zombie process는 0개였고 관련 잔존 PID는 zombie였다.
+
+대응: zombie를 active로 판정하거나 추가 신호로 제거하지 않는다. 현재 코드의 종료
+판정과 조회 시점 차이를 먼저 확인한다. 정확한 원인·수정은 미확정이며, 이 기록만으로
+wrapper stop 전체 PASS 또는 물리 Pump OFF를 확정하지 않는다. bounded ROS cancel 및
+motor-zero CLI timeout도 전달 성공과 구분한다.
 
 ## Wi-Fi/Hotspot SSH command 실행 지연
 

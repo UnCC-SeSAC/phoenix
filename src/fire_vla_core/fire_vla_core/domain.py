@@ -237,6 +237,8 @@ class ActionResult:
     target_id: str | None = None
     message: str = ""
     timestamp: str = field(default_factory=utc_now_iso)
+    attempts: int = 1
+    verification_required: bool = False
 
 
 @dataclass(slots=True)

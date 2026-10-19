@@ -31,12 +31,13 @@ def bridge_stub():
         _active_fire_id=None,
         _goal_handle=None,
         _control_mode='VLA',
+        _max_attempts=3,
         _client=SimpleNamespace(wait_for_server=lambda timeout_sec: False),
         _result_pub=FakePublisher(),
         get_logger=lambda: FakeLogger(),
     )
-    bridge._publish_result = lambda action_id, fire_id, status, message: (
-        VLASprayBridge._publish_result(bridge, action_id, fire_id, status, message)
+    bridge._publish_result = lambda *args: (
+        VLASprayBridge._publish_result(bridge, *args)
     )
     return bridge
 
@@ -65,17 +66,18 @@ def test_unavailable_action_server_returns_correlated_failure():
     assert bridge._active_action_id is None
 
 
-def test_completed_spray_with_negative_fire_check_is_aborted():
+def test_completed_spray_with_negative_fire_check_is_aborted_but_requires_verification():
     bridge = bridge_stub()
     bridge._active_action_id = 'action_0001'
     bridge._active_fire_id = 'fire_0001'
-    bridge._finish = lambda status, message: VLASprayBridge._finish(
-        bridge, status, message
+    bridge._finish = lambda *args: VLASprayBridge._finish(
+        bridge, *args
     )
     wrapped = SimpleNamespace(
         status=GoalStatus.STATUS_SUCCEEDED,
         result=SimpleNamespace(
             success=False,
+            attempts=3,
             message='관찰 구간 내 YOLO 감지 기록 없음',
         ),
     )
@@ -87,6 +89,8 @@ def test_completed_spray_with_negative_fire_check_is_aborted():
         'fire_id': 'fire_0001',
         'status': 'ABORTED',
         'message': '관찰 구간 내 YOLO 감지 기록 없음',
+        'attempts': 3,
+        'verification_required': True,
     }]
 
 
@@ -94,8 +98,8 @@ def test_successful_domain_result_is_forwarded_for_world_model_verification():
     bridge = bridge_stub()
     bridge._active_action_id = 'action_0001'
     bridge._active_fire_id = 'fire_0001'
-    bridge._finish = lambda status, message: VLASprayBridge._finish(
-        bridge, status, message
+    bridge._finish = lambda *args: VLASprayBridge._finish(
+        bridge, *args
     )
     wrapped = SimpleNamespace(
         status=GoalStatus.STATUS_SUCCEEDED,
@@ -109,6 +113,8 @@ def test_successful_domain_result_is_forwarded_for_world_model_verification():
         'fire_id': 'fire_0001',
         'status': 'SUCCEEDED',
         'message': '진압 성공',
+        'attempts': 1,
+        'verification_required': True,
     }]
 
 
@@ -213,3 +219,37 @@ def test_suppression_goal_accepted_after_emergency_stop_is_canceled():
     )
 
     assert cancellations == [True]
+
+
+def test_command_uses_remaining_budget_in_one_goal():
+    goals = []
+    bridge = bridge_stub()
+    bridge._client = SimpleNamespace(
+        wait_for_server=lambda timeout_sec: True,
+        send_goal_async=lambda goal: (goals.append(goal) or SimpleNamespace(add_done_callback=lambda cb: None)),
+    )
+    bridge._on_goal_response = lambda future: None
+    message = String()
+    message.data = json.dumps({'action_id': 'one', 'fire_id': 'a', 'command': 'SPRAY', 'max_attempts': 3})
+    VLASprayBridge._on_command(bridge, message)
+    VLASprayBridge._on_command(bridge, message)
+    assert len(goals) == 1
+    assert goals[0].max_attempts == 3
+    bridge._active_action_id = None
+    message.data = json.dumps({'action_id': 'two', 'fire_id': 'a', 'command': 'SPRAY', 'max_attempts': 1})
+    VLASprayBridge._on_command(bridge, message)
+    assert len(goals) == 2
+    assert goals[1].max_attempts == 1
+
+
+def test_hardware_abort_and_cancel_do_not_request_extinction_verification():
+    for status in (GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_CANCELED):
+        bridge = bridge_stub()
+        bridge._active_action_id = 'a1'
+        bridge._active_fire_id = 'fire_a'
+        bridge._finish = lambda *args: VLASprayBridge._finish(bridge, *args)
+        wrapped = SimpleNamespace(status=status, result=SimpleNamespace(success=False, attempts=1, message='중단'))
+        VLASprayBridge._on_result(bridge, SimpleNamespace(result=lambda: wrapped))
+        payload = bridge._result_pub.messages[-1]
+        assert payload['verification_required'] is False
+        assert payload['status'] != 'SUCCEEDED'

@@ -3,14 +3,16 @@ set -euo pipefail
 
 CONTAINER="${VLA_CONTAINER:-IntelPi}"
 WORKSPACE="/ros2_ws/phoenix_vla"
-LOG_ROOT="${VLA_E2E_LOG_ROOT:-/tmp/phoenix_vla_e2e}"
+LOG_ROOT="${VLA_E2E_LOG_ROOT:-/ros2_ws/phoenix_vla/log/hardware_e2e}"
 CURRENT_RUN_FILE="$LOG_ROOT/current_run"
 RUN_LOG_DIR=""
 DRY_RUN="${VLA_E2E_DRY_RUN:-0}"
 CAMERA_WAIT_SEC=8
 STATUS_WAIT_SEC=15
-NAVIGATION_STANDOFF_M="${VLA_NAVIGATION_STANDOFF_M:-0.15}"
-SPRAY_RANGE_M="${VLA_SPRAY_RANGE_M:-0.30}"
+QWEN_ENDPOINT="${VLA_QWEN_ENDPOINT:-http://192.168.1.198:8088/infer}"
+NAVIGATION_STANDOFF_M="${VLA_NAVIGATION_STANDOFF_M:-0.25}"
+SPRAY_RANGE_M="${VLA_SPRAY_RANGE_M:-0.45}"
+AB_DEMO_MODE="${VLA_AB_DEMO_MODE:-true}"
 LOCK_FILE="/tmp/vla_hardware_e2e.lock"
 HEF_PATH="${VLA_YOLO_MODEL_PATH:-/shared/yolo26s/best_neural.hef}"
 ONNX_PATH="${HEF_PATH%/*}/best_sim_postprocess.onnx"
@@ -46,7 +48,7 @@ EXPECTED_LAUNCH_PATTERNS=(
 
 usage() {
     echo "사용법: $0 {start|status|mission|stop}"
-    echo "start 전 VLA_QWEN_ENDPOINT=http://<CURRENT_PC_IP>:8088/infer 설정 필요"
+    echo "Qwen 기본 주소: $QWEN_ENDPOINT (변경 시 VLA_QWEN_ENDPOINT로 지정)"
 }
 
 run() {
@@ -151,7 +153,7 @@ start_preflight() {
 }
 
 start_runtime() {
-    local endpoint="${VLA_QWEN_ENDPOINT:-}"
+    local endpoint="$QWEN_ENDPOINT"
     local state
     if [[ -z "$endpoint" ]]; then
         echo "VLA_QWEN_ENDPOINT가 필요함" >&2
@@ -183,7 +185,8 @@ start_runtime() {
     launch_component yolo "ros2 launch image_pipeline yolo.launch.py model_path:=$HEF_PATH backend:=hailo layout:=end2end class_names:='[fire,person]' conf:=$YOLO_CONF threads:=3"
     launch_component detection3d "ros2 launch image_pipeline detection_3d.launch.py point_below:=true point_gap:=1.0"
     launch_component ui_stream "ros2 run image_pipeline ui_stream_node --ros-args -p class_names:='[fire,person]'"
-    launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0 navigation_standoff_m:=$NAVIGATION_STANDOFF_M spray_range_m:=$SPRAY_RANGE_M"
+    launch_component vla "ros2 launch fire_vla_bringup topic_bridge_vla.launch.py start_perception_bridge:=true llm_backend:=remote_qwen remote_qwen_endpoint:=$endpoint remote_qwen_timeout_sec:=10.0 navigation_standoff_m:=$NAVIGATION_STANDOFF_M spray_range_m:=$SPRAY_RANGE_M ab_demo_mode:=$AB_DEMO_MODE"
+    echo "AB_DEMO_MODE: $AB_DEMO_MODE"
     launch_component ui "ros2 run fire_vla_core firefighter_ui"
     launch_component navigation "ros2 launch uncc_example vla_navigation_bridge.launch.py"
     launch_component suppression "ros2 launch uncc_example fire_extinguisher.launch.py"
@@ -193,8 +196,8 @@ start_runtime() {
 }
 
 status_runtime() {
-    local endpoint="${VLA_QWEN_ENDPOINT:-}"
-    local observer output
+    local endpoint="$QWEN_ENDPOINT"
+    local observer output observer_rc=0
     load_current_run_directory
     read -r -d '' observer <<'PY' || true
 import json
@@ -203,7 +206,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.parameter_client import AsyncParameterClient
+from rcl_interfaces.srv import GetParameters
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from lifecycle_msgs.srv import GetState
@@ -242,11 +245,13 @@ class Status(Node):
             "navigation_standoff_m": "UNKNOWN",
             "spray_range_m": "UNKNOWN",
         }
-        self.vla_parameter_client = AsyncParameterClient(self, "/vla_orchestrator")
+        self.vla_parameter_client = self.create_client(
+            GetParameters, "/vla_orchestrator/get_parameters"
+        )
         if self.vla_parameter_client.wait_for_service(timeout_sec=0.2):
-            future = self.vla_parameter_client.get_parameters(
-                tuple(self.vla_parameters)
-            )
+            request = GetParameters.Request()
+            request.names = list(self.vla_parameters)
+            future = self.vla_parameter_client.call_async(request)
             future.add_done_callback(self.capture_vla_parameters)
         self.bt_state_client = self.create_client(GetState, "/bt_navigator/get_state")
         if self.bt_state_client.wait_for_service(timeout_sec=0.2):
@@ -302,7 +307,9 @@ node = Status()
 try:
     rclpy.spin(node)
 except Exception:
-    pass
+    import traceback
+    traceback.print_exc()
+    raise
 PY
 
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -312,9 +319,24 @@ python3 -c '<integrated rclpy status observer: ${STATUS_WAIT_SEC}s>'"
         return 0
     fi
 
-    if ! output="$(docker exec -e STATUS_OBSERVER="$observer" -u root -w / "$CONTAINER" bash -lc "$ENVIRONMENT
-timeout $((STATUS_WAIT_SEC + 3))s python3 -c \"\$STATUS_OBSERVER\"" 2>/dev/null)"; then
+    output="$(docker exec -e STATUS_OBSERVER="$observer" -u root -w / "$CONTAINER" bash -lc "$ENVIRONMENT
+timeout -k 1s $((STATUS_WAIT_SEC + 3))s python3 -u -c \"\$STATUS_OBSERVER\"" 2>&1)" || observer_rc=$?
+    if [[ "$observer_rc" -ne 0 ]]; then
         echo "integrated_status: UNKNOWN (조회 실패)"
+        output="observer_exit_code=$observer_rc"$'\n'"$output"
+        if [[ "$observer_rc" -eq 124 || "$observer_rc" -eq 137 ]]; then
+            output+=$'\n''진단 조회 제한시간 초과 (runtime 실패 판정 아님)'
+        fi
+        printf '%s\n' "$output"
+        if [[ -n "$RUN_LOG_DIR" ]]; then
+            printf '%s\n' "$output" | docker exec -i -u root "$CONTAINER" \
+                sh -c "cat >'$RUN_LOG_DIR/status_observer.log'"
+            echo "진단 로그: $RUN_LOG_DIR/status_observer.log (container 내부)"
+            container_shell "for component in base vla; do
+                echo \"--- e2e_\${component}.log ---\"
+                tail -n 8 '$RUN_LOG_DIR'/e2e_\${component}.log
+            done"
+        fi
     else
         printf '%s\n' "$output"
         printf '%s\n' "$output" | grep '^NAV2_READINESS:' | \

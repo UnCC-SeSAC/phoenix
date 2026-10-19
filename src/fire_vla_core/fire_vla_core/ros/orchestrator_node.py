@@ -122,6 +122,7 @@ class VLAOrchestratorNode(Node):
         self.declare_parameter("fire_confidence_threshold", 0.25)
         self.declare_parameter("person_fire_risk_distance_m", 0.30)
         self.declare_parameter("entity_merge_distance_m", 0.15)
+        self.declare_parameter("ab_demo_mode", False)
         self.declare_parameter("spray_range_m", 0.30)
         self.declare_parameter("navigation_standoff_m", 0.15)
         self.declare_parameter("report_mode", "MOCK")
@@ -152,6 +153,7 @@ class VLAOrchestratorNode(Node):
         )
 
         self.world = WorldModel(WorldModelConfig(
+            ab_demo_mode=bool(self.get_parameter("ab_demo_mode").value),
             person_confidence_threshold=float(
                 self.get_parameter("person_confidence_threshold").value
             ),

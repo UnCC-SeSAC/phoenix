@@ -46,6 +46,10 @@ class ActionValidator:
         if action.action == ActionType.NAVIGATE_TO and (not action.target or not self._target_exists(action.target, world)):
             return self._reject(action, "WorldModel에 존재하지 않는 이동 대상입니다.")
 
+        if (world.config.ab_demo_mode and action.action == ActionType.NAVIGATE_TO
+                and action.target not in world.fires):
+            return self._reject(action, "A/B 시연에서는 화재 접근만 허용합니다.")
+
         if action.action == ActionType.REPORT_PERSON:
             if not action.target or action.target not in world.people:
                 return self._reject(action, "보고할 사람 대상이 WorldModel에 없습니다.")

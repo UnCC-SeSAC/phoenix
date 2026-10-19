@@ -96,6 +96,7 @@ class TopicBridgeSprayAdapter(SprayPort, ActionResultSource):
             ),
             "fire_id": fire.id,
             "command": "SPRAY",
+            "max_attempts": self._max_spray_attempts - fire.spray_count,
             "timestamp": utc_now_iso(),
         }
         msg = String()
@@ -130,6 +131,8 @@ class TopicBridgeSprayAdapter(SprayPort, ActionResultSource):
             status = ActionResultStatus(str(data["status"]))
             fire_id = data.get("fire_id")
             message = str(data.get("message", ""))
+            attempts = int(data.get("attempts", 1))
+            verification_required = data.get("verification_required", False) is True
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self._node.get_logger().warning(
                 f"spray result parsing failed: {exc}"
@@ -154,6 +157,8 @@ class TopicBridgeSprayAdapter(SprayPort, ActionResultSource):
                     else (str(fire_id) if fire_id is not None else None)
                 ),
                 message=message,
+                attempts=attempts,
+                verification_required=verification_required,
             )
         )
         if action_id == self._active_action_id:

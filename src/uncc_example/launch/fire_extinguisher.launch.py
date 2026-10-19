@@ -34,6 +34,6 @@ def generate_launch_description():
             executable='vla_spray_bridge',
             name='vla_spray_bridge',
             output='screen',
-            parameters=[{'max_attempts_per_command': 1}],
+            parameters=[{'max_attempts_per_command': 3}],
         ),
     ])

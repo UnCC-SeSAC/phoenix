@@ -68,6 +68,9 @@ def _create_vla_node(context):
                 LaunchConfiguration("entity_merge_distance_m"),
                 value_type=float,
             ),
+            "ab_demo_mode": ParameterValue(
+                LaunchConfiguration("ab_demo_mode", default="false"), value_type=bool,
+            ),
             "navigation_standoff_m": ParameterValue(
                 LaunchConfiguration("navigation_standoff_m"),
                 value_type=float,
@@ -98,6 +101,7 @@ def _create_vla_node(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("llm_backend", default_value="mock"),
+        DeclareLaunchArgument("ab_demo_mode", default_value="false"),
         DeclareLaunchArgument(
             "vla_python_executable",
             default_value="",

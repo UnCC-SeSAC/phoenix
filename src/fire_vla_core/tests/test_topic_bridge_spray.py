@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -14,6 +14,8 @@ from fire_vla_core.domain import (
     ActionDecision,
     ActionSubmissionStatus,
     ActionType,
+    ObservationBatch,
+    SemanticObservation,
     FireEntity,
     FireState,
     Pose2D,
@@ -91,6 +93,7 @@ def make_system(
         spray_count=spray_count,
     )
     world.update_robot_pose(Pose2D(0.0, 0.0))
+    world.perception_ready = True
     node = FakeNode()
     spray = TopicBridgeSprayAdapter(node, world)
     results = MockResultQueue()
@@ -118,7 +121,7 @@ def command_payload(node):
     return json.loads(messages[0].data)
 
 
-def emit_result(node, action_id, status, fire_id="fire_0001"):
+def emit_result(node, action_id, status, fire_id="fire_0001", **extra):
     message = type("Message", (), {})()
     message.data = json.dumps(
         {
@@ -126,9 +129,61 @@ def emit_result(node, action_id, status, fire_id="fire_0001"):
             "status": status,
             "fire_id": fire_id,
             "message": "spray consumer result",
+            **extra,
         }
     )
     node.subscriptions["/vla/spray_result"](message)
+
+
+@pytest.mark.parametrize("remaining_fire", [False, True])
+def test_three_attempt_result_uses_target_verification_then_continues_to_b(monkeypatch, remaining_fire):
+    from fire_vla_core import orchestrator as orchestrator_module, validator as validator_module, world_model as world_module
+    clock = [datetime.now().astimezone()]
+    for module in (orchestrator_module, validator_module, world_module):
+        monkeypatch.setattr(module, "utc_now", lambda: clock[0])
+    world, node, spray, orchestrator, brain = make_system()
+    world.fires["fire_b"] = FireEntity("fire_b", Pose2D(1, -.5), confidence=.9)
+    clock[0] = datetime.now().astimezone()
+    action = orchestrator.decide_once().validation.action
+    emit_result(node, action.action_id, "ABORTED", attempts=3, verification_required=True)
+    assert orchestrator.process_results(spray) == 1
+    assert world.fires["fire_0001"].spray_count == 3
+    assert world.fires["fire_0001"].state == FireState.PENDING_VERIFICATION
+    assert world.last_action.status.value == "ABORTED"
+    emit_result(node, action.action_id, "ABORTED", attempts=3, verification_required=True)
+    assert orchestrator.process_results(spray) == 0
+    assert world.fires["fire_0001"].spray_count == 3
+    # No message cannot prove extinction.
+    orchestrator.decide_once()
+    assert world.fires["fire_0001"].state == FireState.PENDING_VERIFICATION
+    start = datetime.fromisoformat(world.fires["fire_0001"].verification_started_at)
+    clock[0] = start + timedelta(seconds=.5)
+    world.update_observation_batch(ObservationBatch(
+        clock[0].isoformat(), (), frame_valid=False, detector_healthy=False,
+    ))
+    assert world.fires["fire_0001"].verification_valid_observations == 0
+    for seconds in (.6, 1.0, 5.0):
+        clock[0] = start + timedelta(seconds=seconds)
+        stamp = clock[0].isoformat()
+        detections = [SemanticObservation("fire_b", "fire", .9, Pose2D(1, -.5), stamp)]
+        if remaining_fire:
+            detections.append(SemanticObservation("fire_0001", "fire", .9, Pose2D(.25, 0), stamp))
+        world.update_observation_batch(ObservationBatch(stamp, tuple(detections)))
+        if seconds < 5:
+            assert world.fires["fire_0001"].state != FireState.EXTINGUISHED
+    world.update_robot_pose(Pose2D(0, 0), clock[0].isoformat())
+    cycle = orchestrator.decide_once()
+    assert world.fires["fire_0001"].state == (FireState.SUPPRESSION_FAILED if remaining_fire else FireState.EXTINGUISHED)
+    assert cycle.decision.target == "fire_b"
+    assert cycle.decision.action == ActionType.NAVIGATE_TO
+    assert len(node.publishers["/vla/spray_command"].messages) == 1
+    assert world.fires["fire_b"].state == FireState.ACTIVE
+
+
+def test_command_sends_only_remaining_per_fire_attempt_budget():
+    _, node, _, orchestrator, _ = make_system(spray_count=2)
+    orchestrator.decide_once()
+    assert command_payload(node)["max_attempts"] == 1
 
 
 def test_valid_fire_publishes_canonical_command_from_world_model():
@@ -146,6 +201,7 @@ def test_valid_fire_publishes_canonical_command_from_world_model():
     assert payload["mission_id"] == "mission_01"
     assert payload["fire_id"] == "fire_0001"
     assert payload["command"] == "SPRAY"
+    assert payload["max_attempts"] == 3
     assert "reason" not in payload
     assert "fire_position" not in payload
     datetime.fromisoformat(payload["timestamp"])

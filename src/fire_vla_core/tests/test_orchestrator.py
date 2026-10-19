@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from fire_vla_core.adapters.mock_adapters import MockNavigationAdapter, MockReportAdapter, MockResultQueue, MockSprayAdapter, MockWaitAdapter
@@ -302,6 +304,37 @@ def make_person_two_fire_orchestrator(decision):
     return world, navigation, orchestrator
 
 
+def test_ab_demo_mission_boundary_cannot_send_frontier_before_person_returns():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(ActionType.SEARCH, "Unexplored zone requires exploration before handling fires",
+                       "frontier_-6_15", MissionScope.FULL_EXPLORATION)
+    )
+    world.config.ab_demo_mode = True
+    world.unexplored_zones = [{
+        "id": "frontier_-6_15", "pose": {"x": -.649, "y": 1.453},
+    }]
+    world.set_mission("new_ab", world.mission.text)
+    stamp = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("fresh_a", "fire", .9, Pose2D(2.05, 0), stamp),
+        SemanticObservation("fresh_b", "fire", .9, Pose2D(4, 0), stamp),
+    )))
+    assert not world.people
+    assert not world.fire_search_hints
+    rejected = orchestrator.decide_once()
+    assert rejected.submission is None
+    assert rejected.blocked_reason.startswith("TARGET_RESOLUTION_FAILED:")
+    assert not navigation.calls
+    stamp = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("fresh_person", "person", .9, Pose2D(2, 0), stamp),
+    )))
+    approved = orchestrator.decide_once()
+    assert approved.decision.action == ActionType.NAVIGATE_TO
+    assert approved.decision.target == "fresh_a"
+    assert [a.target for a in navigation.calls] == ["fresh_a"]
+
+
 @pytest.mark.parametrize(
     "proposed_action",
     (ActionType.NAVIGATE_TO, ActionType.SEARCH, ActionType.RETURN_HOME),
@@ -579,6 +612,45 @@ def test_full_exploration_realigns_once_after_material_fire_position_change():
     assert len(navigation.calls) == 2
 
 
+def test_fire_position_change_during_navigation_requires_realign_before_spray():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(ActionType.NAVIGATE_TO, "A 접근", "fire_a", MissionScope.FULL_EXPLORATION)
+    )
+    orchestrator.decide_once()
+    submitted_position = world.fires["fire_a"].position
+    world.fires["fire_a"].position = Pose2D(2.05, .13)
+    world.update_robot_pose(Pose2D(1.9, 0))
+    orchestrator.process_results(navigation.result_queue)
+    assert orchestrator._aligned_fire_position == submitted_position
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH, "fresh A 진압", "fire_a", MissionScope.FULL_EXPLORATION
+    ))
+
+    cycle = orchestrator.decide_once()
+
+    assert cycle.decision.action == ActionType.NAVIGATE_TO
+    assert cycle.submission is not None
+    assert len(navigation.calls) == 2
+    assert orchestrator.dispatcher.spray.calls == []
+
+
+@pytest.mark.parametrize("age", [6, 22])
+def test_direct_extinguish_uses_stored_active_target_without_new_age_gate(age):
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(ActionType.EXTINGUISH, "직접 A 진압", "fire_a", MissionScope.FULL_EXPLORATION)
+    )
+    world.update_robot_pose(Pose2D(1.9, 0))
+    from fire_vla_core.domain import utc_now
+    world.fires["fire_a"].last_seen = (
+        (utc_now() - timedelta(seconds=age)).isoformat()
+    )
+
+    accepted = orchestrator.decide_once()
+    assert accepted.validation is not None and accepted.validation.approved
+    assert accepted.submission is not None
+    assert len(orchestrator.dispatcher.spray.calls) == 1
+
+
 def test_full_exploration_retargets_stale_qwen_choice_to_active_fire():
     world, navigation, orchestrator = make_person_two_fire_orchestrator(
         ActionDecision(
@@ -596,6 +668,34 @@ def test_full_exploration_retargets_stale_qwen_choice_to_active_fire():
     assert cycle.decision.target == "fire_b"
     assert cycle.submission is not None
     assert navigation.calls[-1].target == "fire_b"
+
+
+@pytest.mark.parametrize("b_reobserved", [False, True])
+def test_mission_boundary_search_preserves_person_threat_priority(b_reobserved):
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(ActionType.SEARCH, "후보 재확인", "fire_hint_fire_b",
+                       MissionScope.FULL_EXPLORATION)
+    )
+    assert world.fires["fire_a"].threatens_person
+    # On the first Mission there is no running Mission to populate spatial flags.
+    world.mission = None
+    world._refresh_spatial_flags()
+    assert world.fires["fire_a"].threatens_person is False
+    # Reproduce B being inserted before A in the pre-Mission observation history.
+    world.fires = {"fire_b": world.fires["fire_b"], "fire_a": world.fires["fire_a"]}
+    world.set_mission("new_ab", "사람 근처 화재 먼저 나머지도 진압")
+    assert world.fire_search_hints[1]["threatens_person"] is True
+    world.perception_ready = True
+    if b_reobserved:
+        now = utc_now_iso()
+        world.update_observation_batch(ObservationBatch(now, (
+            SemanticObservation("fresh_b", "fire", .9, Pose2D(-1.9, 0), now),
+        )))
+    cycle = orchestrator.decide_once()
+    assert cycle.submission is not None
+    assert navigation.calls[-1].action == ActionType.SEARCH
+    assert navigation.calls[-1].target == "fire_hint_fire_a"
+    assert world.fires.get("fire_a") is None  # Hint is not an ACTIVE fire.
 
 
 def test_full_exploration_retargets_terminal_fire_to_saved_fire_hint():
@@ -693,7 +793,54 @@ def test_bounded_fire_search_does_not_dispatch_generic_frontier():
     assert navigation.calls[-1].target == "fire_hint_fire_b"
 
 
-def test_bounded_fire_search_reacquires_missing_b_fire_after_mission_boundary():
+@pytest.mark.parametrize("next_target", ["fire_a", "fire_b"])
+def test_hint_consumed_during_search_still_requires_target_alignment(next_target):
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(ActionType.SEARCH, "A 후보 확인", "fire_hint_fire_a",
+                       MissionScope.FULL_EXPLORATION)
+    )
+    world.people.clear()
+    world.fires.clear()
+    world.config.spray_range_m = .5
+    world.bounded_fire_search = True
+    world.fire_search_hints = [{
+        "id": "fire_hint_fire_a", "source_fire_id": "fire_a",
+        "pose": {"x": .8, "y": .2, "yaw": 0.0},
+    }]
+    search = orchestrator.decide_once()
+    assert search.submission is not None
+    # A/B reappear while SEARCH is still executing, consuming the hint early.
+    now = utc_now_iso()
+    world.update_observation_batch(ObservationBatch(now, (
+        SemanticObservation("fire_a", "fire", .9, Pose2D(.8, .2), now),
+        SemanticObservation("fire_b", "fire", .9, Pose2D(.8, -.2), now),
+    )))
+    assert not world.fire_search_hints
+    world.update_robot_pose(Pose2D(.55, .2))
+    assert all(f.robot_within_spray_range for f in world.fires.values())
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    if next_target == "fire_b":
+        world.fires["fire_a"].state = FireState.SUPPRESSION_FAILED
+        world.fires["fire_a"].spray_count = 3
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH, "선택 화점 진압", next_target,
+        MissionScope.FULL_EXPLORATION,
+    ))
+    aligned = orchestrator.decide_once()
+    assert aligned.decision.action == ActionType.NAVIGATE_TO
+    assert aligned.decision.target == next_target
+    assert aligned.submission is not None
+    assert orchestrator.dispatcher.spray.calls == []
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    spray = orchestrator.decide_once()
+    assert spray.decision.action == ActionType.EXTINGUISH
+    assert spray.decision.target == next_target
+    assert len(orchestrator.dispatcher.spray.calls) == 1
+    assert [call.target for call in navigation.calls] == ["fire_hint_fire_a", next_target]
+
+
+@pytest.mark.parametrize("reobserved", [True, False])
+def test_bounded_fire_search_reacquires_missing_b_fire_after_mission_boundary(reobserved):
     world = WorldModel()
     world.update_robot_pose(Pose2D(0, 0))
     before = utc_now_iso()
@@ -741,6 +888,21 @@ def test_bounded_fire_search_reacquires_missing_b_fire_after_mission_boundary():
     assert search_pose.yaw == pytest.approx(search_pose.yaw_to(hint_pose))
     assert orchestrator.process_results(queue) == 1
     assert world.perception_ready is False
+
+    if not reobserved:
+        waiting = orchestrator.decide_once()
+        assert waiting.blocked_reason == "MISSION_WAITING_FOR_FRESH_OBSERVATION"
+        assert len(navigation.calls) == 1
+        assert orchestrator.dispatcher.spray.calls == []
+        # A valid fresh empty frame, rather than silence, ends the one-time hint visit.
+        empty_at = utc_now_iso()
+        world.update_observation_batch(ObservationBatch(empty_at, ()))
+        world.update_robot_pose(search_pose)
+        returning = orchestrator.decide_once()
+        assert returning.decision.action == ActionType.RETURN_HOME
+        assert len(navigation.calls) == 2
+        assert orchestrator.dispatcher.spray.calls == []
+        return
 
     reacquired_at = utc_now_iso()
     world.update_observation_batch(ObservationBatch(reacquired_at, (
@@ -1083,16 +1245,13 @@ def test_navigation_success_continues_to_one_extinguish_without_qwen():
     assert llm.calls == 1
 
 
-@pytest.mark.parametrize("invalid_state", ["resolved", "stale", "invalid"])
+@pytest.mark.parametrize("invalid_state", ["resolved", "invalid"])
 def test_invalid_fire_does_not_continue_to_extinguish(invalid_state):
     world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
     orchestrator.decide_once()
     world.update_robot_pose(Pose2D(1.75, 0))
     if invalid_state == "resolved":
         world.fires["fire_01"].state = world.fires["fire_01"].state.EXTINGUISHED
-    elif invalid_state == "stale":
-        world.fires["fire_01"].last_seen = "2000-01-01T00:00:00+00:00"
-        world.fires["fire_01"].robot_within_spray_range = True
     else:
         world.fires["fire_01"].position = Pose2D(float("nan"), 0)
         world.fires["fire_01"].robot_within_spray_range = True
@@ -1141,7 +1300,7 @@ def test_out_of_range_after_navigation_does_not_continue_to_extinguish():
     assert llm.calls == 2
 
 
-def test_meaningful_scene_change_uses_qwen_instead_of_continuation():
+def test_new_person_during_navigation_does_not_interrupt_selected_fire():
     world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
     orchestrator.decide_once()
     world.update_robot_pose(Pose2D(1.75, 0))
@@ -1154,8 +1313,125 @@ def test_meaningful_scene_change_uses_qwen_instead_of_continuation():
 
     orchestrator.decide_once()
 
-    assert len(spray.calls) == 0
-    assert llm.calls == 2
+    assert len(spray.calls) == 1
+    assert spray.calls[0].target == "fire_01"
+    assert llm.calls == 1
+
+
+@pytest.mark.parametrize("change", ["other_fire", "confidence", "observation_gap"])
+def test_selected_fire_continues_without_replanning_unrelated_observations(change):
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    orchestrator.decide_once()
+    world.update_robot_pose(Pose2D(1.75, 0))
+    if change == "observation_gap":
+        from fire_vla_core.domain import utc_now
+        world.fires["fire_01"].last_seen = (utc_now() - timedelta(seconds=22)).isoformat()
+    else:
+        now = utc_now_iso()
+        observations = [SemanticObservation("fire_01", "fire", .30, Pose2D(2, 0), now)]
+        if change == "other_fire":
+            observations.append(SemanticObservation("fire_b", "fire", .9, Pose2D(4, 1), now))
+        world.update_observation_batch(ObservationBatch(now, tuple(observations)))
+    assert orchestrator.process_results(queue) == 1
+    cycle = orchestrator.decide_once()
+    assert cycle.decision.action == ActionType.EXTINGUISH
+    assert cycle.decision.target == "fire_01"
+    assert len(spray.calls) == 1
+    assert llm.calls == 1
+
+
+@pytest.mark.parametrize("run", range(10))
+def test_bounded_ab_execution_finishes_a_then_aligns_b_and_returns(monkeypatch, run):
+    from dataclasses import replace
+    from fire_vla_core import orchestrator as orch_module, validator as validator_module, world_model as world_module
+    from fire_vla_core.domain import utc_now
+    clock = [utc_now()]
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(ActionType.NAVIGATE_TO, "A 우선",
+                       "fire_a", MissionScope.FULL_EXPLORATION)
+    )
+    clock[0] = utc_now()
+    for module in (orch_module, validator_module, world_module):
+        monkeypatch.setattr(module, "utc_now", lambda: clock[0])
+    world.mission.id = f"bounded_ab_{run}"
+    world.config.ab_demo_mode = True
+    world.people["person_a"].reported = True
+    world.people["person_a"].state = PersonState.REPORTED
+    queue = navigation.result_queue
+    spray = orchestrator.dispatcher.spray
+    first = orchestrator.decide_once()
+    assert first.decision.target == "fire_a"
+    # Another fire's position changes during A approach: do not replan A.
+    world.fires["fire_b"].position = Pose2D(4, .01)
+    world.update_robot_pose(Pose2D(1.8, 0), clock[0].isoformat())
+    assert orchestrator.process_results(queue) == 1
+    assert orchestrator.decide_once().decision.action == ActionType.EXTINGUISH
+    assert orchestrator.llm.calls == 1
+    result, = queue.drain_results()
+    queue.emit(replace(result, attempts=3, timestamp=clock[0].isoformat()))
+    orchestrator.process_results(queue)
+    assert world.fires["fire_a"].state == FireState.PENDING_VERIFICATION
+    assert orchestrator.decide_once().blocked_reason == "SUPPRESSION_PENDING_VERIFICATION"
+    start = clock[0]
+    for i, seconds in enumerate((.6, 1.0, 5.0)):
+        clock[0] = start + timedelta(seconds=seconds)
+        stamp = clock[0].isoformat()
+        world.update_observation_batch(ObservationBatch(stamp, (
+            SemanticObservation("fire_b", "fire", .9, Pose2D(4, .01), stamp),
+            SemanticObservation("third_fire", "fire", .9, Pose2D(6, 0), stamp),
+        )))
+        if i < 2:
+            assert world.fires["fire_a"].state == FireState.PENDING_VERIFICATION
+    assert world.fires["fire_a"].state == FireState.EXTINGUISHED
+    assert "third_fire" not in world.fires
+    world.update_robot_pose(Pose2D(1.8, 0), clock[0].isoformat())
+    second = orchestrator.decide_once()
+    assert second.decision.action == ActionType.NAVIGATE_TO
+    assert second.decision.target == "fire_b"
+    assert [a.target for a in spray.calls] == ["fire_a"]
+    world.update_robot_pose(Pose2D(3.75, .01), clock[0].isoformat())
+    orchestrator.process_results(queue)
+    assert orchestrator.decide_once().decision.target == "fire_b"
+    assert [a.target for a in spray.calls] == ["fire_a", "fire_b"]
+    result, = queue.drain_results()
+    queue.emit(replace(result, status=ActionResultStatus.ABORTED, attempts=3,
+                       verification_required=True, timestamp=clock[0].isoformat()))
+    orchestrator.process_results(queue)
+    clock[0] += timedelta(seconds=.6)
+    stamp = clock[0].isoformat()
+    world.update_observation_batch(ObservationBatch(stamp, (
+        SemanticObservation("fire_b", "fire", .9, Pose2D(4, .01), stamp),
+    )))
+    world.update_robot_pose(Pose2D(3.75, .01), stamp)
+    world.mark_exploration_completed()
+    returning = orchestrator.decide_once()
+    assert world.fires["fire_b"].state == FireState.SUPPRESSION_FAILED
+    assert returning.decision.action == ActionType.RETURN_HOME
+    orchestrator.process_results(queue)
+    assert world.mission.status.value == "COMPLETED_WITH_ESCALATION"
+    assert [a.target for a in navigation.calls] == ["fire_a", "fire_b", None]
+    assert [f.spray_count for f in world.fires.values()] == [3, 3]
+    assert len(spray.calls) == 2
+
+
+@pytest.mark.parametrize("boundary", ["stop", "new_mission"])
+def test_selected_fire_continuation_cannot_cross_stop_or_new_mission(boundary):
+    world, queue, _, spray, llm, orchestrator = make_navigation_continuation_orchestrator()
+    prepare_successful_navigation(world, queue, orchestrator)
+    if boundary == "stop":
+        world.abort_mission()
+        assert orchestrator.decide_once().submission is None
+    else:
+        world.set_mission("next_mission", "화재 확인")
+        now = utc_now_iso()
+        world.update_observation_batch(ObservationBatch(now, (
+            SemanticObservation("fire_01", "fire", .9, Pose2D(2, 0), now),
+        )))
+        llm.decision = ActionDecision(ActionType.WAIT, "새 임무 대기",
+                                      mission_scope=MissionScope.FIRE_ONLY)
+        orchestrator.decide_once()
+        assert llm.calls == 2
+    assert spray.calls == []
 
 
 def test_duplicate_navigation_terminal_does_not_duplicate_suppression():
