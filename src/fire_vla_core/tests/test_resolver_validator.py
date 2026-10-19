@@ -39,6 +39,38 @@ def test_fire_navigation_goal_keeps_fifteen_centimeter_standoff():
     ) == pytest.approx(0.15)
 
 
+def test_fire_search_hint_keeps_standoff_and_faces_saved_fire_position():
+    world = make_world()
+    world.fire_search_hints = [{
+        "id": "fire_hint_fire_02",
+        "source_fire_id": "fire_02",
+        "pose": {"x": 1.0, "y": 0.0, "yaw": 1.2},
+    }]
+
+    action = TargetResolver().resolve(
+        ActionDecision(ActionType.SEARCH, "저장 화점 재확인", "fire_hint_fire_02"),
+        world,
+    )
+
+    assert action.target_pose == Pose2D(0.85, 0.0, 0.0)
+    assert action.target_pose.distance_to(Pose2D(1.0, 0.0)) == pytest.approx(0.15)
+
+
+def test_generic_search_zone_keeps_its_configured_pose():
+    world = make_world()
+    world.unexplored_zones = [{
+        "id": "frontier_01",
+        "pose": {"x": 1.0, "y": 2.0, "yaw": 0.7},
+    }]
+
+    action = TargetResolver().resolve(
+        ActionDecision(ActionType.SEARCH, "일반 탐색", "frontier_01"),
+        world,
+    )
+
+    assert action.target_pose == Pose2D(1.0, 2.0, 0.7)
+
+
 def test_validator_rejects_new_physical_action_while_one_is_running():
     world = make_world()
     resolver = TargetResolver()

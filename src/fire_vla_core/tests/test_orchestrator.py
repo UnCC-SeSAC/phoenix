@@ -702,7 +702,13 @@ def test_bounded_fire_search_reacquires_missing_b_fire_after_mission_boundary():
     search = orchestrator.decide_once()
     assert search.decision.action == ActionType.SEARCH
     assert search.decision.target == "fire_hint_fire_b"
-    assert search.validation.action.target_pose == Pose2D(.8, -.2)
+    hint_pose = Pose2D(.8, -.2)
+    search_pose = search.validation.action.target_pose
+    assert search_pose is not None
+    assert search_pose.distance_to(hint_pose) == pytest.approx(
+        world.config.navigation_standoff_m
+    )
+    assert search_pose.yaw == pytest.approx(search_pose.yaw_to(hint_pose))
     assert orchestrator.process_results(queue) == 1
     assert world.perception_ready is False
 

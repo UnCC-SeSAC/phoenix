@@ -44,7 +44,20 @@ class TargetResolver:
             pose = zone.get("pose")
             if not isinstance(pose, dict):
                 raise TargetResolutionError("탐색 구역에 유효한 pose가 없습니다.")
-            target_pose = Pose2D(float(pose["x"]), float(pose["y"]), float(pose.get("yaw", 0.0)))
+            search_pose = Pose2D(
+                float(pose["x"]),
+                float(pose["y"]),
+                float(pose.get("yaw", 0.0)),
+            )
+            target_pose = (
+                self._pose_facing_target(
+                    world,
+                    search_pose,
+                    world.config.navigation_standoff_m,
+                )
+                if zone.get("source_fire_id")
+                else search_pose
+            )
 
         elif decision.action == ActionType.RETURN_HOME:
             if world.robot.home_pose is None:
