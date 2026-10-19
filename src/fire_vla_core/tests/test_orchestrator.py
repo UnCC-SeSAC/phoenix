@@ -549,6 +549,36 @@ def test_full_exploration_does_not_renavigate_aligned_fire_after_pose_jitter():
     assert len(navigation.calls) == 2
 
 
+def test_full_exploration_realigns_once_after_material_fire_position_change():
+    world, navigation, orchestrator = make_person_two_fire_orchestrator(
+        ActionDecision(
+            ActionType.NAVIGATE_TO,
+            "사람 위협 화재 접근",
+            "fire_a",
+            MissionScope.FULL_EXPLORATION,
+        )
+    )
+    orchestrator.decide_once()
+    assert orchestrator.process_results(navigation.result_queue) == 1
+    orchestrator._pending_continuation = None
+
+    world.fires["fire_a"].position = Pose2D(.33, .1)
+    world.update_robot_pose(Pose2D(.08, 0))
+    orchestrator.llm = StubLLM(ActionDecision(
+        ActionType.EXTINGUISH,
+        "fresh 좌표의 화재 진압",
+        "fire_a",
+        MissionScope.FULL_EXPLORATION,
+    ))
+
+    realign = orchestrator.decide_once()
+
+    assert realign.decision.action == ActionType.NAVIGATE_TO
+    assert realign.decision.target == "fire_a"
+    assert realign.submission is not None
+    assert len(navigation.calls) == 2
+
+
 def test_full_exploration_retargets_stale_qwen_choice_to_active_fire():
     world, navigation, orchestrator = make_person_two_fire_orchestrator(
         ActionDecision(

@@ -63,6 +63,12 @@ class VLAOrchestrator:
     _aligned_fire_target: tuple[str, str] | None = field(
         default=None, init=False, repr=False
     )
+    _aligned_fire_position: Any | None = field(
+        default=None, init=False, repr=False
+    )
+    _fire_hint_alignment_required: bool = field(
+        default=False, init=False, repr=False
+    )
 
     def decide_once(self) -> DecisionCycle:
         if not self.world.mission:
@@ -209,14 +215,12 @@ class VLAOrchestrator:
             and semantic_key not in self._realigned_navigation_keys
         ):
             fire = self.world.fires[validation.action.target]
-            aligned = (self.world.mission.id, fire.id)
             if (
                 fire.state == FireState.ACTIVE
                 and fire.robot_within_spray_range
                 and self._entity_is_fresh(fire.last_seen)
                 and self._robot_pose_is_fresh_and_valid()
-                and self._aligned_fire_target is not None
-                and self._aligned_fire_target != aligned
+                and not self._fire_alignment_is_current(fire)
             ):
                 self._non_retryable_semantic_keys.discard(semantic_key)
                 self._realigned_navigation_keys.add(semantic_key)
@@ -284,10 +288,13 @@ class VLAOrchestrator:
         mission = self.world.mission
         if fire is None or mission is None or fire.state != FireState.ACTIVE:
             return decision
-        if self._aligned_fire_target is None:
-            return decision
         aligned = (mission.id, fire.id)
-        if self._aligned_fire_target == aligned:
+        if self._aligned_fire_target == aligned and self._fire_alignment_is_current(fire):
+            return decision
+        if (
+            self._aligned_fire_target is None
+            and not self._fire_hint_alignment_required
+        ):
             return decision
         return ActionDecision(
             ActionType.NAVIGATE_TO,
@@ -438,6 +445,8 @@ class VLAOrchestrator:
                     fire = self.world.fires.get(action.target or "")
                     if mission is not None and fire is not None:
                         self._aligned_fire_target = (mission.id, fire.id)
+                        self._aligned_fire_position = fire.position
+                        self._fire_hint_alignment_required = False
                     self._pending_continuation = continuation
                 elif (
                     action is not None
@@ -450,16 +459,28 @@ class VLAOrchestrator:
                     and result.status == ActionResultStatus.SUCCEEDED
                 ):
                     self._aligned_fire_target = None
+                    self._aligned_fire_position = None
                     if (
                         action.action == ActionType.SEARCH
                         and action.target
                         and self.world.consume_fire_search_hint(action.target)
                     ):
+                        self._fire_hint_alignment_required = True
                         self.world.perception_ready = False
         if physical_action_completed:
             self._last_decision_input_signature = None
         self.world.complete_mission_if_resolved()
         return count
+
+    def _fire_alignment_is_current(self, fire: Any) -> bool:
+        mission = self.world.mission
+        return bool(
+            mission is not None
+            and self._aligned_fire_target == (mission.id, fire.id)
+            and self._aligned_fire_position is not None
+            and self._aligned_fire_position.distance_to(fire.position)
+            <= _POSITION_SIGNATURE_RESOLUTION_M
+        )
 
     def _build_extinguish_continuation(
         self, target: str, scene_signature: tuple[Any, ...]
