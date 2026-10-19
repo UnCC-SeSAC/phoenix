@@ -10,7 +10,7 @@ from fire_vla_core.llm import (
     TransformersQwenAdapter,
 )
 from fire_vla_core import qwen_inference_server
-from fire_vla_core.domain import ExplorationStatus
+from fire_vla_core.domain import ExplorationStatus, MissionStatus
 from fire_vla_core.ros import orchestrator_node
 from fire_vla_core.world_model import WorldModel
 
@@ -218,6 +218,16 @@ def test_frontier_candidate_and_completion_update_world_without_dispatch():
     assert node._frontier_complete is True
     assert node.world.exploration_status == ExplorationStatus.COMPLETED
     assert node.world.unexplored_zones == []
+
+
+def test_emergency_stop_aborts_running_mission():
+    node = object.__new__(orchestrator_node.VLAOrchestratorNode)
+    node.world = WorldModel()
+    node.world.set_mission("mission_emergency", "화재를 진압해")
+
+    node._emergency_stop_cb(SimpleNamespace(data=True))
+
+    assert node.world.mission.status == MissionStatus.ABORTED
 
 
 def test_topic_bridge_and_vla_config_match_confidence_contract():

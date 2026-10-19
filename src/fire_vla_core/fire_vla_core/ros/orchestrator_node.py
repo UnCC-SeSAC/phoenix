@@ -10,7 +10,7 @@ try:
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
     from geometry_msgs.msg import PoseStamped
-    from std_msgs.msg import Empty, String
+    from std_msgs.msg import Bool, Empty, String
 except ImportError:
     rclpy = None
     Node = object
@@ -307,6 +307,12 @@ class VLAOrchestratorNode(Node):
             10,
         )
         self.create_subscription(
+            Bool,
+            "/vla/emergency_stop",
+            self._emergency_stop_cb,
+            10,
+        )
+        self.create_subscription(
             String,
             str(self.get_parameter("perception_topic").value),
             self._observation_cb,
@@ -353,6 +359,10 @@ class VLAOrchestratorNode(Node):
             self.perception_normalizer.reset_associations()
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warning(f"Mission parsing failed: {exc}")
+
+    def _emergency_stop_cb(self, msg: Bool) -> None:
+        if msg.data:
+            self.world.abort_mission("운영자 비상정지")
 
     def _observation_cb(self, msg: String) -> None:
         try:
