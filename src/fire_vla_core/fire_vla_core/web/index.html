@@ -267,10 +267,31 @@ function renderVisionBoxes(overlay){
     if($('visionFrame').style.aspectRatio!==ratio)$('visionFrame').style.aspectRatio=ratio;
   }
   const layer=$('visionBoxes');layer.replaceChildren();
-  const boxes=overlay.boxes||[];
-  $('visionStat').textContent=`DETECT ${boxes.length}`;
-  // Box overlay drawing disabled — camera stream stays clean, detection
-  // count above is still shown.
+  const boxes=Array.isArray(overlay.boxes)?overlay.boxes:[];
+  const clamp=value=>Math.max(0,Math.min(1,value));
+  for(const box of boxes){
+    if(!box)continue;
+    const name=String(box.class_name||'').toLowerCase();
+    if(name!=='fire'&&name!=='person')continue;
+    const {cx,cy,w,h}=box;
+    if(![cx,cy,w,h].every(value=>typeof value==='number'&&Number.isFinite(value))||w<=0||h<=0)continue;
+    const left=clamp(cx-w/2),top=clamp(cy-h/2);
+    const right=clamp(cx+w/2),bottom=clamp(cy+h/2);
+    if(right<=left||bottom<=top)continue;
+    const element=document.createElement('div');
+    element.className='vbox';
+    Object.assign(element.style,{
+      left:`${left*100}%`,top:`${top*100}%`,
+      width:`${(right-left)*100}%`,height:`${(bottom-top)*100}%`,
+      color:name==='fire'?'#ff0000':'#4ade80',
+    });
+    const label=document.createElement('b');
+    label.textContent=name;
+    if(top*height<18)label.style.top='0';
+    element.append(label);
+    layer.append(element);
+  }
+  $('visionStat').textContent=`DETECT ${layer.childElementCount}`;
 }
 async function refreshVision(){
   try{
